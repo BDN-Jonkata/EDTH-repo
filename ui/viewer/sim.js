@@ -20,7 +20,7 @@
   const DT = 0.1;
   const T_END = 120;
   const NF = Math.round(T_END / DT);
-  const EVAL = [45, 90]; // window around the crossing used for summary metrics
+  const EVAL = [45, 90]; // default; each run uses the window around its own crossing
   const D2R = Math.PI / 180;
   const GATE = 9.21; // chi-square, 2 dof, 99 %
   const KIND = { eo_camera: 'EO', thermal_camera: 'IR', microphone: 'MIC', rf_receiver: 'RF', radar: 'RAD' };
@@ -33,38 +33,25 @@
   const WEATHERS = ['clear', 'fog', 'rain', 'wind', 'night'];
 
   // ---------------------------------------------------------------- scenario
-  const SCEN = {
-    id: 'VLG-01',
-    c2: { x: 470, y: 350 },
-    ground: [
-      { id: 'GS1', x: 300, y: 300, heading: Math.atan2(200, 200) }, // mast faces the village centre
-      { id: 'GS2', x: 655, y: 460, heading: Math.atan2(-110, -185) }, // faces the C2 node
-    ],
-    friendlies: [
-      { id: 'F1', x: 180, y: 700, v: 9.0, dir: 1 },
-      { id: 'F2', x: 850, y: 840, v: 8.5, dir: -1 },
-      { id: 'F3', x: 870, y: 240, v: 6.0, dir: 1 },
-      { id: 'F4', x: 420, y: 140, v: 5.5, dir: -1 },
-      { id: 'F5', x: 600, y: 530, v: 11.0, dir: 1 },
-    ],
-    hostiles: [
-      { id: 'H1', t0: 6, tc: 51, p0: [120, 840], pc: [500, 560], wob: 5, ph: 0.4 },
-      { id: 'H2', t0: 14, tc: 51, p0: [900, 880], pc: [505, 552], wob: 5, ph: 2.1 },
-    ],
-  };
-  const DEFAULT_ASSIGN = {
-    F1: 'mini4pro', F2: 'anafi_thermal', F3: 'px4_quad_passive', F4: 'px4_quad_radar', F5: 'skydio_x10',
-    GS1: 'gs_eo_acoustic', GS2: 'gs_radar_rf',
-  };
+  // A scenario comes from the seeder (seeder/scenario.py, exported to scenarios.js or served by serve.py):
+  // friendly patrol loops, ground sensors, hostile waypoint paths, environment and degradations.
+  const DEFAULT_SCENARIO = typeof SCENARIOS !== 'undefined' ? SCENARIOS.challenge : require('./scenarios.js').challenge; // eslint-disable-line no-undef
+  const SIG_KEY = { EO: 'eo', IR: 'thermal', MIC: 'acoustic', RF: 'rf', RAD: 'radar' };
 
-  // Friendlies fly circular patrols that start at their design positions.
-  SCEN.friendlies.forEach((f, i) => {
-    f.R = 100 + 10 * i;
-    const dx = 500 - f.x, dy = 500 - f.y, d = Math.hypot(dx, dy);
-    f.cx = f.x + (f.R * dx) / d;
-    f.cy = f.y + (f.R * dy) / d;
-    f.th0 = Math.atan2(f.y - f.cy, f.x - f.cx);
-  });
+  function prepare(sc) {
+    const world = {
+      id: sc.id, name: sc.name, duration: sc.duration_s, c2: { x: sc.c2[0], y: sc.c2[1] },
+      ground: sc.ground.map((g) => ({ id: g.id, platform: g.platform, x: g.position[0], y: g.position[1], heading: (90 - g.heading_deg) * D2R })),
+      friendlies: sc.friendlies.map((f) => Object.assign({ id: f.id, platform: f.platform, alt: f.altitude_m }, f.loop)),
+      hostiles: sc.targets.map((t) => ({ id: t.id, wps: t.waypoints, wob: t.wobble_m, ph: t.phase, alt: t.altitude_m, sig: t.signature || {}, emits: t.emits !== false })),
+      beacon: sc.beacon, env: sc.environment, deg: sc.degradations, sensorKinds: sc.sensor_set.enabled_kinds, assign: {},
+    };
+    sc.friendlies.concat(sc.ground).forEach((n) => { world.assign[n.id] = n.platform; });
+    const cr = sc.config && sc.config.targets && sc.config.targets.crossing;
+    const tc = cr && cr.enabled ? cr.t : sc.duration_s / 2;
+    world.eval = [Math.max(0, tc - 6), Math.min(sc.duration_s, tc + 39)]; // window around the crossing used for summary metrics
+    return world;
+  }
 
   function frState(f, t) {
     const a = f.th0 + f.dir * (f.v / f.R) * t;
@@ -73,14 +60,24 @@
       vx: -f.dir * f.v * Math.sin(a), vy: f.dir * f.v * Math.cos(a),
     };
   }
+  // piecewise-linear path with a sideways wobble (same maths as seeder/scenario.py)
   function hoPos(h, t) {
-    const s = (t - h.t0) / (h.tc - h.t0);
-    const dx = h.pc[0] - h.p0[0], dy = h.pc[1] - h.p0[1], L = Math.hypot(dx, dy);
-    const w = h.wob * Math.sin(0.35 * (t - h.t0) + h.ph);
-    return { x: h.p0[0] + dx * s - (dy / L) * w, y: h.p0[1] + dy * s + (dx / L) * w };
+    const w = h.wps;
+    let i = 0;
+    while (i < w.length - 2 && t > w[i + 1][0]) i++;
+    const t0 = w[i][0], x0 = w[i][1], y0 = w[i][2], t1 = w[i + 1][0], x1 = w[i + 1][1], y1 = w[i + 1][2];
+    const s = t1 === t0 ? 0 : (t - t0) / (t1 - t0), dx = x1 - x0, dy = y1 - y0, seg = Math.hypot(dx, dy);
+    let x = x0 + dx * s, y = y0 + dy * s;
+    if (seg > 1e-6) { // no wobble while hovering; it fades out at each waypoint so turns stay continuous
+      const taper = Math.max(0, Math.min(1, (t - t0) / 2, (t1 - t) / 2));
+      const wv = h.wob * taper * Math.sin(0.35 * (t - w[0][0]) + h.ph);
+      x -= (dy / seg) * wv; y += (dx / seg) * wv;
+    }
+    return { x, y };
   }
   function hoState(h, t) {
-    if (t < h.t0) return null;
+    const w = h.wps;
+    if (t < w[0][0] || t > w[w.length - 1][0]) return null;
     const a = hoPos(h, t - 0.05), b = hoPos(h, t + 0.05), p = hoPos(h, t);
     if (p.x < 0 || p.x > 1000 || p.y < 0 || p.y > 1000) return null;
     return { x: p.x, y: p.y, vx: (b.x - a.x) / 0.1, vy: (b.y - a.y) / 0.1 };
@@ -110,14 +107,14 @@
     return Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * r());
   }
 
-  function buildSensors(assign, weather) {
+  function buildSensors(assign, weather, kinds) {
     const list = [];
     Object.keys(assign).forEach((node) => {
       const plat = PLATFORMS[assign[node]];
       if (!plat) throw new Error('Unknown platform for ' + node + ': ' + assign[node]);
       plat.modules.forEach((link) => {
         const m = MODULES[link.module_id];
-        if (!KIND[m.kind]) return; // gnss / imu are not detection sensors
+        if (!KIND[m.kind] || kinds.indexOf(m.kind) < 0) return; // gnss / imu are not detection sensors; the scenario can switch kinds off
         const eff = (m.weather_effects && m.weather_effects[weather]) || NO_EFFECT;
         const sm = m.sim;
         list.push({
@@ -273,14 +270,26 @@
     const loss = real ? P.loss / 100 : 0;
     const delay = real ? P.delayMs / 1000 : 0;
     const drift = real ? P.driftMs / 1000 : 0;
-    const assign = Object.assign({}, DEFAULT_ASSIGN, P.assign || {});
-    const sensors = buildSensors(assign, P.weather);
-    const nodes = SCEN.ground.map((g) => g.id).concat(SCEN.friendlies.map((f) => f.id));
+    const world = prepare(P.scenario || DEFAULT_SCENARIO);
+    const T_END = world.duration, NF = Math.round(T_END / DT), EVAL = world.eval; // this run's own length and scoring window
+    const assign = Object.assign({}, world.assign, P.assign || {});
+    const sensors = buildSensors(assign, P.weather, world.sensorKinds);
+    const falseAlarms = ((world.env.clutter && world.env.clutter.false_alarms_per_min) || 0) / 60;
+    const radarCount = sensors.filter((q) => q.kind === 'RAD').length || 1;
+    sensors.forEach((q) => { if (q.kind === 'RAD') q.clutter = Math.max(q.clutter, falseAlarms / radarCount); });
+    const hostileById = {};
+    world.hostiles.forEach((h) => { hostileById[h.id] = h; });
+    const dropT = {}; // nodes that die mid-run (realistic mode only)
+    if (real) (world.deg.dropout || []).forEach((d) => { dropT[d.node] = d.t; });
+    const alive = (n, t) => dropT[n] === undefined || t < dropT[n];
+    const nodes = world.ground.map((g) => g.id).concat(world.friendlies.map((f) => f.id));
     const driftScale = {};
     nodes.forEach((n) => { driftScale[n] = rn() * 2 - 1; });
     const nodePos = (id, t) => {
-      const g = SCEN.ground.find((x) => x.id === id);
-      return g ? { x: g.x, y: g.y, vx: 0, vy: 0, heading: g.heading } : frState(SCEN.friendlies.find((f) => f.id === id), t);
+      const g = world.ground.find((x) => x.id === id);
+      if (g) return { x: g.x, y: g.y, vx: 0, vy: 0, heading: g.heading };
+      const f = world.friendlies.find((x) => x.id === id);
+      return Object.assign({ alt: f.alt }, frState(f, t));
     };
     const linkQ = {};
     nodes.forEach((n) => { linkQ[n] = 1; });
@@ -295,6 +304,8 @@
       queue.push(payload);
     }
 
+    const beaconEvery = Math.max(1, Math.round(10 / (world.beacon.rate_hz || 2)));
+    const beaconSigma = world.beacon.pos_sigma_m || 3;
     const tracks = [];
     const pending = []; // bearing-only records waiting for a second view
     const friends = {};
@@ -309,7 +320,7 @@
     const timeline = [];
 
     // friendly roster is synced before the mission: tracks start at the true state
-    SCEN.friendlies.forEach((f) => {
+    world.friendlies.forEach((f) => {
       const st = frState(f, 0);
       const tr = newTrack(f.id, 'frd', { x: st.x, y: st.y, R: [9, 0, 9], t: 0 }, 6, 4);
       tr.s[2] = st.vx; tr.s[3] = st.vy; tr.cls = 'friendly'; tr.srcs.self = 0;
@@ -322,20 +333,20 @@
 
       // ---- truth
       const truth = [];
-      SCEN.friendlies.forEach((f) => truth.push(Object.assign({ id: f.id, kind: 'friendly' }, frState(f, t))));
-      SCEN.hostiles.forEach((h) => {
+      world.friendlies.forEach((f) => truth.push(Object.assign({ id: f.id, kind: 'friendly' }, frState(f, t))));
+      world.hostiles.forEach((h) => {
         const st = hoState(h, t);
         if (st) truth.push(Object.assign({ id: h.id, kind: 'hostile' }, st));
       });
       const targetAt = (obj, tt) => {
-        if (obj.kind === 'friendly') return frState(SCEN.friendlies.find((f) => f.id === obj.id), tt);
-        return hoState(SCEN.hostiles.find((h) => h.id === obj.id), tt);
+        if (obj.kind === 'friendly') return frState(world.friendlies.find((f) => f.id === obj.id), tt);
+        return hoState(hostileById[obj.id], tt);
       };
 
       // ---- sensing and messaging
       const rawMeas = [];
       sensors.forEach((s) => {
-        if (k % s.every) return;
+        if (k % s.every || !alive(s.node, t)) return;
         const sp = nodePos(s.node, t);
         const tt = Math.max(0, t - off(s.node));
         const heading = s.pointing === 'omni' ? null : (sp.heading !== undefined ? sp.heading : Math.atan2(sp.vy, sp.vx));
@@ -348,11 +359,13 @@
           if (!tg) return;
           const dx = tg.x - sp.x, dy = tg.y - sp.y, r = Math.hypot(dx, dy);
           if (r > s.range || r < s.minRange || r < 1) return;
+          const h = hostileById[o.id]; // a hostile's signature scales how well each sensor type sees it
+          if (s.kind === 'RF' && h && !h.emits) return; // a silent hostile is invisible to RF
           const az = Math.atan2(dy, dx);
           if (heading !== null && Math.abs(wrapPi(az - heading)) > s.fov / 2) return;
-          const pd = s.pd * (1 - (1 - s.pdFar) * (r / s.range) * (r / s.range)); // detections thin out with distance
+          const pd = Math.min(1, s.pd * (h ? (h.sig[SIG_KEY[s.kind]] || 1) : 1)) * (1 - (1 - s.pdFar) * (r / s.range) * (r / s.range)); // detections thin out with distance
           if (rn() > pd) return;
-          seen.push({ x: tg.x, y: tg.y, vx: tg.vx, vy: tg.vy, r, az, n: 1, o });
+          seen.push({ x: tg.x, y: tg.y, vx: tg.vx, vy: tg.vy, r, az, n: 1, o: Object.assign({}, o, { alt: h ? h.alt : undefined }) });
         });
         if (s.cell && seen.length > 1) seen = mergeCells(seen, s.cell); // radar resolution cell
         // 2. each detection becomes the sensor's native record
@@ -365,12 +378,15 @@
       });
       // group a node's frame messages
       rawMeas.forEach((z) => send(z.node, { type: 'meas', z }, t, z.latency));
-      if (k % 5 === 0) {
-        SCEN.friendlies.forEach((f) => {
-          const st = frState(f, Math.max(0, t - off(f.id)));
-          send(f.id, { type: 'beacon', id: f.id, x: st.x + gauss(rn) * 3, y: st.y + gauss(rn) * 3, t }, t);
-        });
-        SCEN.ground.forEach((g) => { linkQ[g.id] = 0.97 * linkQ[g.id] + 0.03 * (rnet() >= loss ? 1 : 0); });
+      if (k % beaconEvery === 0) {
+        if (world.beacon.enabled !== false) {
+          world.friendlies.forEach((f) => {
+            if (!alive(f.id, t)) return;
+            const st = frState(f, Math.max(0, t - off(f.id)));
+            send(f.id, { type: 'beacon', id: f.id, x: st.x + gauss(rn) * beaconSigma, y: st.y + gauss(rn) * beaconSigma, t }, t);
+          });
+        }
+        world.ground.forEach((g) => { if (alive(g.id, t)) linkQ[g.id] = 0.97 * linkQ[g.id] + 0.03 * (rnet() >= loss ? 1 : 0); });
       }
 
       // ---- deliver
@@ -598,9 +614,9 @@
       swaps, ffa: ffaCount,
     };
     // entry markers from scenario script
-    SCEN.hostiles.forEach((h) => timeline.push({ t: h.t0, label: h.id + ' in', color: 'red' }));
+    world.hostiles.forEach((h) => timeline.push({ t: h.wps[0][0], label: h.id + ' in', color: 'red' }));
     return {
-      frames, alerts, timeline, summary, scen: SCEN, params: Object.assign({}, P, { assign }), T_END, DT, NF, EVAL,
+      frames, alerts, timeline, summary, scen: world, params: Object.assign({}, P, { assign, scenario: undefined, scenario_id: world.id }), T_END, DT, NF, EVAL,
       sensors: sensors.map((s) => ({ node: s.node, module: s.module, kind: s.kind, range: s.range, minRange: s.minRange, fovDeg: s.pointing === 'omni' ? 360 : Math.round(s.fov * RAD2DEG), pointing: s.pointing, native: s.native, fields: s.fields, rateHz: Math.round(10 / s.every * 10) / 10 })),
     };
   }
@@ -609,8 +625,8 @@
   function makeRecord(s, d, sp, t, isGround, rand, clutter) {
     const nz = s.noise, nm = s.nm, r = d.r;
     const rec = { k: s.kind, node: s.node, module: s.module, t, sx: sp.x, sy: sp.y, svx: sp.vx || 0, svy: sp.vy || 0, rmax: s.range, latency: s.latency, merged: d.n > 1, clutter: !!clutter };
-    const tgtAlt = d.o.kind === 'friendly' ? ALT.friendly : ALT.hostile;
-    const own = isGround ? ALT.ground : ALT.friendly;
+    const tgtAlt = d.o.alt || (d.o.kind === 'friendly' ? ALT.friendly : ALT.hostile);
+    const own = isGround ? ALT.ground : (sp.alt || ALT.friendly);
     const level = (sigma) => nz.source_level_db - 20 * Math.log10(Math.max(r, 1)) + gauss(rand) * sigma * nm;
     switch (s.native) {
       case 'bearing_elevation': {
@@ -675,6 +691,6 @@
     return out;
   }
 
-  global.Sim = { run, SCEN, DT, T_END, NF, EVAL, DEFAULT_ASSIGN, WEATHERS, PLATFORMS, MODULES };
+  global.Sim = { run, prepare, DT, T_END, NF, EVAL, WEATHERS, PLATFORMS, MODULES, DEFAULT_SCENARIO };
   if (typeof module !== 'undefined') module.exports = global.Sim;
 })(typeof window !== 'undefined' ? window : globalThis);
