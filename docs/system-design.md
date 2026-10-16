@@ -58,6 +58,7 @@ Modules in one codebase with clear interfaces and a message bus between them. Th
 | `sensors` | ground truth, weather | `Observation` | Noise, detection probability, range limits, weather effects, honest covariance |
 | `tracker` | `Observation`, own-pose, `FriendlyBeacon` | `LocalTrack` | Runs on each node. KF + gated association + track management |
 | `friend_foe` | beacons, track kinematics | per-track class + presumption | Beacon match first, behaviour pattern second |
+| `investigation` | suspicious `Track`s, weather state, drone states | `InvestigationRequest`, drone tasking | Split in two: the estimator side raises requests and computes the required standoff from weather; the drone-behaviour side picks the drone and flies it (see 5.8) |
 | `fusion` | `LocalTrack` from reachable nodes | `Track` (COP) | Covariance intersection, global ID assignment |
 | `predictor` | `Track` history | predicted state + uncertainty | Optional; system works without it |
 | `scoring` | `Track`, ground truth | metrics | Same metrics every phase |
@@ -89,7 +90,7 @@ Modules in one codebase with clear interfaces and a message bus between them. Th
 Field names are provisional; the final contract lives in `common/`.
 
 ```
-Header        { msg_id, source_id, t_sent, seq }
+Header        { msg_id, source_id, t_sent, seq, schema_version }   -- every message also has a top-level `type`; encode/decode in common/codec.py
 
 Observation   { header, sensor_type, sensor_id, t_obs,
                 kind: bearing | range_bearing | position | detection,
@@ -100,12 +101,23 @@ FriendlyBeacon{ header, friend_id, position, covariance, velocity? }
 
 LocalTrack    { header, local_track_id, t_state,
                 state: [x, y, z, vx, vy, vz], covariance,
-                existence_prob, class: friendly|hostile|unknown,
+                existence_prob, class: friendly|hostile|suspicious|unknown,
                 class_prob, sources: [sensor_type...] }
 
 Track (COP)   { global_id, t_state, state, covariance,
                 existence_prob, class, class_prob,
                 contributing_nodes, age, status: tentative|confirmed|coasting|deleted }
+
+InvestigationRequest { header, track_id, position, covariance, class_prob,
+                       priority, t_requested,
+                       standoff_m,                    # recommended distance of the best module
+                       standoff_by_module: { <catalog module id>: {max_range_m, recommended_m,
+                                              confidence, feasible} },
+                       weather_confidence,            # 0..1, how much the weather leaves of the best module
+                       feasible }                     # false = no module can identify it right now
+
+InvestigationStatus  { header, track_id, drone_id,
+                       state: assigned | en_route | on_station | done | aborted }
 
 GroundTruth   { t, objects: [{id, kind: friendly|hostile, state}] }   # simulation + scoring only
 ```
@@ -143,7 +155,7 @@ Weather modifies each sensor's noise covariance and detection probability. Terra
 ### 5.4 Friend/Foe
 
 1. **Beacon match (primary):** a track whose position is consistent (within gate) with a received `FriendlyBeacon` is labelled friendly.
-2. **Behaviour pattern (secondary):** learn the pattern friendlies follow from beacon history. When an unknown track enters range, raise an alarm and output a presumption (friendly / hostile / unknown) with probability, by comparing its motion to the pattern.
+2. **Behaviour pattern (secondary):** learn the pattern friendlies follow from beacon history. When an unknown track enters range, raise an alarm and output a presumption (friendly / hostile / suspicious / unknown) with probability, by comparing its motion to the pattern.
 3. Output is a class + probability on each track, never a hard delete, so mistakes stay recoverable.
 
 ### 5.5 Fusion (hybrid)
@@ -169,7 +181,43 @@ The hardest case. Plan:
 4. Predictor hints as a tie-breaker.
 5. Scoring counts ID swaps explicitly; the crossing scenario is run first and often.
 
-### 5.8 Scoring
+### 5.8 Investigation of suspicious tracks
+
+A track classed `suspicious` is checked by sending a drone close enough to identify it. The work is split between two owners with one contract (`InvestigationRequest` / `InvestigationStatus`, section 4).
+
+**Estimator / weather side (provides the trigger and the standoff):**
+
+- Raise an `InvestigationRequest` when a track has stayed `suspicious` for a set time. Apply a cooldown and allow one drone per track, to avoid oscillation.
+- Compute how close a drone must get to identify the object, using the weather:
+
+```
+required_standoff(module, target_position, t, weather) -> {
+    max_range_m,      # farthest distance at which this module can still identify the object
+    recommended_m,    # distance to aim for: about 70% of max, never inside the module's minimum range
+    confidence,       # 0..1, share of clear-weather capability that the weather leaves
+    feasible          # false if the module cannot identify the object right now
+}
+```
+
+- `module` is a sensor module from the seeder catalog. The request lists the result for every detection module a drone may carry (`standoff_by_module`), so the drone-behaviour side looks up the modules of the drone it considers (`scenario.json` `friendlies[].sensors`).
+- All numbers come from the catalog: the module's `sim.range_m` and `sim.min_range_m`, scaled by its `weather_effects` for the active conditions (`environment.weather` and `time_of_day`; effects multiply, for example fog at night). The one number the catalog lacks is how much of the detection range is good enough to *identify* (a camera sees class cues, a microphone only hears presence). A placeholder fraction per module kind (`IDENT_FRACTION` in `sensors/quality.py`) fills in until the catalog gets a field for it.
+- Re-evaluate on request, because weather changes during the flight.
+- After arrival, new observations from the drone feed the estimator, which upgrades or downgrades the suspicion.
+
+**Drone-behaviour side (owns the movement):**
+
+- Choose which drone goes. Start with the closest; later weigh distance, whether its sensors suit the weather (from the standoff values), and the need to keep coverage of the village.
+- Fly to `standoff_m`, hold, report `InvestigationStatus`, then return to patrol.
+- Own the minimum safe distance. The estimator reports what is physically needed to identify; the behaviour side may enforce a larger floor for objects that could be hostile.
+- If `feasible` is false, do not dispatch, or pick a drone with a suitable sensor.
+
+**Notes:**
+
+- Phase 1: log requests only, nothing moves. Close the loop once simulation and drone behaviour exist.
+- A close drone also gives a range measurement, which helps separate the two hostiles at the crossing.
+- The simulation must accept commanded drone motion instead of only scripted paths.
+
+### 5.9 Scoring
 
 Inputs are the COP and ground truth. Matching of estimated tracks to true objects uses optimal assignment per timestep (OSPA-style). ID swaps are detected by changes in the assignment between consecutive timesteps. Output is a metrics table per run plus sweeps over message loss. Metric definitions are in [concept.md](concept.md#4-metrics).
 
@@ -206,7 +254,7 @@ Inputs are the COP and ground truth. Matching of estimated tracks to true object
 |-------|---------------------------|
 | 0 | Confirm topology, schemas, stack, metrics |
 | 1 | seeder, simulation, ideal sensors, pass-through channel, single baseline tracker, beacon matching, scoring |
-| 2 | per-node trackers, fusion with covariance intersection, behaviour module, weather |
+| 2 | per-node trackers, fusion with covariance intersection, behaviour module, weather, investigation of suspicious tracks (standoff from weather, closest-drone tasking) |
 | 3 | predictor |
 | 4 | channel loss/delay/drift, pose uncertainty, time-sync, late/out-of-order handling |
 | 5 | sweeps, topology comparison, UI polish, demo |
@@ -218,3 +266,5 @@ Inputs are the COP and ground truth. Matching of estimated tracks to true object
 - Tracker filter details (EKF vs UKF, motion model) and association (GNN vs JPDA).
 - Whether the final COP is merged on a single designated node or on any reachable node.
 - UI technology.
+- Who owns the minimum safe approach distance (proposed: drone-behaviour owner).
+- Drone selection rule beyond "closest" (distance + sensor suitability under the weather).

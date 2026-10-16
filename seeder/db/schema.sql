@@ -35,6 +35,20 @@ CREATE TABLE IF NOT EXISTS platform_model_modules (
     PRIMARY KEY (platform_id, module_id, mount)
 );
 
+-- A generated scenario: the config that made it, what the system may read, and the ground truth kept apart.
+CREATE TABLE IF NOT EXISTS scenarios (
+    id          bigserial PRIMARY KEY,
+    scenario_id text NOT NULL,
+    name        text NOT NULL,
+    preset      text,
+    seed        integer NOT NULL,
+    config      jsonb NOT NULL,
+    scenario    jsonb NOT NULL,
+    truth       jsonb NOT NULL,
+    created_at  timestamptz NOT NULL DEFAULT now(),
+    UNIQUE (scenario_id)
+);
+
 -- A saved run: scenario and result are stored as plain JSON.
 CREATE TABLE IF NOT EXISTS simulations (
     id          bigserial PRIMARY KEY,

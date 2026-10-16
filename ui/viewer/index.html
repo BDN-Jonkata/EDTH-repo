@@ -48,6 +48,8 @@
 
   <div class="sec">
     <p class="h">Scenario</p>
+    <label class="fld">Preset<select class="inp" id="preset" aria-label="Scenario preset"></select></label>
+    <p class="note" id="presetNote"></p>
     <label class="fld">Name<input class="inp" id="name" type="text" value="Crossing pair"></label>
     <div class="row" style="align-items:flex-end">
       <label class="fld" style="flex:1 1 auto">Seed<input class="inp mono" id="seed" type="number" min="1" max="99999" value="4127"></label>
@@ -176,7 +178,7 @@
       <button role="radio" data-v="4" aria-checked="false" class="mono">4×</button>
       <button role="radio" data-v="8" aria-checked="false" class="mono">8×</button>
     </div>
-    <span class="mono" style="font-size:13px"><span id="tNow">00:00.0</span> <span style="color:#8B96A5">/ 02:00.0</span></span>
+    <span class="mono" style="font-size:13px"><span id="tNow">00:00.0</span> <span style="color:#8B96A5">/ <span id="tTotal">02:00.0</span></span></span>
     <div class="tl">
       <svg viewBox="0 0 1000 40" width="100%" height="40" preserveAspectRatio="none" id="tlSvg" aria-hidden="true"></svg>
       <input type="range" id="scrub" min="0" max="1200" value="0" aria-label="Scrub timeline">
@@ -207,6 +209,9 @@
 </div>
 <script src="catalog.js"></script>
 <script src="missions.js"></script>
+<script src="scenarios.js"></script>
+<script src="messages.js"></script>
+<script src="drones.js"></script>
 <script src="sim.js"></script>
 <script src="app.js"></script>
 </body>

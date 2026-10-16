@@ -25,7 +25,7 @@
     do {
       points.push({ x, y, vx: v.vx, vy: v.vy });
       x += v.vx * dt; y += v.vy * dt;
-      v = brake(v, ACCEL * dt);
+      v = brake(v, (d.accel || ACCEL) * dt);
     } while (Math.hypot(points.at(-1).vx, points.at(-1).vy) > 1e-9);
     return { points, inBounds: points.every((p) => p.x >= -1e-8 && p.x <= SIZE + 1e-8 && p.y >= -1e-8 && p.y <= SIZE + 1e-8) };
   }
@@ -40,7 +40,9 @@
     constructor(friendlies, sensors, dt, emit) {
       this.dt = dt; this.sensors = sensors; this.emit = emit || (() => {});
       this.drones = friendlies.map((f) => ({ id: f.id, x: f.x, y: f.y,
-        vx: 0, vy: 0, speed: f.v, heading: Math.atan2(500 - f.y, 500 - f.x),
+        vx: 0, vy: 0, speed: f.v, cruise: f.v, accel: Math.min(ACCEL, f.flight?.max_accel_mps2 ?? ACCEL),
+        yawRate: Math.min(YAW_RATE, (f.flight?.max_turn_dps ?? 20) * Math.PI / 180), heading: Math.atan2(500 - f.y, 500 - f.x),
+        courseRate: (f.flight?.max_turn_dps ?? 90) * Math.PI / 180,
         mode: 'patrol', target: null, goal: null, cell: null, blocked: false,
         nextPlan: 0, lastEstimate: null, followSensor: null, history: [] }));
       for (let i = 0; i < this.drones.length; i++) for (let j = 0; j < i; j++) {
@@ -65,10 +67,19 @@
       return { x: a.x + (b.x - a.x) * u, y: a.y + (b.y - a.y) * u,
         vx: a.vx, vy: a.vy, heading: wrap(a.heading + wrap(b.heading - a.heading) * u) };
     }
-    observe(t, k) {
+    command(id, cmd, flight) {
+      const d = this.drones.find((q) => q.id === id);
+      d.mode = cmd.command === 'return_to_patrol' ? 'patrol' : cmd.command;
+      d.target = null; d.cell = null; d.lastEstimate = null; d.nextPlan = 0;
+      d.goal = cmd.command === 'goto' ? { x: cmd.target[0], y: cmd.target[1] } :
+        cmd.command === 'hold' ? { x: d.x, y: d.y } : null;
+      d.speed = d.mode === 'patrol' ? d.cruise : Math.min(flight.max_speed_mps, cmd.speed_mps || flight.max_speed_mps);
+      d.commandFace = cmd.face;
+    }
+    observe(t, k, isAlive = () => true) {
       this.sensors.forEach((s) => {
         const d = this.drones.find((q) => q.id === s.node);
-        if (!d || k % s.every || s.pd <= 0) return;
+        if (!d || !isAlive(d.id) || k % s.every || s.pd <= 0) return;
         this.cells.forEach((c) => {
           const dx = c.x - d.x, dy = c.y - d.y, r = Math.hypot(dx, dy);
           if (r < s.minRange || r > s.range) return;
@@ -98,6 +109,15 @@
     update(t, tracks) {
       const active = new Set(tracks);
       this.drones.forEach((d) => {
+        if (d.disabled) { this.transition(d, 'offline', null, t); d.lastEstimate = null; d.desiredHeading = d.heading; }
+      });
+      this.drones.forEach((d) => {
+        if (d.mode === 'goto' || d.mode === 'hold') {
+          const face = d.commandFace;
+          d.desiredHeading = face?.point ? Math.atan2(face.point[1] - d.y, face.point[0] - d.x) :
+            face?.heading ?? (Math.hypot(d.vx, d.vy) > 1 ? Math.atan2(d.vy, d.vx) : d.heading);
+          return;
+        }
         while (d.target && d.target.replacement) d.target = d.target.replacement;
       });
       const owners = new Set();
@@ -187,14 +207,14 @@
     move(t) {
       // Reserve full stopping paths, beginning with the previously guaranteed
       // safe braking fallback. Never assume a moving neighbour can stop instantly.
-      const profiles = new Map(this.drones.map((d) => [d, stoppingProfile(d, brake(d, ACCEL * this.dt), this.dt)]));
+      const profiles = new Map(this.drones.map((d) => [d, stoppingProfile(d, brake(d, d.accel * this.dt), this.dt)]));
       const chosen = new Map();
-      const rank = { follow: 0, search: 1, patrol: 2 };
+      const rank = { offline: -1, hold: 0, goto: 1, follow: 2, search: 3, patrol: 4 };
       const order = this.drones.slice().sort((a, b) => rank[a.mode] - rank[b.mode] || a.id.localeCompare(b.id));
       order.forEach((d) => {
         const dx = d.goal ? d.goal.x - d.x : 0, dy = d.goal ? d.goal.y - d.y : 0;
         const distance = Math.hypot(dx, dy), a = Math.atan2(dy, dx);
-        const speed = Math.min(d.speed, Math.sqrt(2 * ACCEL * distance), distance / 2);
+        const speed = d.mode === 'hold' || d.disabled ? 0 : Math.min(d.speed, Math.sqrt(2 * d.accel * distance), distance / 2);
         const desired = { vx: Math.cos(a) * speed, vy: Math.sin(a) * speed };
         const preferred = { ...desired };
         this.drones.forEach((other) => {
@@ -205,18 +225,19 @@
             preferred.vx += rx / r * weight; preferred.vy += ry / r * weight;
           }
         });
-        const candidates = [brake(d, ACCEL * this.dt), { vx: d.vx, vy: d.vy }];
+        const candidates = [brake(d, d.accel * this.dt), { vx: d.vx, vy: d.vy }];
         const capAcceleration = (v) => {
           const x = v.vx - d.vx, y = v.vy - d.vy, dv = Math.hypot(x, y);
-          const scale = dv > ACCEL * this.dt ? ACCEL * this.dt / dv : 1;
+          const scale = dv > d.accel * this.dt ? d.accel * this.dt / dv : 1;
           return { vx: d.vx + x * scale, vy: d.vy + y * scale };
         };
         candidates.push(capAcceleration(preferred), capAcceleration(desired));
         for (let i = 0; i < 16; i++) {
           const angle = a + i * Math.PI / 8;
-          candidates.push({ vx: d.vx + Math.cos(angle) * ACCEL * this.dt,
-            vy: d.vy + Math.sin(angle) * ACCEL * this.dt });
+          candidates.push({ vx: d.vx + Math.cos(angle) * d.accel * this.dt,
+            vy: d.vy + Math.sin(angle) * d.accel * this.dt });
         }
+        if (d.disabled || d.mode === 'hold') candidates.splice(1);
         candidates.forEach((v) => {
           const ax = (v.vx - d.vx) / this.dt, ay = (v.vy - d.vy) / this.dt;
           v.cost = (v.vx - preferred.vx) ** 2 + (v.vy - preferred.vy) ** 2 +
@@ -229,7 +250,9 @@
         });
         candidates.sort((a, b) => a.cost - b.cost);
         const v = candidates.find((v) => {
-          if (Math.hypot(v.vx, v.vy) > d.speed + 1e-8) return false;
+          if (Math.hypot(v.vx, v.vy) > Math.max(d.speed, Math.hypot(d.vx, d.vy) - d.accel * this.dt) + 1e-8) return false;
+          if (Math.hypot(d.vx, d.vy) > 0.05 && Math.hypot(v.vx, v.vy) > 0.05 &&
+              Math.abs(wrap(Math.atan2(v.vy, v.vx) - Math.atan2(d.vy, d.vx))) > d.courseRate * this.dt + 1e-8) return false;
           const profile = stoppingProfile(d, v, this.dt);
           if (!profile.inBounds || !this.drones.every((other) => other === d || profilesClear(profile, profiles.get(other), this.dt))) return false;
           profiles.set(d, profile);
@@ -251,7 +274,7 @@
         const desiredHeading = d.mode === 'patrol' ?
           (Math.hypot(d.vx, d.vy) > 1 ? Math.atan2(d.vy, d.vx) : d.heading) : (d.desiredHeading ?? d.heading);
         const delta = wrap(desiredHeading - d.heading);
-        d.heading = wrap(d.heading + Math.max(-YAW_RATE * this.dt, Math.min(YAW_RATE * this.dt, delta)));
+        d.heading = wrap(d.heading + Math.max(-d.yawRate * this.dt, Math.min(d.yawRate * this.dt, delta)));
       });
     }
     snapshot() {

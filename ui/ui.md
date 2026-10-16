@@ -20,11 +20,17 @@ python serve.py
 
 `serve.py` is a static server that turns browser caching off, so a refresh always shows the latest files (plain `python -m http.server` can serve stale files). Opening `index.html` directly also works. Optional URL parameters: `?t=49.5` opens paused at that time, `?tab=deg` opens the degradation chart, `?weather=night` and `?seed=7` preselect those settings.
 
+Scenarios: the **Preset** picker (easy, medium, hard, challenge) loads a scenario made by the seeder, and its weather, platforms and degradations become the starting settings. With `python serve.py`, the **Seed** field makes a new scenario for that preset (new hostile paths and patrols) when you press Apply & restart, through `/api/scenario?preset=hard&seed=7`. Opened as a file or with plain `http.server`, only the default seed of each preset is available (`scenarios.js`, made by `python seeder/export_scenarios.py`).
+
+Commanded drones: the mock accepts `commands` from the scenario (or `params.commands`); commands and acks cross the same lossy channel, with retries. `goto` and `hold` override autonomous assignments, and `return_to_patrol` resumes coordinated coverage. The mission controller moves all drones together under the platform flight limits and the shared separation, acceleration and sensor-yaw limits. Command validation and facing helpers live in `drones.js`; test with `node ui/viewer/test-commands.js`. The viewer has no control for sending commands yet.
+
+Messages: every message the mock sends (`observation`, `friendly_beacon`, `drone_command`, `drone_state`) has the shared header from `messages.js`, with the fields in [docs/data-formats.md](../docs/data-formats.md#messages); test with `node ui/viewer/test-messages.js`.
+
 What the mock does:
 
 | Part | Mock behaviour |
 |------|----------------|
-| Scenario | 5 friendly drones coordinating sensor coverage, 2 ground sensors, C2 node, 2 hostiles that cross at about 13 m separation at t = 51 s |
+| Scenario | Comes from the seeder: friendly patrols, ground sensors, a C2 node, hostile paths (straight, waypoints, loiter, hover, sharp turns) and a planned close crossing. A hostile's signature scales how well each sensor type sees it; silent hostiles are invisible to RF; nodes can drop out mid-run in realistic mode |
 | Friendly missions | Patrol unvisited cells first, then oldest-observed cells, with shared destination reservations. Follow persistent unfamiliar contacts using tracker estimates, one follower per target. Search for 10 s after lost contact, then return to patrol; hand off when another detecting drone can take over |
 | Models per node | Each of the 7 nodes gets a platform from the catalog, chosen in the left panel ("Models per node"). Its sensor modules, ranges, noise and weather effects come from `catalog.js`. Press Apply & restart to run the seed with your choice |
 | Sensors | Each module enforces its catalog limits (range window, field of view, pointing, detection probability that falls with distance, rate, latency) and reports only its native data: cameras give bearing + elevation (no range), a microphone array bearing + level, a single microphone only loudness, RF bearing + signal strength, radar range + azimuth + radial speed. Weather (clear, fog, rain, wind, night) scales range, noise and detection probability per module. Radar merges targets inside its 15 m x 3 deg resolution cell |

@@ -60,6 +60,7 @@ Details and interfaces are in [system-design.md](system-design.md).
 | Tracker | Per-node local multi-target tracking: count, ID, position, velocity, uncertainty. |
 | Friend/Foe | Beacon matching plus Drone Behaviour module: learns the friendly pattern, alarms when an unknown drone enters range and outputs a friendly/hostile presumption. |
 | Fusion | Merges tracks from nodes (covariance intersection), keeps global IDs, builds the COP. |
+| Investigation | Tracks classed as suspicious are checked by sending the closest suitable drone. How close it must get depends on the weather (standoff distance per sensor). See system design 5.8. |
 | Predictor | Optional short-horizon prediction (seconds to minutes) to help hold identity through the crossing. |
 | Degradation / time-sync | Later phase: clock drift, delay, out-of-order and missing data, handled at the channel-to-tracker interface. |
 | Scoring | Metrics against ground truth, headline result is metrics vs message loss. |

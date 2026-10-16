@@ -2,7 +2,7 @@
 
 Generates realistic scenario components (friendly drones, ground sensors, hostile drones, terrain) from a scenario definition, and holds the **catalog of platforms and sensor modules** they are built from.
 
-Status: catalog and PostgreSQL storage done; scenario generation not started. See [system design](../docs/system-design.md) and [seeder config](../docs/seeder-config.md).
+Status: catalog, PostgreSQL storage and the scenario generator are done. See [system design](../docs/system-design.md) and [seeder config](../docs/seeder-config.md).
 
 ## Catalog
 
@@ -26,6 +26,36 @@ Files:
 - [catalog/platform_models.json](catalog/platform_models.json): which modules each platform carries.
 
 **Data quality:** `verified: true` means the `spec` was read from an official datasheet (only the Skydio X10 camera/thermal and the Parrot Lepton thermal so far). Everything else is `verified: false` with a source or note. The `sim` numbers and all `weather_effects` are **assumed starting points to tune**, not measurements.
+
+## Sharing the database
+
+The data in your database travels through git as [data/db-dump.json.gz](data/db-dump.json.gz): catalog, generated scenarios and saved simulations.
+
+```
+python seeder/dump.py export    # you: refresh the dump after saving new scenarios or runs, then commit it
+python seeder/dump.py import    # teammates: create the schema and load everything (safe to repeat, no duplicates)
+```
+
+A teammate needs PostgreSQL, a database, `DATABASE_URL` in `.env`, and `pip install -r seeder/requirements.txt` first.
+
+## Scenario generator
+
+One config plus a seed gives the same scenario every time. [scenario.py](scenario.py) writes:
+
+- `scenario.json`: what the system may read (friendly patrols with their platforms, ground sensors, hostile waypoint paths with signatures, environment, degradations, the resolved sensors per node).
+- `truth.json`: ground truth, sampled positions of every object plus events (enter, exit, close crossings). For scoring only; the tracker never reads it.
+
+What it generates: friendly patrol loops, hostile paths (`straight`, `waypoints`, `loiter`, `hover`, `mixed`, sudden turns, entry and exit times), and a planned close crossing between the first two hostiles at a chosen time and separation. Targets, friendlies and ground sensors use separate random streams, so changing one does not move the others. The config is validated (platforms must exist and be the right type, seeds must belong to the named seed set, loss between 0 and 1, and so on).
+
+```
+python seeder/generate.py scenarios/hard.json --seed 7        # -> out/hard-s7/
+python seeder/export_scenarios.py                              # refresh ui/viewer/scenarios.js
+python -m unittest discover -s seeder/tests -v                 # 21 tests
+```
+
+Commands: a config may list `commands` (goto, hold, return_to_patrol for a friendly drone at time `t`, with optional speed cap and camera direction). The scenario carries them sorted; the simulation sends them over the channel. The generator's own `truth.json` stays the scripted baseline and is marked `scripted_baseline_only`. Every UAS in the catalog has assumed flight limits (`spec.flight`) used for commanded motion. Message formats: [data-formats.md](../docs/data-formats.md#drone-commands).
+
+The viewer's simulation uses the same motion maths; a test run showed the generator's truth and the simulation's truth agree to within 0.01 m.
 
 ## Sensor limits and native output
 
