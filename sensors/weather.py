@@ -1,49 +1,65 @@
-"""Weather state and providers.
+"""Weather conditions as the scenario describes them.
 
-Weather is described by a few physical quantities. A provider answers
-"what is the weather at this position and time", so spatially or
-temporally varying weather can replace the uniform case later without
-changing callers.
+`scenario.json` has `environment.weather` (clear, fog, rain, wind, night) and
+`environment.time_of_day` (day, night). The catalog gives every sensor module a
+multiplier for each of fog, rain, wind and night (`weather_effects`), so these
+conditions only name which effects are active.
+
+A provider answers "what are the conditions at this position and time", so
+weather that varies by place or time can replace the uniform case later
+without changing callers.
 """
 
 from dataclasses import dataclass
-from typing import Protocol, Sequence
+from typing import Protocol, Sequence, Tuple
+
+WEATHERS = ("clear", "fog", "rain", "wind", "night")
+TIMES_OF_DAY = ("day", "night")
 
 
 @dataclass(frozen=True)
-class WeatherState:
-    wind_mps: float = 0.0            # wind speed, m/s
-    visibility_m: float = 10_000.0   # meteorological visibility (fog/haze), m
-    rain_mm_h: float = 0.0           # rain rate, mm/h
-    light: float = 1.0               # 1 = full daylight, 0 = night
+class Conditions:
+    weather: str = "clear"
+    time_of_day: str = "day"
 
+    def __post_init__(self):
+        if self.weather not in WEATHERS:
+            raise ValueError(f"weather must be one of {WEATHERS}, got {self.weather!r}")
+        if self.time_of_day not in TIMES_OF_DAY:
+            raise ValueError(f"time_of_day must be one of {TIMES_OF_DAY}, got {self.time_of_day!r}")
 
-CLEAR = WeatherState()
-FOG = WeatherState(wind_mps=1.0, visibility_m=80.0, light=0.7)
-RAIN = WeatherState(wind_mps=6.0, visibility_m=2_000.0, rain_mm_h=12.0, light=0.6)
-WIND = WeatherState(wind_mps=14.0)
-NIGHT = WeatherState(light=0.05)
-STORM = WeatherState(wind_mps=18.0, visibility_m=500.0, rain_mm_h=30.0, light=0.3)
+    def active_effects(self) -> Tuple[str, ...]:
+        """Catalog `weather_effects` keys that apply. Night counts once, however it is set."""
+        effects = [] if self.weather == "clear" else [self.weather]
+        if self.time_of_day == "night" and "night" not in effects:
+            effects.append("night")
+        return tuple(effects)
+
 
 PRESETS = {
-    "clear": CLEAR,
-    "fog": FOG,
-    "rain": RAIN,
-    "wind": WIND,
-    "night": NIGHT,
-    "storm": STORM,
+    "clear": Conditions(),
+    "fog": Conditions("fog"),
+    "rain": Conditions("rain"),
+    "wind": Conditions("wind"),
+    "night": Conditions(time_of_day="night"),
+    "fog_night": Conditions("fog", "night"),
 }
 
 
 class WeatherProvider(Protocol):
-    def at(self, position: Sequence[float], t: float) -> WeatherState: ...
+    def at(self, position: Sequence[float], t: float) -> Conditions: ...
 
 
 @dataclass(frozen=True)
 class UniformWeather:
-    """Same weather everywhere, all the time."""
+    """Same conditions everywhere, all the time."""
 
-    state: WeatherState = CLEAR
+    conditions: Conditions = Conditions()
 
-    def at(self, position: Sequence[float], t: float) -> WeatherState:
-        return self.state
+    def at(self, position: Sequence[float], t: float) -> Conditions:
+        return self.conditions
+
+
+def weather_from_scenario(scenario: dict) -> UniformWeather:
+    env = scenario["environment"]
+    return UniformWeather(Conditions(env["weather"], env.get("time_of_day", "day")))

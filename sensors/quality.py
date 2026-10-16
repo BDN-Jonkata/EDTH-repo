@@ -1,124 +1,112 @@
 """Sensor quality under weather: the sensor hierarchy and required standoff.
 
-Every number in SENSOR_SPECS is a placeholder to be tuned; the structure is
-what matters. Weather scales each sensor's range, and the same scale drives
-its noise and detection probability, so weather influences fusion through
-honest covariances instead of a hand-made trust list.
+All sensor numbers come from the seeder catalog (`sim.range_m`,
+`sim.min_range_m`, `weather_effects`); this module adds none of its own except
+`IDENT_FRACTION`, which the catalog does not have. Active weather effects
+multiply (fog at night = fog multiplier x night multiplier); that is an
+assumption, like the catalog numbers themselves.
 """
 
 from dataclasses import dataclass
-from typing import Callable, Dict, Iterable, List, Sequence
+from typing import Dict, Iterable, List, Optional, Sequence
 
-from sensors.weather import WeatherProvider, WeatherState
+from common.seeder_import import ensure_seeder_on_path
+from sensors.weather import Conditions, WeatherProvider
 
+ensure_seeder_on_path()
+import catalog as seeder_catalog  # noqa: E402  (seeder/catalog.py)
+
+DETECTION_KINDS = seeder_catalog.DETECTION_KINDS
+
+# PLACEHOLDER, not in the catalog: the share of a module's detection range at
+# which it can still identify an object (camera sees class cues, a microphone
+# only hears presence). Propose `sim.ident_range_m` for the catalog and delete this.
+IDENT_FRACTION = {
+    "eo_camera": 0.6,
+    "thermal_camera": 0.5,
+    "rf_receiver": 0.3,
+    "microphone": 0.2,
+    "radar": 0.2,
+}
 MIN_USEFUL_RANGE_M = 20.0   # below this, identification is not worth attempting
 STANDOFF_MARGIN = 0.7       # aim for this fraction of the maximum identification range
 
 
-@dataclass(frozen=True)
-class SensorSpec:
-    detect_range_m: float   # clear-weather range at which a target is detected
-    ident_range_m: float    # clear-weather range at which a target can be identified
-    weather_scale: Callable[[WeatherState, float], float]  # (weather, base range) -> 0..1
+def load_modules() -> Dict[str, dict]:
+    """Catalog sensor modules by id."""
+    return {m["id"]: m for m in seeder_catalog.load_catalog()["modules"]}
 
 
-def _clamp01(x: float) -> float:
-    return max(0.0, min(1.0, x))
+def detection_modules(modules: Iterable[dict]) -> List[dict]:
+    return [m for m in modules if m["kind"] in DETECTION_KINDS]
 
 
-def _camera_scale(w: WeatherState, base_range_m: float) -> float:
-    # Fog caps range near the visibility distance; rain and low light reduce it further.
-    fog = _clamp01(0.8 * w.visibility_m / base_range_m)
-    rain = 1.0 / (1.0 + 0.04 * w.rain_mm_h)
-    light = 1.0 - 0.7 * (1.0 - _clamp01(w.light))
-    return _clamp01(fog * rain * light)
-
-
-def _acoustic_scale(w: WeatherState, base_range_m: float) -> float:
-    # Wind noise dominates; rain adds broadband noise. Fog and light do not matter.
-    wind = 1.0 / (1.0 + 0.5 * (w.wind_mps / 5.0) ** 2)
-    rain = 1.0 / (1.0 + 0.02 * w.rain_mm_h)
-    return _clamp01(wind * rain)
-
-
-def _rf_scale(w: WeatherState, base_range_m: float) -> float:
-    # Largely weather independent; heavy rain adds slight attenuation.
-    return _clamp01(1.0 / (1.0 + 0.005 * w.rain_mm_h))
-
-
-def _radar_scale(w: WeatherState, base_range_m: float) -> float:
-    # Rain attenuates and adds clutter; fog and light do not matter.
-    return _clamp01(1.0 / (1.0 + 0.015 * w.rain_mm_h))
-
-
-SENSOR_SPECS: Dict[str, SensorSpec] = {
-    "camera":   SensorSpec(detect_range_m=1000.0, ident_range_m=400.0, weather_scale=_camera_scale),
-    "acoustic": SensorSpec(detect_range_m=300.0,  ident_range_m=150.0, weather_scale=_acoustic_scale),
-    "rf":       SensorSpec(detect_range_m=1500.0, ident_range_m=800.0, weather_scale=_rf_scale),
-    "radar":    SensorSpec(detect_range_m=800.0,  ident_range_m=500.0, weather_scale=_radar_scale),
-}
+def modules_in_scenario(scenario: dict, modules_by_id: Optional[Dict[str, dict]] = None) -> List[dict]:
+    """The distinct detection modules carried by the scenario's friendly drones."""
+    modules_by_id = modules_by_id or load_modules()
+    ids = []
+    for node in scenario["friendlies"]:
+        for s in node["sensors"]:
+            if s["module"] not in ids:
+                ids.append(s["module"])
+    return detection_modules(modules_by_id[i] for i in ids)
 
 
 @dataclass(frozen=True)
 class SensorQuality:
-    range_scale: float   # 0..1 multiplier on clear-weather range
-    noise_scale: float   # >= 1 multiplier on measurement standard deviation
-    pd_scale: float      # 0..1 multiplier on detection probability
+    range_scale: float   # multiplier on the module's range
+    noise_scale: float   # multiplier on its measurement noise
+    pd_scale: float      # multiplier on its detection probability
 
 
-def sensor_quality(sensor_type: str, weather: WeatherState) -> SensorQuality:
-    spec = SENSOR_SPECS[sensor_type]
-    scale = spec.weather_scale(weather, spec.ident_range_m)
-    # Placeholder couplings: worse weather means larger noise and fewer detections.
-    noise = 1.0 / max(scale, 1e-3)
-    return SensorQuality(range_scale=scale, noise_scale=noise, pd_scale=scale ** 0.5)
+def sensor_quality(module: dict, conditions: Conditions) -> SensorQuality:
+    rng = noise = pd = 1.0
+    for effect in conditions.active_effects():
+        e = module["weather_effects"][effect]
+        rng *= e["range_mult"]
+        noise *= e["noise_mult"]
+        pd *= e["pd_mult"]
+    return SensorQuality(rng, noise, pd)
 
 
-def sensor_hierarchy(weather: WeatherState, sensor_types: Iterable[str] = None) -> List[str]:
-    """Sensors ordered best first by effective identification range in this weather."""
-    names = list(sensor_types) if sensor_types is not None else list(SENSOR_SPECS)
-    return sorted(
-        names,
-        key=lambda s: SENSOR_SPECS[s].ident_range_m * sensor_quality(s, weather).range_scale,
-        reverse=True,
-    )
+def sensor_hierarchy(modules: Iterable[dict], conditions: Conditions) -> List[str]:
+    """Detection module ids, best first: effective range weighted by detection probability."""
+    def usefulness(m):
+        q = sensor_quality(m, conditions)
+        return m["sim"]["range_m"] * q.range_scale * q.pd_scale
+    return [m["id"] for m in sorted(detection_modules(modules), key=usefulness, reverse=True)]
 
 
 @dataclass(frozen=True)
 class Standoff:
-    max_range_m: float      # farthest distance at which this sensor can still identify the object
-    recommended_m: float    # distance to aim for, with a safety margin
-    confidence: float       # 0..1, how much weather leaves of the clear-weather capability
-    feasible: bool          # False if the sensor cannot identify the object right now
+    max_range_m: float      # farthest distance at which this module can still identify an object
+    recommended_m: float    # distance to aim for: margin inside the maximum, never inside the minimum range
+    confidence: float       # 0..1, how much of its clear-weather capability weather leaves
+    feasible: bool          # False if the module cannot identify the object right now
 
 
 def required_standoff(
-    sensor_type: str,
-    target_position: Sequence[float],
-    t: float,
-    weather: WeatherProvider,
+    module: dict, target_position: Sequence[float], t: float, weather: WeatherProvider
 ) -> Standoff:
-    """How close a drone carrying `sensor_type` must get to identify the target."""
-    spec = SENSOR_SPECS[sensor_type]
-    scale = sensor_quality(sensor_type, weather.at(target_position, t)).range_scale
-    max_range = spec.ident_range_m * scale
+    """How close a drone carrying `module` must get to identify the object."""
+    sim = module["sim"]
+    q = sensor_quality(module, weather.at(target_position, t))
+    max_range = sim["range_m"] * IDENT_FRACTION[module["kind"]] * q.range_scale
+    floor = sim["min_range_m"]
     return Standoff(
         max_range_m=max_range,
-        recommended_m=STANDOFF_MARGIN * max_range,
-        confidence=scale,
-        feasible=max_range >= MIN_USEFUL_RANGE_M,
+        recommended_m=min(max_range, max(STANDOFF_MARGIN * max_range, floor)),
+        confidence=min(1.0, q.range_scale * q.pd_scale),
+        feasible=max_range >= max(MIN_USEFUL_RANGE_M, floor),
     )
 
 
-def standoff_by_sensor(
-    sensor_types: Iterable[str],
-    target_position: Sequence[float],
-    t: float,
-    weather: WeatherProvider,
+def standoff_by_module(
+    modules: Iterable[dict], target_position: Sequence[float], t: float, weather: WeatherProvider
 ) -> Dict[str, Standoff]:
-    return {s: required_standoff(s, target_position, t, weather) for s in sensor_types}
+    return {m["id"]: required_standoff(m, target_position, t, weather) for m in detection_modules(modules)}
 
 
-def best_standoff(by_sensor: Dict[str, Standoff]) -> Standoff:
-    """The most capable sensor wins: the longest feasible maximum range."""
-    return max(by_sensor.values(), key=lambda s: s.max_range_m)
+def best_standoff(by_module: Dict[str, Standoff]) -> Standoff:
+    """The module that can identify from farthest away. Feasible ones win over infeasible."""
+    return max(by_module.values(), key=lambda s: (s.feasible, s.max_range_m))

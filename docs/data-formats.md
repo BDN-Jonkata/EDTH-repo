@@ -19,6 +19,7 @@ The JSON that the seeder produces and the other modules read. If you are an agen
 | `scenario.json` (what the system may read) | `python seeder/generate.py scenarios/hard.json --seed 3` | `out/<id>/scenario.json`, or `seeder/scenario.py` `generate(config)` |
 | `truth.json` (scoring only) | same command | `out/<id>/truth.json` |
 | A saved simulation run | `node ui/viewer/export-run.js` | PostgreSQL table `simulations`, or `seeder/data/db-dump.json.gz` |
+| Track, beacon and investigation messages | the tracker, the beacon source and `friend_foe/` (hand-made example in [friend_foe/data/local_tracks.jsonl](../friend_foe/data/local_tracks.jsonl)) | JSON Lines, see "Track and investigation messages" below |
 
 Load everything from the dump into your own database with `python seeder/dump.py import` (see [seeder.md](../seeder/seeder.md)).
 
@@ -91,3 +92,28 @@ result["frames"][600]["tracks"][0]["x"]
 ```
 
 This run comes from the mock simulation in the viewer. Treat its tracks as an example of the shape, not as a reference tracker.
+
+## Track and investigation messages (draft, JSON Lines)
+
+Drafts for the tracker, friend/foe and drone-behaviour modules. Not yet confirmed by the tracker and drone-behaviour owners; change them here and in the code together. Messages are one JSON object per line. Encode and decode with `encode` / `decode` in [common/codec.py](../common/codec.py), which today is JSON and can later become a compact binary format without changing the messages.
+
+Every message has a top-level `type` and a `header`:
+
+```
+"header": { "msg_id": "node1-12", "source_id": "node1", "t_sent": 12.5, "seq": 12, "schema_version": 1 }
+```
+
+`t_sent` is seconds from the start of the run. `decode` rejects a message with a missing `type` or header field or a different `schema_version`. Positions are `x` east, `y` north, `z` altitude, in metres, as in Conventions above.
+
+| `type` | Sent by | Fields besides `header` |
+|--------|---------|-------------------------|
+| `local_track` | tracker | `local_track_id`, `t_state`, `state` = `[x, y, z, vx, vy, vz]`, `covariance` (6x6), `existence_prob`; optional `class`, `class_prob` |
+| `friendly_beacon` | friendly drone | `friend_id`, `position` `[x, y, z]`, `covariance` (3x3), optional `velocity`. Rate and noise come from `scenario.json` `beacon` (`rate_hz`, `pos_sigma_m`) |
+| `investigation_request` | `friend_foe/` | `track_id`, `position`, `covariance` (3x3), `class_prob`, `priority`, `t_requested`, `standoff_m`, `standoff_by_module`, `weather_confidence`, `feasible` |
+| `investigation_status` | drone behaviour | `track_id`, `drone_id`, `state` = `assigned`, `en_route`, `on_station`, `done` or `aborted` |
+
+Track classes: `friendly`, `hostile`, `suspicious`, `unknown`. A class always comes with a probability and is a presumption, never a deletion.
+
+`investigation_request.standoff_by_module` maps a catalog module id to `{max_range_m, recommended_m, confidence, feasible}`: how close a drone carrying that module must get to identify the object in the current weather. Pick the entries of the modules the chosen drone carries (`scenario.json` `friendlies[].sensors[].module`). `standoff_m` and `feasible` summarise the best module. The numbers are derived from the catalog, so they are assumptions unless the catalog says `verified`.
+
+Rules the estimator follows: a request is only raised for `suspicious` tracks, never for confirmed hostiles; one request per track at a time, with a cooldown; `hostile` needs positive behaviour evidence, silence alone gives `suspicious` because beacons can be jammed.

@@ -2,9 +2,12 @@ import random
 
 from friend_foe.estimator import Beacon, FriendFoeEstimator, TrackState
 from friend_foe.investigation import InvestigationTrigger
-from sensors.weather import CLEAR, FOG, UniformWeather
+from sensors.quality import load_modules
+from sensors.weather import PRESETS, UniformWeather
 
 DT = 0.5
+CLEAR, FOG = PRESETS["clear"], PRESETS["fog"]
+CAMERA = [load_modules()["eo_visible_mini4"]]
 
 
 def track(tid, t, pos, **kw):
@@ -130,7 +133,9 @@ def test_request_raised_once_for_suspicious_track():
     r = reqs[0]
     assert r["type"] == "investigation_request" and r["track_id"] == "X"
     assert r["position"] == [100, 200, 50]
-    assert set(r["standoff_by_sensor"]) == {"camera", "acoustic", "rf", "radar"}
+    assert "radar_mmwave_small" in r["standoff_by_module"]
+    assert not {"gnss_basic", "imu_basic"} & set(r["standoff_by_module"])
+    assert set(r["standoff_by_module"]["eo_visible_mini4"]) == {"max_range_m", "recommended_m", "confidence", "feasible"}
 
 
 def test_cooldown_allows_a_second_request():
@@ -176,8 +181,8 @@ def test_active_status_blocks_new_requests_until_done():
 
 
 def test_fog_shrinks_requested_standoff():
-    # Camera-only drone: RF would be unaffected by fog and win the "best sensor" choice.
-    clear = drive_trigger(make_trigger(CLEAR, sensor_types=["camera"]), 100)[0]
-    fog = drive_trigger(make_trigger(FOG, sensor_types=["camera"]), 100)[0]
+    # Camera-only drone: radar and RF are hardly affected by fog and would win the "best module" choice.
+    clear = drive_trigger(make_trigger(CLEAR, modules=CAMERA), 100)[0]
+    fog = drive_trigger(make_trigger(FOG, modules=CAMERA), 100)[0]
     assert fog["standoff_m"] < clear["standoff_m"]
     assert fog["weather_confidence"] < clear["weather_confidence"]

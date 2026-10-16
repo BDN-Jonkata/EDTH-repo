@@ -58,7 +58,7 @@ Modules in one codebase with clear interfaces and a message bus between them. Th
 | `sensors` | ground truth, weather | `Observation` | Noise, detection probability, range limits, weather effects, honest covariance |
 | `tracker` | `Observation`, own-pose, `FriendlyBeacon` | `LocalTrack` | Runs on each node. KF + gated association + track management |
 | `friend_foe` | beacons, track kinematics | per-track class + presumption | Beacon match first, behaviour pattern second |
-| `investigation` | suspicious `Track`s, weather state, drone states | `InvestigationRequest`, drone tasking | Split in two: the estimator side raises requests and computes the required standoff from weather; the drone-behaviour side picks the drone and flies it (see 5.9) |
+| `investigation` | suspicious `Track`s, weather state, drone states | `InvestigationRequest`, drone tasking | Split in two: the estimator side raises requests and computes the required standoff from weather; the drone-behaviour side picks the drone and flies it (see 5.8) |
 | `fusion` | `LocalTrack` from reachable nodes | `Track` (COP) | Covariance intersection, global ID assignment |
 | `predictor` | `Track` history | predicted state + uncertainty | Optional; system works without it |
 | `scoring` | `Track`, ground truth | metrics | Same metrics every phase |
@@ -110,10 +110,11 @@ Track (COP)   { global_id, t_state, state, covariance,
 
 InvestigationRequest { header, track_id, position, covariance, class_prob,
                        priority, t_requested,
-                       standoff_m,                    # recommended identification distance
-                       standoff_by_sensor: {camera, acoustic, rf, radar},
-                       weather_confidence,            # 0..1, how much the weather limits identification
-                       feasible }                     # false = no sensor can identify it right now
+                       standoff_m,                    # recommended distance of the best module
+                       standoff_by_module: { <catalog module id>: {max_range_m, recommended_m,
+                                              confidence, feasible} },
+                       weather_confidence,            # 0..1, how much the weather leaves of the best module
+                       feasible }                     # false = no module can identify it right now
 
 InvestigationStatus  { header, track_id, drone_id,
                        state: assigned | en_route | on_station | done | aborted }
@@ -190,15 +191,16 @@ A track classed `suspicious` is checked by sending a drone close enough to ident
 - Compute how close a drone must get to identify the object, using the weather:
 
 ```
-required_standoff(sensor_type, target_position, t) -> {
-    max_range_m,      # farthest distance at which this sensor can still identify the object
-    recommended_m,    # distance to aim for, with a safety margin (about 70% of max)
-    confidence,       # how sure we are, given current weather
-    feasible          # false if no sensor on the drone can identify it right now
+required_standoff(module, target_position, t, weather) -> {
+    max_range_m,      # farthest distance at which this module can still identify the object
+    recommended_m,    # distance to aim for: about 70% of max, never inside the module's minimum range
+    confidence,       # 0..1, share of clear-weather capability that the weather leaves
+    feasible          # false if the module cannot identify the object right now
 }
 ```
 
-- Start from each sensor's clear-weather identification range and scale it down with fog, rain, wind and light. Camera classifies best but suffers most in fog and low light; acoustic suffers in wind. The scaling comes from the same weather model that sets sensor covariances, so there is no separate hand-made table.
+- `module` is a sensor module from the seeder catalog. The request lists the result for every detection module a drone may carry (`standoff_by_module`), so the drone-behaviour side looks up the modules of the drone it considers (`scenario.json` `friendlies[].sensors`).
+- All numbers come from the catalog: the module's `sim.range_m` and `sim.min_range_m`, scaled by its `weather_effects` for the active conditions (`environment.weather` and `time_of_day`; effects multiply, for example fog at night). The one number the catalog lacks is how much of the detection range is good enough to *identify* (a camera sees class cues, a microphone only hears presence). A placeholder fraction per module kind (`IDENT_FRACTION` in `sensors/quality.py`) fills in until the catalog gets a field for it.
 - Re-evaluate on request, because weather changes during the flight.
 - After arrival, new observations from the drone feed the estimator, which upgrades or downgrades the suspicion.
 
