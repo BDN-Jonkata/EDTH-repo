@@ -4,10 +4,9 @@ Distributed multi-sensor fusion into a single Common Operational Picture (COP) u
 
 Combine partial, noisy observations from low-cost UAS and ground sensors, fused across distributed nodes with imperfect clocks, uncertain positions and lossy communication, into one picture that gives the **number of hostile targets** with a **stable identity, position and velocity** for each, and never flags friendlies as threats.
 
-> Status: **planning phase, first standalone code in.** Weather and sensor quality (`sensors/`), the friend/foe estimator with investigation trigger (`friend_foe/`) and the JSON codec (`common/codec.py`) exist and are tested. Simulation, seeder, tracker and fusion are not started.
+> Status: **planning phase, first code in.** A first simulation viewer with a built-in mock simulation runs from [ui/viewer](ui/viewer/) (see [ui/ui.md](ui/ui.md)), and the seeder catalog exists in [seeder/](seeder/). Weather and sensor quality (`sensors/`), the friend/foe estimator with investigation trigger (`friend_foe/`) and the JSON codec (`common/codec.py`) exist and are tested. The real simulation, tracker and fusion are not implemented yet.
 
 Run the tests (Python 3.11+): `python -m pip install pytest`, then `python -m pytest` from the repo root.
-> Status: **planning phase.** Folder structure and documents are in place. A first simulation viewer with a built-in mock simulation runs from [ui/viewer](ui/viewer/) (see [ui/ui.md](ui/ui.md)); the real modules are not implemented yet.
 
 ## Documents
 
@@ -16,6 +15,7 @@ Run the tests (Python 3.11+): `python -m pip install pytest`, then `python -m py
 | [docs/concept.md](docs/concept.md) | Problem statement, scenario, success criteria, our approach, components, metrics |
 | [docs/system-design.md](docs/system-design.md) | Architecture, module responsibilities, conventions (time, coordinates, uncertainty), message schemas, module design, repo layout, open decisions |
 | [docs/seeder-config.md](docs/seeder-config.md) | Scenario config (one JSON + seed), degradation switches, presets, open questions for the mentor |
+| [docs/data-formats.md](docs/data-formats.md) | The JSON the seeder produces (scenario, truth, catalog, saved runs) and how to read it; start here if you build another module |
 | [docs/team-plan.md](docs/team-plan.md) | Work split between 3 people, interfaces between them, per-phase tasks, working agreements |
 
 ## Repository layout
@@ -138,11 +138,11 @@ Detailed split and per-phase tasks: [docs/team-plan.md](docs/team-plan.md).
 | 2026-10-16 | Revised: classical tracker is the core and AI only does prediction; hybrid fusion proposed; channel emulator in the simulation from the start; modules in one codebase instead of separate microservices; weather folded into sensor models; friendlies identified by broadcast first and behaviour second; metrics defined up front |
 | 2026-10-16 | Repo split into per-module folders; concept and system design moved to separate docs |
 | 2026-10-16 | Work split into 3 roles (A platform/world, B tracking/fusion, C sensing/evaluation) with agreed interfaces in `common/` |
-| 2026-10-17 | Tracks get a `suspicious` class. Suspicious tracks are investigated by sending the closest suitable drone. The drone-behaviour owner picks and flies the drone; the weather/estimator owner provides the trigger and the weather-based standoff distance (`required_standoff`). Messages `InvestigationRequest` and `InvestigationStatus` added to the draft schemas |
-| 2026-10-17 | First standalone code: `sensors/weather.py` and `sensors/quality.py`, `friend_foe/estimator.py` and `friend_foe/investigation.py`, `common/codec.py` (`encode`/`decode` plus message size log). Placeholder numbers throughout, to be tuned |
-| 2026-10-17 | JSON (JSON Lines) for messages while building the pipeline. `encode`/`decode` pair at the channel boundary so a compact binary format (Protobuf/CBOR) can replace it later without touching modules |
 | 2026-10-17 | Seeder catalog: 5 real UAS models + 2 ground sensors with different sensor loadouts and per-weather effects; stored in PostgreSQL, simulations saved as plain JSONB; seeder in Python |
 | 2026-10-17 | Adopted team notes: scenarios are one JSON config + seed with a separate ground-truth file and separate tuning/test seeds; per-degradation switches; presets; radar resolution cell; sensor set switchable per scenario; catalog numbers moved to the more conservative values |
 | 2026-10-17 | Viewer runs the seed with a platform chosen per node from the catalog; weather now includes night; map fills its panel |
 | 2026-10-17 | Sensor limits enforced (range window, field of view, pointing, falling detection probability, rate, latency); sensors report native data only (cameras bearing+elevation, no range) and the tracker consumes it with EKF updates |
 | 2026-10-17 | Scenario generator in the seeder: one config + seed gives a scenario and a separate ground-truth file; four presets (easy, medium, hard, challenge); tuning and test seed sets; viewer runs generated scenarios through serve.py |
+| 2026-10-17 | Tracks get a `suspicious` class. Suspicious tracks are investigated by sending the closest suitable drone. The drone-behaviour owner picks and flies the drone; the weather/estimator owner provides the trigger and the weather-based standoff distance (`required_standoff`). Messages `InvestigationRequest` and `InvestigationStatus` added to the draft schemas |
+| 2026-10-17 | First standalone code: `sensors/weather.py` and `sensors/quality.py`, `friend_foe/estimator.py` and `friend_foe/investigation.py`, `common/codec.py` (`encode`/`decode` plus message size log). Placeholder numbers throughout, to be tuned |
+| 2026-10-17 | JSON (JSON Lines) for messages while building the pipeline. `encode`/`decode` pair at the channel boundary so a compact binary format (Protobuf/CBOR) can replace it later without touching modules |
