@@ -1,9 +1,10 @@
 """Trigger for investigating suspicious tracks.
 
-Raises an `InvestigationRequest` (draft schema in docs/system-design.md) when
-a track has stayed `suspicious` long enough. The request carries the
-weather-based standoff distance. Choosing the drone and flying it is the
-drone-behaviour module's job; this only decides when to ask and how close.
+Raises an `InvestigationRequest` (see docs/data-formats.md) when a track has
+stayed `suspicious` long enough. The request carries, for every sensor module
+a drone may carry, how close it must get to identify the object in the current
+weather. Choosing the drone and flying it is the drone-behaviour module's job;
+this only decides when to ask and how close.
 
 Rules: only suspicious tracks are requested (not confirmed hostiles), one
 request per track at a time, and a cooldown before asking again.
@@ -12,7 +13,7 @@ request per track at a time, and a cooldown before asking again.
 from typing import Dict, Iterable, List, Optional, Sequence
 
 from friend_foe.estimator import Classification, TrackState
-from sensors.quality import SENSOR_SPECS, best_standoff, standoff_by_sensor
+from sensors.quality import best_standoff, detection_modules, load_modules, standoff_by_module
 from sensors.weather import WeatherProvider
 
 ACTIVE_STATES = {"assigned", "en_route", "on_station"}
@@ -23,13 +24,13 @@ class InvestigationTrigger:
     def __init__(
         self,
         weather: WeatherProvider,
-        sensor_types: Optional[Iterable[str]] = None,
+        modules: Optional[Iterable[dict]] = None,
         min_suspicious_s: float = 3.0,
         cooldown_s: float = 30.0,
         source_id: str = "estimator",
     ):
         self.weather = weather
-        self.sensor_types = list(sensor_types) if sensor_types is not None else list(SENSOR_SPECS)
+        self.modules = detection_modules(modules if modules is not None else load_modules().values())
         self.min_suspicious_s = min_suspicious_s
         self.cooldown_s = cooldown_s
         self.source_id = source_id
@@ -65,8 +66,8 @@ class InvestigationTrigger:
             self._blocked_until[track_id] = t + self.cooldown_s
 
     def _build_request(self, t: float, c: Classification, tr: TrackState) -> dict:
-        by_sensor = standoff_by_sensor(self.sensor_types, tr.position, t, self.weather)
-        best = best_standoff(by_sensor)
+        by_module = standoff_by_module(self.modules, tr.position, t, self.weather)
+        best = best_standoff(by_module)
         var = tr.pos_sigma ** 2
         self._seq += 1
         return {
@@ -85,14 +86,14 @@ class InvestigationTrigger:
             "priority": round(1.0 - c.p_friendly, 3),
             "t_requested": t,
             "standoff_m": best.recommended_m,
-            "standoff_by_sensor": {
-                s: {
-                    "max_range_m": v.max_range_m,
-                    "recommended_m": v.recommended_m,
-                    "confidence": v.confidence,
-                    "feasible": v.feasible,
+            "standoff_by_module": {
+                module_id: {
+                    "max_range_m": s.max_range_m,
+                    "recommended_m": s.recommended_m,
+                    "confidence": s.confidence,
+                    "feasible": s.feasible,
                 }
-                for s, v in by_sensor.items()
+                for module_id, s in by_module.items()
             },
             "weather_confidence": best.confidence,
             "feasible": best.feasible,
