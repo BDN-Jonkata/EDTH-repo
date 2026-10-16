@@ -4,7 +4,9 @@ Distributed multi-sensor fusion into a single Common Operational Picture (COP) u
 
 Combine partial, noisy observations from low-cost UAS and ground sensors, fused across distributed nodes with imperfect clocks, uncertain positions and lossy communication, into one picture that gives the **number of hostile targets** with a **stable identity, position and velocity** for each, and never flags friendlies as threats.
 
-> Status: **planning phase.** Folder structure and documents are in place; nothing is implemented yet.
+> Status: **planning phase, first standalone code in.** Weather and sensor quality (`sensors/`), the friend/foe estimator with investigation trigger (`friend_foe/`) and the JSON codec (`common/codec.py`) exist and are tested. Simulation, seeder, tracker and fusion are not started.
+
+Run the tests (Python 3.11+): `python -m pip install pytest`, then `python -m pytest` from the repo root.
 
 ## Documents
 
@@ -73,7 +75,9 @@ Phased, starting from the optimistic case. Status legend: ⬜ not started · �
 | ⬜ | Per-node local trackers sharing compact tracks |
 | ⬜ | Track merge with covariance intersection |
 | ⬜ | Drone Behaviour module: friendly pattern + hostile presumption |
-| ⬜ | Weather effects in sensor models |
+| 🟨 | Weather effects in sensor models (weather state, per-sensor quality, sensor hierarchy done and tested; not yet applied to simulated observations) |
+| 🟨 | Suspicious class and trigger; weather-based standoff distance for identification (done and tested on synthetic tracks; not yet connected to the real tracker) |
+| ⬜ | Closest-drone investigation of suspicious tracks (drone behaviour) |
 
 ### Phase 3 - Prediction
 
@@ -132,3 +136,6 @@ Detailed split and per-phase tasks: [docs/team-plan.md](docs/team-plan.md).
 | 2026-10-16 | Revised: classical tracker is the core and AI only does prediction; hybrid fusion proposed; channel emulator in the simulation from the start; modules in one codebase instead of separate microservices; weather folded into sensor models; friendlies identified by broadcast first and behaviour second; metrics defined up front |
 | 2026-10-16 | Repo split into per-module folders; concept and system design moved to separate docs |
 | 2026-10-16 | Work split into 3 roles (A platform/world, B tracking/fusion, C sensing/evaluation) with agreed interfaces in `common/` |
+| 2026-10-17 | Tracks get a `suspicious` class. Suspicious tracks are investigated by sending the closest suitable drone. The drone-behaviour owner picks and flies the drone; the weather/estimator owner provides the trigger and the weather-based standoff distance (`required_standoff`). Messages `InvestigationRequest` and `InvestigationStatus` added to the draft schemas |
+| 2026-10-17 | First standalone code: `sensors/weather.py` and `sensors/quality.py`, `friend_foe/estimator.py` and `friend_foe/investigation.py`, `common/codec.py` (`encode`/`decode` plus message size log). Placeholder numbers throughout, to be tuned |
+| 2026-10-17 | JSON (JSON Lines) for messages while building the pipeline. `encode`/`decode` pair at the channel boundary so a compact binary format (Protobuf/CBOR) can replace it later without touching modules |
