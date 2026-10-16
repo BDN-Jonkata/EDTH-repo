@@ -51,22 +51,22 @@ Phased, starting from the optimistic case. Status legend: ⬜ not started · �
 |--------|------|
 | 🟨 | Folder structure and docs (concept, system design) |
 | ⬜ | Decide fusion topology (hybrid proposed) and module boundaries |
-| ⬜ | Define shared message schema (observation, track, uncertainty, timestamp, source ID) |
-| ⬜ | Choose stack, simulation framework and message bus |
-| ⬜ | Define scoring metrics and ground-truth format |
-| ⬜ | Set up environment, tooling, CI |
+| 🟨 | Define shared message schema (observation, track, uncertainty, timestamp, source ID): header, beacon, track, investigation and drone-command messages drafted in `docs/data-formats.md`; observation and final COP track not frozen |
+| 🟨 | Choose stack, simulation framework and message bus: Python, JSON Lines and PostgreSQL chosen; bus and the real simulation framework still open (a JavaScript mock simulation runs in the viewer) |
+| 🟨 | Define scoring metrics and ground-truth format: `truth.json` format and metrics defined; scoring module not started |
+| 🟨 | Set up environment, tooling, CI: Python environment, pytest and unittest suites, node tests, `.env` and PostgreSQL done; no CI and no formatter yet |
 
 ### Phase 1 - Optimistic pipeline (clean data)
 
 | Status | Task |
 |--------|------|
-| ⬜ | Seeder: friendlies, ground sensors, 2 hostiles, terrain |
-| ⬜ | Simulation: 2D map, height/terrain display, scripted crossing |
-| ⬜ | Network channel emulator (pass-through) |
-| ⬜ | Sensor models: camera (bearing), acoustic, RF, radar (ideal) |
-| ⬜ | Baseline tracker: KF + GNN association + track management |
+| 🟨 | Seeder: sensor and platform catalog, PostgreSQL storage, scenario generator (friendly patrols, ground sensors, hostile paths, planned close crossing, four presets, tuning and test seeds) done; terrain is not in the generator |
+| 🟨 | Simulation: the viewer runs a JavaScript mock simulation (2D map with terrain/height display, crossing, commanded drone motion); the real simulation module is not started |
+| 🟨 | Network channel emulator: the mock simulation has a lossy channel; the real emulator is not started |
+| 🟨 | Sensor models: the mock simulation enforces sensor limits and native outputs from the catalog; the `sensors/` observation models are not started (weather and quality are done) |
+| 🟨 | Baseline tracker: only a mock tracker in the viewer simulation (an example of the shape, not a reference tracker); the real tracker is not started |
 | 🟨 | Friend/Foe: friendly ID/position beacon matching (estimator done and tested on synthetic data and on seeder-generated scenarios through a test adapter; not yet fed by the real tracker) |
-| ⬜ | Scoring harness implementing the metrics |
+| 🟨 | Scoring harness implementing the metrics: the viewer shows metrics; the scoring module is not started |
 
 **Exit criteria:** correct hostile count, no ID swaps through the crossing, zero friendlies flagged, on clean data.
 
@@ -96,7 +96,7 @@ Phased, starting from the optimistic case. Status legend: ⬜ not started · �
 | ⬜ | Clock drift and time-sync handling |
 | ⬜ | Position uncertainty (GNSS-denied) |
 | ⬜ | Missing data, delay, out-of-order messages |
-| ⬜ | Message-loss sweep (0 → high %) with degradation curves |
+| 🟨 | Message-loss sweep (0 → high %) with degradation curves: done for the friend/foe estimator (`python -m friend_foe.sweep`, results in `friend_foe/friend_foe.md`); not for the whole pipeline |
 
 ### Phase 5 - Evaluation and delivery
 
@@ -148,4 +148,5 @@ Detailed split and per-phase tasks: [docs/team-plan.md](docs/team-plan.md).
 | 2026-10-17 | Weather standoff now built on the seeder catalog (`sim.range_m`, `sim.min_range_m`, `weather_effects`) instead of a separate table; the request lists a standoff per catalog module (`standoff_by_module`) so the drone-behaviour side picks the modules of the drone it chooses. The one missing number, how much of a module's range is good enough to identify, is a placeholder (`IDENT_FRACTION`) until the catalog gets a field for it. Track and investigation message formats added to `docs/data-formats.md` |
 | 2026-10-17 | Agreed with the seeder/simulation owner: standard header `msg_id`, `source_id`, `t_sent`, `seq`, `schema_version` plus a top-level `type`; `seq` starts at 1 and counts every message a node sends (`Sequencer`); optional float rounding at encode (`precision`) so message sizes are realistic; corruption is treated as loss by the channel emulator, no CRC; delivery time and destination live in an envelope around the bytes |
 | 2026-10-17 | Drone commands go over the same lossy channel as everything else with ack and retry (every 1.5 s, at most 5 tries, assumed); `goto` and `hold` can set a heading or face a target so a forward camera points at the object; flight limits per UAS are in the catalog and marked assumed; `drone_state` doubles as `investigation_status` (mapping in `docs/data-formats.md`) |
+| 2026-10-17 | Friend/foe estimator weighs silence by the measured beacon delivery rate, and decays per second instead of per update. A loss and weather sweep (`friend_foe/sweep.py`, `evaluate.py`) on seeder-generated scenarios with bursty loss, delay, clock offset and pose error showed it holds up to about 70 % beacon loss and degrades at 90 %, with a hostile never called friendly; a silent intruder is flagged later as loss rises (4 s at 0 %, about 10 s at 70 %). Tuned on the tuning seeds, reported on the test seeds |
 | 2026-10-17 | JSON (JSON Lines) for messages while building the pipeline. `encode`/`decode` pair at the channel boundary so a compact binary format (Protobuf/CBOR) can replace it later without touching modules |
