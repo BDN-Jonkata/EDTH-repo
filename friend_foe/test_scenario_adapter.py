@@ -69,3 +69,66 @@ def test_adapter_is_deterministic_for_a_seed():
     a = [(t, [x.position for x in tr]) for t, tr, _ in frames_from_scenario(scenario, seed=1)]
     b = [(t, [x.position for x in tr]) for t, tr, _ in frames_from_scenario(scenario, seed=1)]
     assert a == b
+
+
+# ---- degradations: each acts only when `enabled`, and the scenario's numbers are honoured
+
+def beacons_of(scenario, **kw):
+    return [b for _, _, bs in frames_from_scenario(scenario, **kw) for b in bs]
+
+
+def test_network_loss_is_ignored_when_the_network_degradation_is_disabled():
+    scenario = make_scenario()
+    scenario["degradations"]["network"].update({"enabled": False, "loss": 0.9, "latency_ms": [0, 0]})
+    total = len(beacons_of(scenario))
+    scenario["degradations"]["network"].update({"enabled": True, "loss": 0.0})
+    assert total == len(beacons_of(scenario))
+
+
+def test_full_loss_delivers_no_beacons_and_partial_loss_some():
+    scenario = make_scenario()
+    net = scenario["degradations"]["network"]
+    net.update({"enabled": True, "loss": 0.0, "latency_ms": [0, 0]})
+    everything = len(beacons_of(scenario))
+    net["loss"] = 1.0
+    assert len(beacons_of(scenario)) == 0
+    net["loss"] = 0.5
+    assert 0.35 * everything < len(beacons_of(scenario)) < 0.65 * everything
+
+
+def test_bursty_loss_has_the_configured_average_but_longer_runs():
+    import random
+    from friend_foe.scenario_adapter import _Loss
+
+    def run_lengths(burst):
+        loss, n = _Loss(random.Random(4), 0.3, burst), 20000
+        drops = [loss.drops() for _ in range(n)]
+        runs, current = [], 0
+        for d in drops:
+            if d:
+                current += 1
+            elif current:
+                runs.append(current)
+                current = 0
+        return sum(drops) / n, sum(runs) / len(runs)
+
+    plain_rate, plain_run = run_lengths(False)
+    burst_rate, burst_run = run_lengths(True)
+    assert abs(plain_rate - 0.3) < 0.02 and abs(burst_rate - 0.3) < 0.03
+    assert burst_run > 2 * plain_run
+
+
+def test_latency_delays_beacons_and_clock_offset_stamps_them():
+    scenario = make_scenario()
+    scenario["degradations"]["network"].update({"enabled": True, "loss": 0.0, "latency_ms": [400, 400]})
+    scenario["degradations"]["clock"].update({"enabled": True, "offset_ms": [100, 100], "drift_ppm": 0})
+    ages = [t - b.t for t, _, bs in frames_from_scenario(scenario) for b in bs]
+    assert ages and all(abs(abs(a - 0.4) - 0.1) < 0.51 for a in ages)   # delay 0.4 s +/- 0.1 s offset, plus frame step
+    assert max(ages) > 0.4 and min(ages) < 0.6
+
+
+def test_pose_error_widens_the_honest_sigma():
+    scenario = make_scenario()
+    scenario["degradations"]["pose"].update({"enabled": True, "position_err_m": 12})
+    _, tracks, beacons = next(frames_from_scenario(scenario))
+    assert all(tr.pos_sigma > 12 for tr in tracks) and all(b.pos_sigma > 12 for b in beacons)
