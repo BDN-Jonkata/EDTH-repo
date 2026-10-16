@@ -4,7 +4,7 @@ Distributed multi-sensor fusion into a single Common Operational Picture (COP) u
 
 Combine partial, noisy observations from low-cost UAS and ground sensors, fused across distributed nodes with imperfect clocks, uncertain positions and lossy communication, into one picture that gives the **number of hostile targets** with a **stable identity, position and velocity** for each, and never flags friendlies as threats.
 
-> Status: **planning phase, first code in.** A first simulation viewer with a built-in mock simulation runs from [ui/viewer](ui/viewer/) (see [ui/ui.md](ui/ui.md)), and the seeder catalog exists in [seeder/](seeder/). Weather and sensor quality (`sensors/`), the friend/foe estimator with investigation trigger (`friend_foe/`) and the JSON codec (`common/codec.py`) exist and are tested. The real simulation, tracker and fusion are not implemented yet.
+> Status: **planning phase, first code in.** A first simulation viewer with a built-in mock simulation runs from [ui/viewer](ui/viewer/) (see [ui/ui.md](ui/ui.md)), and the seeder catalog exists in [seeder/](seeder/). Weather and sensor quality (`sensors/`), the friend/foe estimator with investigation trigger and drone-status mapping (`friend_foe/`) and the JSON codec (`common/codec.py`) exist and are tested; the mock simulation accepts drone commands. The real simulation, tracker and fusion are not implemented yet.
 
 Run the tests (Python 3.11+): `python -m pip install pytest`, then `python -m pytest` from the repo root.
 
@@ -65,7 +65,7 @@ Phased, starting from the optimistic case. Status legend: ⬜ not started · �
 | ⬜ | Network channel emulator (pass-through) |
 | ⬜ | Sensor models: camera (bearing), acoustic, RF, radar (ideal) |
 | ⬜ | Baseline tracker: KF + GNN association + track management |
-| ⬜ | Friend/Foe: friendly ID/position beacon matching |
+| 🟨 | Friend/Foe: friendly ID/position beacon matching (estimator done and tested on synthetic data and on seeder-generated scenarios through a test adapter; not yet fed by the real tracker) |
 | ⬜ | Scoring harness implementing the metrics |
 
 **Exit criteria:** correct hostile count, no ID swaps through the crossing, zero friendlies flagged, on clean data.
@@ -77,9 +77,9 @@ Phased, starting from the optimistic case. Status legend: ⬜ not started · �
 | ⬜ | Per-node local trackers sharing compact tracks |
 | ⬜ | Track merge with covariance intersection |
 | ⬜ | Drone Behaviour module: friendly pattern + hostile presumption |
-| 🟨 | Weather effects in sensor models (weather state, per-sensor quality, sensor hierarchy done and tested; not yet applied to simulated observations) |
-| 🟨 | Suspicious class and trigger; weather-based standoff distance for identification (done and tested on synthetic tracks; not yet connected to the real tracker) |
-| ⬜ | Closest-drone investigation of suspicious tracks (drone behaviour) |
+| 🟨 | Weather effects in sensor models (conditions from `scenario.json`, per-module quality and sensor hierarchy built on the catalog's `weather_effects`, done and tested; not yet applied to simulated observations) |
+| 🟨 | Suspicious class and trigger; weather-based standoff distance per catalog module (done and tested; the trigger also reads drone acks through `DroneStatusMapper`; not yet connected to the real tracker) |
+| 🟨 | Closest-drone investigation of suspicious tracks: commanded drone motion with ack and retry exists in the mock simulation (`goto`, `hold`, `return_to_patrol`, flight limits); the drone-behaviour module that picks the drone is not started |
 
 ### Phase 3 - Prediction
 
@@ -145,4 +145,7 @@ Detailed split and per-phase tasks: [docs/team-plan.md](docs/team-plan.md).
 | 2026-10-17 | Scenario generator in the seeder: one config + seed gives a scenario and a separate ground-truth file; four presets (easy, medium, hard, challenge); tuning and test seed sets; viewer runs generated scenarios through serve.py |
 | 2026-10-17 | Tracks get a `suspicious` class. Suspicious tracks are investigated by sending the closest suitable drone. The drone-behaviour owner picks and flies the drone; the weather/estimator owner provides the trigger and the weather-based standoff distance (`required_standoff`). Messages `InvestigationRequest` and `InvestigationStatus` added to the draft schemas |
 | 2026-10-17 | First standalone code: `sensors/weather.py` and `sensors/quality.py`, `friend_foe/estimator.py` and `friend_foe/investigation.py`, `common/codec.py` (`encode`/`decode` plus message size log). Placeholder numbers throughout, to be tuned |
+| 2026-10-17 | Weather standoff now built on the seeder catalog (`sim.range_m`, `sim.min_range_m`, `weather_effects`) instead of a separate table; the request lists a standoff per catalog module (`standoff_by_module`) so the drone-behaviour side picks the modules of the drone it chooses. The one missing number, how much of a module's range is good enough to identify, is a placeholder (`IDENT_FRACTION`) until the catalog gets a field for it. Track and investigation message formats added to `docs/data-formats.md` |
+| 2026-10-17 | Agreed with the seeder/simulation owner: standard header `msg_id`, `source_id`, `t_sent`, `seq`, `schema_version` plus a top-level `type`; `seq` starts at 1 and counts every message a node sends (`Sequencer`); optional float rounding at encode (`precision`) so message sizes are realistic; corruption is treated as loss by the channel emulator, no CRC; delivery time and destination live in an envelope around the bytes |
+| 2026-10-17 | Drone commands go over the same lossy channel as everything else with ack and retry (every 1.5 s, at most 5 tries, assumed); `goto` and `hold` can set a heading or face a target so a forward camera points at the object; flight limits per UAS are in the catalog and marked assumed; `drone_state` doubles as `investigation_status` (mapping in `docs/data-formats.md`) |
 | 2026-10-17 | JSON (JSON Lines) for messages while building the pipeline. `encode`/`decode` pair at the channel boundary so a compact binary format (Protobuf/CBOR) can replace it later without touching modules |
