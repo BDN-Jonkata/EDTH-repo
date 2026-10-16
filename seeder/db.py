@@ -71,3 +71,16 @@ def save_simulation(conn, name, seed, params, scenario, result):
         (name, seed, Jsonb(params), Jsonb(scenario), Jsonb(result)),
     ).fetchone()
     return row[0]
+
+
+def save_scenario(conn, scenario, truth):
+    """Store a generated scenario (replacing one with the same id). Returns the row id."""
+    row = conn.execute(
+        """INSERT INTO scenarios (scenario_id, name, preset, seed, config, scenario, truth)
+           VALUES (%s, %s, %s, %s, %s, %s, %s)
+           ON CONFLICT (scenario_id) DO UPDATE SET name = EXCLUDED.name, preset = EXCLUDED.preset, seed = EXCLUDED.seed,
+             config = EXCLUDED.config, scenario = EXCLUDED.scenario, truth = EXCLUDED.truth, created_at = now()
+           RETURNING id""",
+        (scenario["id"], scenario["name"], scenario["preset"], scenario["seed"], Jsonb(scenario["config"]), Jsonb(scenario), Jsonb(truth)),
+    ).fetchone()
+    return row[0]

@@ -2,7 +2,7 @@
 
 Back to [README](../README.md) · See also [Concept](concept.md), [System design](system-design.md), [seeder module](../seeder/seeder.md)
 
-> Status: **proposed**. The catalog (platforms and sensor modules) exists; the scenario generator that reads this config is not written yet.
+> Status: **implemented** in [seeder/scenario.py](../seeder/scenario.py) (`python seeder/generate.py`). Presets live in [scenarios/](../scenarios/). Not yet generated: moving ground units and non-drone clutter (birds, vehicles) as objects; jamming zones and bandwidth limits are accepted in the config but not simulated yet.
 
 Every scenario is fully defined by **one JSON config plus a seed**, so any run can be reproduced. The seeder turns the config into a scenario (nodes, targets, environment, degradations) and a separate ground-truth file.
 
