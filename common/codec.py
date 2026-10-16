@@ -11,7 +11,7 @@ Every message has a top-level `type` and a `header` with `msg_id`,
 
 import json
 from collections import defaultdict
-from typing import Dict
+from typing import Any, Dict, Optional
 
 SCHEMA_VERSION = 1
 HEADER_FIELDS = ("msg_id", "source_id", "t_sent", "seq", "schema_version")
@@ -31,7 +31,39 @@ def make_header(source_id: str, t_sent: float, seq: int) -> dict:
     }
 
 
-def encode(msg: dict) -> bytes:
+class Sequencer:
+    """Headers for one source. `seq` counts every message that source sends, whatever
+    its type, starting at 1, so `msg_id` is unique per source (first one: `C2-1`)."""
+
+    def __init__(self, source_id: str):
+        self.source_id = source_id
+        self._next = 1
+
+    def header(self, t_sent: float) -> dict:
+        header = make_header(self.source_id, t_sent, self._next)
+        self._next += 1
+        return header
+
+
+def _round_sig(value: Any, digits: int) -> Any:
+    """Round every float to `digits` significant digits; leave everything else alone."""
+    if isinstance(value, float):
+        return float(f"{value:.{digits}g}")
+    if isinstance(value, dict):
+        return {k: _round_sig(v, digits) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_round_sig(v, digits) for v in value]
+    return value
+
+
+def encode(msg: dict, precision: Optional[int] = None) -> bytes:
+    """JSON bytes. `precision` = significant digits for floats (None keeps full precision).
+
+    json writes 15-17 digits per float, which inflates message sizes far beyond what
+    a real link would carry. Significant digits (not decimal places) keep small values
+    such as covariances intact: 6 digits gives 123.457 m and 0.000412346."""
+    if precision is not None:
+        msg = _round_sig(msg, precision)
     return json.dumps(msg, separators=(",", ":")).encode("utf-8")
 
 
@@ -56,7 +88,8 @@ def decode(data: bytes) -> dict:
 class MessageSizeLog:
     """Counts messages and bytes per message type, to report bandwidth."""
 
-    def __init__(self) -> None:
+    def __init__(self, precision: Optional[int] = None) -> None:
+        self.precision = precision
         self.count: Dict[str, int] = defaultdict(int)
         self.bytes: Dict[str, int] = defaultdict(int)
 
@@ -65,7 +98,7 @@ class MessageSizeLog:
         self.bytes[msg["type"]] += len(data)
 
     def encode(self, msg: dict) -> bytes:
-        data = encode(msg)
+        data = encode(msg, self.precision)
         self.record(msg, data)
         return data
 
