@@ -24,8 +24,8 @@ Run the tests (Python 3.11+): `python -m pip install pytest`, then `python -m py
 |--------|---------|
 | [docs/](docs/) | Concept and system design |
 | [common/](common/) | Shared message schemas, time/frame helpers, bus interface |
-| [scenarios/](scenarios/) | Scenario definitions |
-| [seeder/](seeder/) | Platform/sensor catalog (PostgreSQL) and scenario components |
+| [scenarios/](scenarios/) | Scenario presets (configs) |
+| [seeder/](seeder/) | Platform/sensor catalog (PostgreSQL) and the scenario generator |
 | [simulation/](simulation/) | 2D world, ground truth, network channel emulator |
 | [sensors/](sensors/) | Camera, acoustic, RF, radar models incl. weather effects |
 | [tracker/](tracker/) | Per-node local multi-target tracker |
@@ -145,3 +145,4 @@ Detailed split and per-phase tasks: [docs/team-plan.md](docs/team-plan.md).
 | 2026-10-17 | Adopted team notes: scenarios are one JSON config + seed with a separate ground-truth file and separate tuning/test seeds; per-degradation switches; presets; radar resolution cell; sensor set switchable per scenario; catalog numbers moved to the more conservative values |
 | 2026-10-17 | Viewer runs the seed with a platform chosen per node from the catalog; weather now includes night; map fills its panel |
 | 2026-10-17 | Sensor limits enforced (range window, field of view, pointing, falling detection probability, rate, latency); sensors report native data only (cameras bearing+elevation, no range) and the tracker consumes it with EKF updates |
+| 2026-10-17 | Scenario generator in the seeder: one config + seed gives a scenario and a separate ground-truth file; four presets (easy, medium, hard, challenge); tuning and test seed sets; viewer runs generated scenarios through serve.py |

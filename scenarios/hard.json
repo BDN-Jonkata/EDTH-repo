@@ -1,0 +1,54 @@
+{
+  "name": "hard",
+  "preset": "hard",
+  "seed": 3,
+  "seed_set": "tuning",
+  "description": "Five hostiles with close crossings and hovering, fog, 40 % bursty loss, clock drift, pose error and a node dropout.",
+  "targets": {
+    "count": 5,
+    "motion": "mixed",
+    "hover_prob": 0.3,
+    "sudden_turn_prob": 0.3,
+    "speed_mps": [
+      6,
+      20
+    ]
+  },
+  "environment": {
+    "weather": "fog",
+    "clutter": {
+      "false_alarms_per_min": 6
+    }
+  },
+  "degradations": {
+    "network": {
+      "enabled": true,
+      "loss": 0.4,
+      "burst": true,
+      "latency_ms": [
+        50,
+        400
+      ],
+      "out_of_order": true
+    },
+    "clock": {
+      "enabled": true,
+      "offset_ms": [
+        0,
+        200
+      ],
+      "drift_ppm": 50
+    },
+    "pose": {
+      "enabled": true,
+      "position_err_m": 5,
+      "heading_err_deg": 3
+    },
+    "dropout": [
+      {
+        "node": "F3",
+        "t": 60
+      }
+    ]
+  }
+}

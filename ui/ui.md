@@ -20,11 +20,13 @@ python serve.py
 
 `serve.py` is a static server that turns browser caching off, so a refresh always shows the latest files (plain `python -m http.server` can serve stale files). Opening `index.html` directly also works. Optional URL parameters: `?t=49.5` opens paused at that time, `?tab=deg` opens the degradation chart, `?weather=night` and `?seed=7` preselect those settings.
 
+Scenarios: the **Preset** picker (easy, medium, hard, challenge) loads a scenario made by the seeder, and its weather, platforms and degradations become the starting settings. With `python serve.py`, the **Seed** field makes a new scenario for that preset (new hostile paths and patrols) when you press Apply & restart, through `/api/scenario?preset=hard&seed=7`. Opened as a file or with plain `http.server`, only the default seed of each preset is available (`scenarios.js`, made by `python seeder/export_scenarios.py`).
+
 What the mock does:
 
 | Part | Mock behaviour |
 |------|----------------|
-| Scenario | 5 friendly drones on circular patrols, 2 ground sensors, C2 node, 2 hostiles that cross at about 13 m separation at t = 51 s |
+| Scenario | Comes from the seeder: friendly patrols, ground sensors, a C2 node, hostile paths (straight, waypoints, loiter, hover, sharp turns) and a planned close crossing. A hostile's signature scales how well each sensor type sees it; silent hostiles are invisible to RF; nodes can drop out mid-run in realistic mode |
 | Models per node | Each of the 7 nodes gets a platform from the catalog, chosen in the left panel ("Models per node"). Its sensor modules, ranges, noise and weather effects come from `catalog.js`. Press Apply & restart to run the seed with your choice |
 | Sensors | Each module enforces its catalog limits (range window, field of view, pointing, detection probability that falls with distance, rate, latency) and reports only its native data: cameras give bearing + elevation (no range), a microphone array bearing + level, a single microphone only loudness, RF bearing + signal strength, radar range + azimuth + radial speed. Weather (clear, fog, rain, wind, night) scales range, noise and detection probability per module. Radar merges targets inside its 15 m x 3 deg resolution cell |
 | Network | Per-message loss, delay and per-node clock drift in Realistic mode. Fusion is centralised at C2 (the hybrid design is not modelled yet) |

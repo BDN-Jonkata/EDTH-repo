@@ -1,0 +1,13 @@
+{
+  "name": "easy",
+  "preset": "easy",
+  "seed": 1,
+  "seed_set": "tuning",
+  "description": "One hostile, five drones, two ground sensors, clean data.",
+  "targets": {
+    "count": 1,
+    "crossing": {
+      "enabled": false
+    }
+  }
+}
