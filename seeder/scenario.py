@@ -429,8 +429,8 @@ def build_truth(scenario, dt=0.1):
         for k in range(n + 1):
             t = k * dt
             s = friendly_state(f, t)
-            samples.append([round(t, 3), round(s["x"], 2), round(s["y"], 2), f["altitude_m"], round(s["vx"], 2), round(s["vy"], 2)])
-        objects.append({"id": f["id"], "kind": "friendly", "platform": f["platform"], "samples": samples})
+            samples.append([round(t, 3), round(s["x"], 1), round(s["y"], 1), round(s["vx"], 2), round(s["vy"], 2)])
+        objects.append({"id": f["id"], "kind": "friendly", "platform": f["platform"], "altitude_m": f["altitude_m"], "samples": samples})
     hostile_samples = {}
     for tg in scenario["targets"]:
         samples = []
@@ -438,9 +438,9 @@ def build_truth(scenario, dt=0.1):
             t = k * dt
             s = target_state(tg, t)
             if s:
-                samples.append([round(t, 3), round(s["x"], 2), round(s["y"], 2), tg["altitude_m"], round(s["vx"], 2), round(s["vy"], 2)])
+                samples.append([round(t, 3), round(s["x"], 1), round(s["y"], 1), round(s["vx"], 2), round(s["vy"], 2)])
         hostile_samples[tg["id"]] = {row[0]: row for row in samples}
-        objects.append({"id": tg["id"], "kind": "hostile", "motion": tg["motion"], "samples": samples})
+        objects.append({"id": tg["id"], "kind": "hostile", "motion": tg["motion"], "altitude_m": tg["altitude_m"], "samples": samples})
 
     events = []
     for tg in scenario["targets"]:
@@ -468,5 +468,5 @@ def build_truth(scenario, dt=0.1):
                 events.append({"type": "crossing", "a": ids[i], "b": ids[j], "t": t, "sep_m": round(sep, 1),
                                "x": round((a[t][1] + b[t][1]) / 2, 1), "y": round((a[t][2] + b[t][2]) / 2, 1)})
     events.sort(key=lambda e: e["t"])
-    return {"schema": "edth.truth/1", "scenario_id": scenario["id"], "seed": scenario["seed"], "duration_s": scenario["duration_s"],
-            "dt_s": dt, "columns": ["t", "x", "y", "z", "vx", "vy"], "objects": objects, "events": events}
+    return {"schema": "edth.truth/2", "scenario_id": scenario["id"], "seed": scenario["seed"], "duration_s": scenario["duration_s"],
+            "dt_s": dt, "columns": ["t", "x", "y", "vx", "vy"], "objects": objects, "events": events}
