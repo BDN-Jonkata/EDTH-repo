@@ -12,6 +12,7 @@ Combine partial, noisy observations from low-cost UAS and ground sensors, fused 
 |----------|----------|
 | [docs/concept.md](docs/concept.md) | Problem statement, scenario, success criteria, our approach, components, metrics |
 | [docs/system-design.md](docs/system-design.md) | Architecture, module responsibilities, conventions (time, coordinates, uncertainty), message schemas, module design, repo layout, open decisions |
+| [docs/team-plan.md](docs/team-plan.md) | Work split between 3 people, interfaces between them, per-phase tasks, working agreements |
 
 ## Repository layout
 
@@ -114,15 +115,13 @@ Phased, starting from the optimistic case. Status legend: ⬜ not started · �
 
 ## Team and ownership
 
-| Area | Owner |
-|------|-------|
-| Seeder | TBD |
-| Simulation + channel emulator | TBD |
-| Tracker / fusion | TBD |
-| Friend/Foe + Drone Behaviour | TBD |
-| Sensor models + weather | TBD |
-| Predictor | TBD |
-| Scoring / metrics | TBD |
+Detailed split and per-phase tasks: [docs/team-plan.md](docs/team-plan.md).
+
+| Person | Area | Name |
+|--------|------|------|
+| A | Platform and world: `common`, `scenarios`, `seeder`, `simulation` (incl. channel emulator) | TBD |
+| B | Tracking and fusion: `tracker`, `fusion`, `predictor` | TBD |
+| C | Sensing, classification, evaluation: `sensors`, `friend_foe`, `scoring`, `ui` | TBD |
 
 ## Decisions log
 
@@ -132,3 +131,4 @@ Phased, starting from the optimistic case. Status legend: ⬜ not started · �
 | 2026-10-16 | Initial layout: Seeder, Simulation, Drone Behaviour, Meteorologic, Estimator, Degradation/time-sync (later) |
 | 2026-10-16 | Revised: classical tracker is the core and AI only does prediction; hybrid fusion proposed; channel emulator in the simulation from the start; modules in one codebase instead of separate microservices; weather folded into sensor models; friendlies identified by broadcast first and behaviour second; metrics defined up front |
 | 2026-10-16 | Repo split into per-module folders; concept and system design moved to separate docs |
+| 2026-10-16 | Work split into 3 roles (A platform/world, B tracking/fusion, C sensing/evaluation) with agreed interfaces in `common/` |
