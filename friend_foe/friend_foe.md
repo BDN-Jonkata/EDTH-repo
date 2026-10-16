@@ -10,11 +10,12 @@ Status: estimator and investigation trigger done and tested on synthetic data an
 |------|----------|
 | [estimator.py](estimator.py) | `FriendFoeEstimator`: per-track evidence, beacon matching, class friendly / hostile / suspicious / unknown with probability and hysteresis |
 | [investigation.py](investigation.py) | `InvestigationTrigger`: raises `investigation_request` for tracks that stay suspicious, with the weather-based standoff per catalog module, cooldown and status feedback |
+| [drone_status.py](drone_status.py) | `DroneStatusMapper`: turns the mock simulation's `drone_state` messages (and commands reported lost) into `investigation_status`, using the mapping in [data-formats.md](../docs/data-formats.md); feed the result to `InvestigationTrigger.on_status` |
 | [scenario_adapter.py](scenario_adapter.py) | Turns a `scenario.json` into estimator input frames: **test stand-in** for the tracker and beacon source (see below) |
 | [jsonl_io.py](jsonl_io.py) | Reads JSON Lines files of `local_track` and `friendly_beacon` messages into frames |
 | [make_synthetic.py](make_synthetic.py) | Generates [data/local_tracks.jsonl](data/local_tracks.jsonl) |
 | [demo.py](demo.py) | `python -m friend_foe.demo [file.jsonl or scenario.json] [weather]` |
-| [test_estimator.py](test_estimator.py), [test_scenario_adapter.py](test_scenario_adapter.py) | Tests |
+| [test_estimator.py](test_estimator.py), [test_scenario_adapter.py](test_scenario_adapter.py), [test_drone_status.py](test_drone_status.py) | Tests |
 
 Message formats are in [data-formats.md](../docs/data-formats.md).
 
