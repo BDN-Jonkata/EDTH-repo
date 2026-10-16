@@ -15,7 +15,7 @@ Read before working:
 4. Keep files focused. If a file mixes unrelated jobs, split it.
 5. When you change a function that is already too long, split it as part of the change. Do not leave it longer than you found it. Do not refactor unrelated code.
 
-Known long functions to split when touched: `run` in `ui/viewer/sim.js`, `renderMap` and `trackSvg` in `ui/viewer/app.js`, `validate_config` and `build_truth` in `seeder/scenario.py`.
+The simulation in `ui/viewer/sim.js` follows this: a run is a context object passed through one small function per stage (sense, send, deliver, track, lifecycle, prune, snapshot, score, crossing). Add new behaviour as another small stage function, not inside an existing one.
 
 ## Data and safety rules
 

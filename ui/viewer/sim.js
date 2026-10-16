@@ -160,6 +160,9 @@
     P[2] += q * d3 / 2; P[8] += q * d3 / 2; P[7] += q * d3 / 2; P[13] += q * d3 / 2;
     P[10] += q * d2; P[15] += q * d2;
   }
+  function symmetrize(P) { // keep the covariance symmetric despite rounding
+    for (let i = 0; i < 4; i++) for (let j = i + 1; j < 4; j++) { const m = (P[i * 4 + j] + P[j * 4 + i]) / 2; P[i * 4 + j] = P[j * 4 + i] = m; }
+  }
   function innov(tr, z) {
     const P = tr.P;
     const a = P[0] + z.R[0], b = P[1] + z.R[1], c = P[5] + z.R[2];
@@ -179,7 +182,7 @@
     for (let i = 0; i < 4; i++) {
       for (let j = 0; j < 4; j++) P[i * 4 + j] -= K[i][0] * r0[j] + K[i][1] * r1[j];
     }
-    for (let i = 0; i < 4; i++) for (let j = i + 1; j < 4; j++) { const m = (P[i * 4 + j] + P[j * 4 + i]) / 2; P[i * 4 + j] = P[j * 4 + i] = m; }
+    symmetrize(P);
   }
 
   // Native measurements are scalars: bearing (rad), range (m) and radial speed (m/s).
@@ -210,7 +213,7 @@
     const K = PH.map((v) => v / S);
     for (let i = 0; i < 4; i++) tr.s[i] += K[i] * mdl.res;
     for (let i = 0; i < 4; i++) for (let j = 0; j < 4; j++) P[i * 4 + j] -= K[i] * PH[j];
-    for (let i = 0; i < 4; i++) for (let j = i + 1; j < 4; j++) { const m = (P[i * 4 + j] + P[j * 4 + i]) / 2; P[i * 4 + j] = P[j * 4 + i] = m; }
+    symmetrize(P);
   }
   // which scalars gate a record, and how strict the gate is
   const GATE_PARTS = { bearing: ['b'], range: ['r'], rangeaz: ['r', 'b'] };
@@ -260,417 +263,519 @@
   }
 
   // --------------------------------------------------------------------- run
+  // A run keeps everything in one context object `c` (scenario, random streams, message queue, tracker
+  // state, counters). Each frame passes it through small stages:
+  // sense -> send -> deliver -> track -> lifecycle -> prune -> snapshot -> score -> crossing.
   function run(P, opts) {
-    opts = opts || {};
-    const lite = !!opts.lite;
-    const rn = rng(P.seed * 7919 + 13);   // sensor noise
-    const rnet = rng(P.seed * 104729 + 7); // network
-    const rcl = rng(P.seed * 15485863 + 3); // clutter
+    const c = newContext(P);
+    c.lite = !!(opts && opts.lite);
+    startFriendTracks(c);
+    for (let k = 0; k <= c.NF; k++) stepFrame(c, k);
+    return finish(c);
+  }
+
+  function newContext(P) {
     const real = P.mode === 'realistic';
-    const loss = real ? P.loss / 100 : 0;
-    const delay = real ? P.delayMs / 1000 : 0;
-    const drift = real ? P.driftMs / 1000 : 0;
     const world = prepare(P.scenario || DEFAULT_SCENARIO);
-    const T_END = world.duration, NF = Math.round(T_END / DT), EVAL = world.eval; // this run's own length and scoring window
     const assign = Object.assign({}, world.assign, P.assign || {});
-    const sensors = buildSensors(assign, P.weather, world.sensorKinds);
-    const falseAlarms = ((world.env.clutter && world.env.clutter.false_alarms_per_min) || 0) / 60;
-    const radarCount = sensors.filter((q) => q.kind === 'RAD').length || 1;
-    sensors.forEach((q) => { if (q.kind === 'RAD') q.clutter = Math.max(q.clutter, falseAlarms / radarCount); });
-    const hostileById = {};
-    world.hostiles.forEach((h) => { hostileById[h.id] = h; });
-    const dropT = {}; // nodes that die mid-run (realistic mode only)
-    if (real) (world.deg.dropout || []).forEach((d) => { dropT[d.node] = d.t; });
-    const alive = (n, t) => dropT[n] === undefined || t < dropT[n];
-    const nodes = world.ground.map((g) => g.id).concat(world.friendlies.map((f) => f.id));
-    const driftScale = {};
-    nodes.forEach((n) => { driftScale[n] = rn() * 2 - 1; });
-    const nodePos = (id, t) => {
-      const g = world.ground.find((x) => x.id === id);
-      if (g) return { x: g.x, y: g.y, vx: 0, vy: 0, heading: g.heading };
-      const f = world.friendlies.find((x) => x.id === id);
-      return Object.assign({ alt: f.alt }, frState(f, t));
+    const c = {
+      P, world, assign, real, lite: false,
+      rn: rng(P.seed * 7919 + 13),   // sensor noise
+      rnet: rng(P.seed * 104729 + 7), // network
+      rcl: rng(P.seed * 15485863 + 3), // clutter
+      loss: real ? P.loss / 100 : 0, delay: real ? P.delayMs / 1000 : 0, drift: real ? P.driftMs / 1000 : 0,
+      T_END: world.duration, NF: Math.round(world.duration / DT), EVAL: world.eval,
+      sensors: buildSensors(assign, P.weather, world.sensorKinds),
+      nodes: world.ground.map((g) => g.id).concat(world.friendlies.map((f) => f.id)),
+      hostileById: {}, dropT: {}, driftScale: {}, linkQ: {}, queue: [],
+      beaconEvery: Math.max(1, Math.round(10 / (world.beacon.rate_hz || 2))), beaconSigma: world.beacon.pos_sigma_m || 3,
+      tracks: [], pending: [], friends: {}, alerts: [], frames: [], timeline: [], lastMatch: {}, sqHist: [], crossAlerted: {},
+      n: { hostile: 0, unk: 0, swaps: 0, ffa: 0, evalSq: 0, evalN: 0, evalCnt: 0, evalCntN: 0 },
     };
-    const linkQ = {};
-    nodes.forEach((n) => { linkQ[n] = 1; });
-
-    let queue = [];
-    function send(node, payload, t, latency) {
-      const ok = rnet() >= loss;
-      linkQ[node] = 0.97 * linkQ[node] + 0.03 * (ok ? 1 : 0);
-      if (!ok) return;
-      const dly = delay > 0 ? Math.max(0, delay * (1 + 0.3 * gauss(rnet))) : 0;
-      payload.arr = t + dly + (latency || 0);
-      queue.push(payload);
-    }
-
-    const beaconEvery = Math.max(1, Math.round(10 / (world.beacon.rate_hz || 2)));
-    const beaconSigma = world.beacon.pos_sigma_m || 3;
-    const tracks = [];
-    const pending = []; // bearing-only records waiting for a second view
-    const friends = {};
-    let hostileCount = 0, unkCount = 0;
-    const alerts = [];
-    const frames = [];
-    const lastMatch = {};
-    let swaps = 0, ffaCount = 0;
-    const sqHist = [];
-    const crossAlerted = {};
-    let evalSq = 0, evalN = 0, evalCnt = 0, evalCntN = 0;
-    const timeline = [];
-
-    // friendly roster is synced before the mission: tracks start at the true state
-    world.friendlies.forEach((f) => {
+    world.hostiles.forEach((h) => { c.hostileById[h.id] = h; });
+    if (real) (world.deg.dropout || []).forEach((d) => { c.dropT[d.node] = d.t; }); // nodes that die mid-run
+    c.nodes.forEach((n) => { c.driftScale[n] = c.rn() * 2 - 1; c.linkQ[n] = 1; });
+    shareFalseAlarmsAcrossRadars(c);
+    return c;
+  }
+  function shareFalseAlarmsAcrossRadars(c) {
+    const clutter = c.world.env.clutter;
+    const perSec = ((clutter && clutter.false_alarms_per_min) || 0) / 60;
+    const radars = c.sensors.filter((q) => q.kind === 'RAD');
+    radars.forEach((q) => { q.clutter = Math.max(q.clutter, perSec / radars.length); });
+  }
+  // friendly roster is synced before the mission: tracks start at the true state
+  function startFriendTracks(c) {
+    c.world.friendlies.forEach((f) => {
       const st = frState(f, 0);
       const tr = newTrack(f.id, 'frd', { x: st.x, y: st.y, R: [9, 0, 9], t: 0 }, 6, 4);
       tr.s[2] = st.vx; tr.s[3] = st.vy; tr.cls = 'friendly'; tr.srcs.self = 0;
-      friends[f.id] = tr; tracks.push(tr);
+      c.friends[f.id] = tr; c.tracks.push(tr);
     });
+  }
 
-    for (let k = 0; k <= NF; k++) {
-      const t = k * DT;
-      const off = (n) => drift * driftScale[n] * (t / T_END);
+  function stepFrame(c, k) {
+    const t = k * DT;
+    const truth = truthAt(c, t);
+    sendAll(c, k, t, sense(c, k, t, truth));
+    const frameMeas = trackFrame(c, t, deliver(c, t));
+    updateLifecycle(c, t);
+    pruneTracks(c, t);
+    const { snap, hostileTracks } = snapshot(c, t);
+    const score = scoreFrame(c, t, truth, hostileTracks);
+    const cross = findCrossing(hostileTracks);
+    if (cross) announceCrossing(c, t, cross);
+    if (!c.lite) c.frames.push(frameRecord(c, { t, k, truth, snap, frameMeas, cross, score, hostileTracks }));
+  }
 
-      // ---- truth
-      const truth = [];
-      world.friendlies.forEach((f) => truth.push(Object.assign({ id: f.id, kind: 'friendly' }, frState(f, t))));
-      world.hostiles.forEach((h) => {
-        const st = hoState(h, t);
-        if (st) truth.push(Object.assign({ id: h.id, kind: 'hostile' }, st));
-      });
-      const targetAt = (obj, tt) => {
-        if (obj.kind === 'friendly') return frState(world.friendlies.find((f) => f.id === obj.id), tt);
-        return hoState(hostileById[obj.id], tt);
-      };
-
-      // ---- sensing and messaging
-      const rawMeas = [];
-      sensors.forEach((s) => {
-        if (k % s.every || !alive(s.node, t)) return;
-        const sp = nodePos(s.node, t);
-        const tt = Math.max(0, t - off(s.node));
-        const heading = s.pointing === 'omni' ? null : (sp.heading !== undefined ? sp.heading : Math.atan2(sp.vy, sp.vx));
-        const isGround = s.node.startsWith('GS');
-        // 1. who is inside the sensor's limits: range window, field of view, detection probability
-        let seen = [];
-        truth.forEach((o) => {
-          if (o.id === s.node) return;
-          const tg = targetAt(o, tt);
-          if (!tg) return;
-          const dx = tg.x - sp.x, dy = tg.y - sp.y, r = Math.hypot(dx, dy);
-          if (r > s.range || r < s.minRange || r < 1) return;
-          const h = hostileById[o.id]; // a hostile's signature scales how well each sensor type sees it
-          if (s.kind === 'RF' && h && !h.emits) return; // a silent hostile is invisible to RF
-          const az = Math.atan2(dy, dx);
-          if (heading !== null && Math.abs(wrapPi(az - heading)) > s.fov / 2) return;
-          const pd = Math.min(1, s.pd * (h ? (h.sig[SIG_KEY[s.kind]] || 1) : 1)) * (1 - (1 - s.pdFar) * (r / s.range) * (r / s.range)); // detections thin out with distance
-          if (rn() > pd) return;
-          seen.push({ x: tg.x, y: tg.y, vx: tg.vx, vy: tg.vy, r, az, n: 1, o: Object.assign({}, o, { alt: h ? h.alt : undefined }) });
-        });
-        if (s.cell && seen.length > 1) seen = mergeCells(seen, s.cell); // radar resolution cell
-        // 2. each detection becomes the sensor's native record
-        seen.forEach((d) => rawMeas.push(makeRecord(s, d, sp, t, isGround, rn)));
-        if (s.clutter && rcl() < s.clutter * s.every * DT) {
-          const half = heading === null ? Math.PI : s.fov / 2, a = (heading || 0) + (rcl() * 2 - 1) * half;
-          const rr = s.minRange + Math.sqrt(rcl()) * (s.range - s.minRange);
-          rawMeas.push(makeRecord(s, { x: sp.x + rr * Math.cos(a), y: sp.y + rr * Math.sin(a), vx: 0, vy: 0, r: rr, az: a, n: 1, o: { kind: 'clutter' } }, sp, t, isGround, rcl, true));
-        }
-      });
-      // group a node's frame messages
-      rawMeas.forEach((z) => send(z.node, { type: 'meas', z }, t, z.latency));
-      if (k % beaconEvery === 0) {
-        if (world.beacon.enabled !== false) {
-          world.friendlies.forEach((f) => {
-            if (!alive(f.id, t)) return;
-            const st = frState(f, Math.max(0, t - off(f.id)));
-            send(f.id, { type: 'beacon', id: f.id, x: st.x + gauss(rn) * beaconSigma, y: st.y + gauss(rn) * beaconSigma, t }, t);
-          });
-        }
-        world.ground.forEach((g) => { if (alive(g.id, t)) linkQ[g.id] = 0.97 * linkQ[g.id] + 0.03 * (rnet() >= loss ? 1 : 0); });
-      }
-
-      // ---- deliver
-      const arrived = queue.filter((m) => m.arr <= t + 1e-9);
-      queue = queue.filter((m) => m.arr > t + 1e-9);
-      arrived.sort((a, b) => (a.arr - b.arr) || ((a.type === 'beacon' ? 0 : 1) - (b.type === 'beacon' ? 0 : 1)));
-
-      // ---- tracker
-      tracks.forEach((tr) => { predict(tr, DT); tr.updated = false; });
-      const frameMeas = [];
-      arrived.forEach((m) => {
-        if (m.type === 'beacon') {
-          const z = { x: m.x, y: m.y, R: [9, 0, 9], t, node: m.id };
-          let tr = friends[m.id];
-          if (!tr) {
-            tr = friends[m.id] = newTrack(m.id, 'frd', z, 6, 100);
-            tr.cls = 'friendly';
-            tracks.push(tr);
-          } else update(tr, z, innov(tr, z));
-          tr.lastUpd = t; tr.srcs.self = t;
-          return;
-        }
-        const rec = m.z;
-        frameMeas.push(rec);
-        let best = null, bs = Infinity;
-        tracks.forEach((tr) => {
-          const sc = gateRecord(tr, rec);
-          if (sc !== null && sc < bs) { bs = sc; best = tr; }
-        });
-        if (best && best.kind === 'frd') return; // the detection is a friendly we already know about
-        if (best) {
-          applyRecord(best, rec);
-          if (rec.m !== 'bearing') best.rangeT = t;
-          best.updated = true; best.lastUpd = t;
-          best.srcs[rec.node + ' ' + rec.k] = t;
-        } else if (rec.m === 'rangeaz') {
-          // radar gives range and bearing: enough to start a track by itself
-          const fix = fixFromRangeAz(rec);
-          if (!tracks.some((tr) => tr.kind !== 'frd' && Math.hypot(tr.s[0] - fix.x, tr.s[1] - fix.y) < 60)) {
-            const tr = newTrack('U' + (++unkCount), 'trk', fix, 3, 225);
-            tr.rangeT = t;
-            tr.updated = true; tr.srcs[rec.node + ' ' + rec.k] = t;
-            tracks.push(tr);
-          }
-        } else if (rec.m === 'bearing') {
-          // bearing only: needs a second bearing from another node to fix a position
-          const mate = pending.find((p) => p.node !== rec.node && t - p.t <= 1.0 && triangulate(p, rec));
-          if (mate) {
-            const fix = triangulate(mate, rec);
-            pending.splice(pending.indexOf(mate), 1);
-            if (!tracks.some((tr) => tr.kind !== 'frd' && Math.hypot(tr.s[0] - fix.x, tr.s[1] - fix.y) < 60)) {
-              const tr = newTrack('U' + (++unkCount), 'trk', fix, 3, 225);
-              tr.updated = true; tr.srcs[mate.node + ' ' + mate.k] = t; tr.srcs[rec.node + ' ' + rec.k] = t;
-              tracks.push(tr);
-            }
-          } else pending.push(rec);
-        }
-      });
-      for (let i = pending.length - 1; i >= 0; i--) if (t - pending[i].t > 1.0) pending.splice(i, 1);
-
-      // ---- lifecycle
-      const events = [];
-      tracks.forEach((tr) => {
-        if (tr.kind === 'frd') return;
-        if (tr.updated) tr.hitFrames++;
-        // confirm only with enough hits, a pinned-down position, and either range data or three viewpoints (rules out ghost crossings)
-        if (tr.status === 'tentative' && tr.hitFrames >= 6 && Math.sqrt(Math.max(tr.P[0], tr.P[5])) < 30 && (hasRangeSource(tr, t) || recentNodes(tr, t) >= 3)) {
-          tr.status = 'confirmed';
-          tr.unsup = null;
-          if (/^U/.test(tr.id)) { // a demoted track that is confirmed again keeps its ID
-            tr.id = 'H' + (++hostileCount);
-            alerts.push({ t, sev: 'info', text: tr.id + ' confirmed hostile' });
-            timeline.push({ t, label: tr.id + ' seen', color: 'red' });
-          }
-        }
-        if (tr.status === 'tentative' && !tr.alerted && tr.hitFrames >= 3) {
-          tr.alerted = true;
-          alerts.push({ t, sev: 'info', text: 'New unknown drone in range: ' + tr.id + ' (' + Object.keys(tr.srcs)[0] + ')' });
-        }
-        if (tr.status === 'confirmed') tr.status = t - tr.lastUpd > 1.0 ? 'coasting' : 'confirmed';
-        if (tr.status === 'coasting' && t - tr.lastUpd <= 1.0) tr.status = 'confirmed';
-        // a confirmed track must keep its support (range data or three viewpoints); without it, back to 'unknown'
-        if (tr.status !== 'tentative') {
-          if (hasRangeSource(tr, t) || recentNodes(tr, t) >= 3) tr.unsup = null;
-          else if (tr.unsup === null || tr.unsup === undefined) tr.unsup = t;
-          else if (t - tr.unsup > 4) { tr.status = 'tentative'; tr.hitFrames = 0; tr.unsup = null; }
-        }
-      });
-      for (let i = tracks.length - 1; i >= 0; i--) {
-        const tr = tracks[i];
-        if (tr.kind === 'frd') continue;
-        const silent = t - tr.lastUpd;
-        const tent = tr.status === 'tentative';
-        if ((tent && silent > 1.5) || (!tent && silent > 8) || tr.P[0] + tr.P[5] > 40000) tracks.splice(i, 1);
-      }
-      // a track riding on a beacon-known friendly is that friendly, not a new object
-      for (let i = tracks.length - 1; i >= 0; i--) {
-        const tr = tracks[i];
-        if (tr.kind === 'frd') continue;
-        const onFriend = Object.keys(friends).some((id) => {
-          const f = friends[id];
-          const n = innov(f, { x: tr.s[0], y: tr.s[1], R: [tr.P[0], tr.P[1], tr.P[5]] });
-          return n.d2 < GATE && Math.hypot(f.s[2] - tr.s[2], f.s[3] - tr.s[3]) < 5;
-        });
-        if (onFriend && tr.status !== 'confirmed') tracks.splice(i, 1);
-      }
-      // drop duplicates: two confirmed tracks on top of each other moving alike
-      for (let i = 0; i < tracks.length; i++) {
-        for (let j = i + 1; j < tracks.length; j++) {
-          const a = tracks[i], b = tracks[j];
-          if (a.kind === 'frd' || b.kind === 'frd' || a.status === 'tentative' || b.status === 'tentative') continue;
-          const sep = { x: b.s[0], y: b.s[1], R: [a.P[0] + b.P[0], a.P[1] + b.P[1], a.P[5] + b.P[5]] };
-          const n = innov(a, { x: sep.x, y: sep.y, R: [b.P[0], b.P[1], b.P[5]] });
-          const close = Math.hypot(a.s[0] - b.s[0], a.s[1] - b.s[1]) < 30;
-          if ((n.d2 < 6 || close) && Math.hypot(a.s[2] - b.s[2], a.s[3] - b.s[3]) < 6) {
-            const drop = a.hitFrames >= b.hitFrames ? b : a;
-            tracks.splice(tracks.indexOf(drop), 1); i = -1; break;
-          }
-        }
-      }
-
-      // ---- snapshot
-      const snap = [];
-      const hostileTracks = [];
-      tracks.forEach((tr) => {
-        let cls, pH, pU, pF;
-        if (tr.kind === 'frd') { cls = 'friendly'; pF = Math.max(0.5, 1 - (t - tr.lastUpd) * 0.05); pH = 0; pU = 1 - pF; }
-        else if (tr.status === 'tentative') { cls = 'unknown'; pH = Math.min(0.35, tr.hitFrames * 0.05); pF = 0.1; pU = 1 - pH - pF; }
-        else { cls = 'hostile'; pH = Math.min(0.99, 0.7 + tr.hitFrames / 120); pU = (1 - pH) * 0.7; pF = 1 - pH - pU; }
-        const nodesList = Object.keys(tr.srcs).filter((n) => t - tr.srcs[n] <= 2);
-        const o = {
-          id: tr.id, cls, st: tr.status, x: tr.s[0], y: tr.s[1], vx: tr.s[2], vy: tr.s[3],
-          pxx: tr.P[0], pyy: tr.P[5], pxy: tr.P[1], pvv: tr.P[10] + tr.P[15],
-          conf: cls === 'friendly' ? pF : cls === 'hostile' ? pH : pH + 0.3,
-          age: t - tr.lastUpd, nodes: nodesList, pH, pU, pF, born: tr.born,
-        };
-        snap.push(o);
-        if (cls === 'hostile') hostileTracks.push(o);
-      });
-
-      // ---- scoring against ground truth
-      const trueHost = truth.filter((o) => o.kind === 'hostile');
-      const pairs = [];
-      hostileTracks.forEach((a) => trueHost.forEach((b) => {
-        const d = Math.hypot(a.x - b.x, a.y - b.y);
-        // a pair that was matched before stays matched while it is still close, so two tracks near each other do not flicker
-        if (d < 60) pairs.push([lastMatch[b.id] === a.id && d < 40 ? d - 1000 : d, a, b, d]);
-      }));
-      pairs.sort((p, q) => p[0] - q[0]);
-      const usedA = new Set(), usedB = new Set(), match = [];
-      pairs.forEach(([key, a, b, d]) => {
-        if (usedA.has(a.id) || usedB.has(b.id)) return;
-        usedA.add(a.id); usedB.add(b.id); match.push([a.id, b.id, d]);
-        a.err = d;
-        if (lastMatch[b.id] && lastMatch[b.id] !== a.id) {
-          swaps++;
-          alerts.push({ t, sev: 'crit', text: 'Identity swap on ' + b.id + ': ' + lastMatch[b.id] + ' → ' + a.id });
-          timeline.push({ t, label: 'swap', color: 'red' });
-        }
-        lastMatch[b.id] = a.id;
-      });
-      let sqSum = 0;
-      match.forEach((m) => { sqSum += m[2] * m[2]; });
-      sqHist.push(match.length ? [sqSum / match.length, 1] : [0, 0]);
-      let ws = 0, wn = 0;
-      for (let i = Math.max(0, sqHist.length - 100); i < sqHist.length; i++) { ws += sqHist[i][0] * sqHist[i][1]; wn += sqHist[i][1]; }
-      const rmse10 = wn ? Math.sqrt(ws / wn) : null;
-      hostileTracks.forEach((a) => {
-        if (usedA.has(a.id)) return;
-        const tr = tracks.find((x) => x.id === a.id);
-        if (!tr || tr.ffa) return;
-        const fr = truth.find((o) => o.kind === 'friendly' && Math.hypot(o.x - a.x, o.y - a.y) < 40);
-        if (fr) {
-          tr.ffa = true; ffaCount++;
-          alerts.push({ t, sev: 'crit', text: 'Friendly ' + fr.id + ' flagged as hostile (' + a.id + ')' });
-          timeline.push({ t, label: 'FFA', color: 'red' });
-        }
-      });
-      const countErr = hostileTracks.length - trueHost.length;
-      if (t >= EVAL[0] && t <= EVAL[1]) {
-        evalSq += sqSum; evalN += match.length; evalCnt += Math.abs(countErr); evalCntN++;
-      }
-
-      // ---- crossing prediction
-      let cross = null;
-      for (let i = 0; i < hostileTracks.length; i++) {
-        for (let j = i + 1; j < hostileTracks.length; j++) {
-          const a = hostileTracks[i], b = hostileTracks[j];
-          const dx = b.x - a.x, dy = b.y - a.y, dvx = b.vx - a.vx, dvy = b.vy - a.vy, v2 = dvx * dvx + dvy * dvy;
-          if (v2 < 0.5) continue;
-          const tca = -(dx * dvx + dy * dvy) / v2;
-          if (tca <= 0 || tca > 15) continue;
-          const dmin = Math.hypot(dx + dvx * tca, dy + dvy * tca);
-          if (dmin > 60) continue;
-          if (!cross || tca < cross.tca) {
-            cross = {
-              a: a.id, b: b.id, tca, dmin, sep: Math.hypot(dx, dy),
-              x: (a.x + a.vx * tca + b.x + b.vx * tca) / 2, y: (a.y + a.vy * tca + b.y + b.vy * tca) / 2,
-            };
-          }
-        }
-      }
-      if (cross) {
-        const key = cross.a + cross.b;
-        if (!crossAlerted[key] || t - crossAlerted[key] > 25) {
-          crossAlerted[key] = t;
-          alerts.push({ t, sev: 'warn', text: 'Crossing predicted ' + cross.a + ' × ' + cross.b + ' in ' + cross.tca.toFixed(1) + ' s: identity risk' });
-          timeline.push({ t: t + cross.tca, label: 'crossing?', color: 'amber', dashed: true });
-        }
-      }
-
-      if (lite) continue;
-      frames.push({
-        t, k, truth, tracks: snap, match: match.map((m) => [m[0], m[1]]),
-        meas: frameMeas.map((z) => ({ k: z.k, node: z.node, module: z.module, t: z.t, m: z.m, sx: z.sx, sy: z.sy, b: z.b, r: z.r, rmax: z.rmax, fields: z.fields, merged: !!z.merged, clutter: !!z.clutter })),
-        links: Object.assign({}, linkQ),
-        cross,
-        m: { est: hostileTracks.length, tru: trueHost.length, countErr, rmse10, swaps, ffa: ffaCount },
-      });
-    }
-
-    const summary = {
-      rmse: evalN ? Math.sqrt(evalSq / evalN) : null,
-      countErr: evalCntN ? evalCnt / evalCntN : 0,
-      swaps, ffa: ffaCount,
-    };
+  function finish(c) {
+    const n = c.n;
+    const summary = { rmse: n.evalN ? Math.sqrt(n.evalSq / n.evalN) : null, countErr: n.evalCntN ? n.evalCnt / n.evalCntN : 0, swaps: n.swaps, ffa: n.ffa };
     // entry markers from scenario script
-    world.hostiles.forEach((h) => timeline.push({ t: h.wps[0][0], label: h.id + ' in', color: 'red' }));
+    c.world.hostiles.forEach((h) => c.timeline.push({ t: h.wps[0][0], label: h.id + ' in', color: 'red' }));
     return {
-      frames, alerts, timeline, summary, scen: world, params: Object.assign({}, P, { assign, scenario: undefined, scenario_id: world.id }), T_END, DT, NF, EVAL,
-      sensors: sensors.map((s) => ({ node: s.node, module: s.module, kind: s.kind, range: s.range, minRange: s.minRange, fovDeg: s.pointing === 'omni' ? 360 : Math.round(s.fov * RAD2DEG), pointing: s.pointing, native: s.native, fields: s.fields, rateHz: Math.round(10 / s.every * 10) / 10 })),
+      frames: c.frames, alerts: c.alerts, timeline: c.timeline, summary, scen: c.world,
+      params: Object.assign({}, c.P, { assign: c.assign, scenario: undefined, scenario_id: c.world.id }),
+      T_END: c.T_END, DT, NF: c.NF, EVAL: c.EVAL, sensors: c.sensors.map(sensorInfo),
+    };
+  }
+  function sensorInfo(s) {
+    return {
+      node: s.node, module: s.module, kind: s.kind, range: s.range, minRange: s.minRange,
+      fovDeg: s.pointing === 'omni' ? 360 : Math.round(s.fov * RAD2DEG), pointing: s.pointing,
+      native: s.native, fields: s.fields, rateHz: Math.round(10 / s.every * 10) / 10,
+    };
+  }
+  function frameRecord(c, f) {
+    const { score } = f;
+    return {
+      t: f.t, k: f.k, truth: f.truth, tracks: f.snap, match: score.match.map((m) => [m[0], m[1]]),
+      meas: f.frameMeas.map((z) => ({ k: z.k, node: z.node, module: z.module, t: z.t, m: z.m, sx: z.sx, sy: z.sy, b: z.b, r: z.r, rmax: z.rmax, fields: z.fields, merged: !!z.merged, clutter: !!z.clutter })),
+      links: Object.assign({}, c.linkQ), cross: f.cross,
+      m: { est: f.hostileTracks.length, tru: score.trueHost.length, countErr: score.countErr, rmse10: score.rmse10, swaps: c.n.swaps, ffa: c.n.ffa },
     };
   }
 
+  // ---------------------------------------------------------------- world state
+  const alive = (c, node, t) => c.dropT[node] === undefined || t < c.dropT[node];
+  const clockOffset = (c, node, t) => c.drift * c.driftScale[node] * (t / c.T_END);
+  function nodePos(c, id, t) {
+    const g = c.world.ground.find((x) => x.id === id);
+    if (g) return { x: g.x, y: g.y, vx: 0, vy: 0, heading: g.heading };
+    const f = c.world.friendlies.find((x) => x.id === id);
+    return Object.assign({ alt: f.alt }, frState(f, t));
+  }
+  function truthAt(c, t) {
+    const truth = [];
+    c.world.friendlies.forEach((f) => truth.push(Object.assign({ id: f.id, kind: 'friendly' }, frState(f, t))));
+    c.world.hostiles.forEach((h) => {
+      const st = hoState(h, t);
+      if (st) truth.push(Object.assign({ id: h.id, kind: 'hostile' }, st));
+    });
+    return truth;
+  }
+  function targetAt(c, obj, t) {
+    if (obj.kind === 'friendly') return frState(c.world.friendlies.find((f) => f.id === obj.id), t);
+    return hoState(c.hostileById[obj.id], t);
+  }
+
+  // -------------------------------------------------------------------- sensing
+  function sense(c, k, t, truth) {
+    const raw = [];
+    c.sensors.forEach((s) => {
+      if (k % s.every || !alive(c, s.node, t)) return;
+      senseWith(c, s, t, truth, raw);
+    });
+    return raw;
+  }
+  function senseWith(c, s, t, truth, raw) {
+    const sp = nodePos(c, s.node, t);
+    const tt = Math.max(0, t - clockOffset(c, s.node, t));
+    const heading = s.pointing === 'omni' ? null : (sp.heading !== undefined ? sp.heading : Math.atan2(sp.vy, sp.vx));
+    const isGround = s.node.startsWith('GS');
+    let seen = detect(c, s, { sp, heading, truth, tt });
+    if (s.cell && seen.length > 1) seen = mergeCells(seen, s.cell); // radar resolution cell
+    seen.forEach((d) => raw.push(makeRecord(s, d, sp, t, isGround, c.rn))); // each detection becomes the native record
+    addClutter(c, s, { sp, heading, t, isGround }, raw);
+  }
+  // who is inside the sensor's limits: range window, field of view, detection probability
+  function detect(c, s, view) {
+    const { sp, heading, truth, tt } = view;
+    const seen = [];
+    truth.forEach((o) => {
+      if (o.id === s.node) return;
+      const tg = targetAt(c, o, tt);
+      if (!tg) return;
+      const dx = tg.x - sp.x, dy = tg.y - sp.y, r = Math.hypot(dx, dy);
+      if (r > s.range || r < s.minRange || r < 1) return;
+      const h = c.hostileById[o.id]; // a hostile's signature scales how well each sensor type sees it
+      if (s.kind === 'RF' && h && !h.emits) return; // a silent hostile is invisible to RF
+      const az = Math.atan2(dy, dx);
+      if (heading !== null && Math.abs(wrapPi(az - heading)) > s.fov / 2) return;
+      if (c.rn() > detectionProb(s, h, r)) return;
+      seen.push({ x: tg.x, y: tg.y, vx: tg.vx, vy: tg.vy, r, az, n: 1, o: Object.assign({}, o, { alt: h ? h.alt : undefined }) });
+    });
+    return seen;
+  }
+  function detectionProb(s, hostile, r) {
+    const sig = hostile ? (hostile.sig[SIG_KEY[s.kind]] || 1) : 1;
+    return Math.min(1, s.pd * sig) * (1 - (1 - s.pdFar) * (r / s.range) * (r / s.range)); // detections thin out with distance
+  }
+  function addClutter(c, s, view, raw) {
+    const { sp, heading, t, isGround } = view;
+    if (!s.clutter || c.rcl() >= s.clutter * s.every * DT) return;
+    const half = heading === null ? Math.PI : s.fov / 2, a = (heading || 0) + (c.rcl() * 2 - 1) * half;
+    const rr = s.minRange + Math.sqrt(c.rcl()) * (s.range - s.minRange);
+    const ghost = { x: sp.x + rr * Math.cos(a), y: sp.y + rr * Math.sin(a), vx: 0, vy: 0, r: rr, az: a, n: 1, o: { kind: 'clutter' } };
+    raw.push(makeRecord(s, ghost, sp, t, isGround, c.rcl, true));
+  }
+
+  // ------------------------------------------------------------------- messaging
+  function noteLink(c, node, ok) { // smoothed share of messages that got through
+    c.linkQ[node] = 0.97 * c.linkQ[node] + 0.03 * (ok ? 1 : 0);
+  }
+  function sendMessage(c, node, payload, t, latency) {
+    const ok = c.rnet() >= c.loss;
+    noteLink(c, node, ok);
+    if (!ok) return;
+    const dly = c.delay > 0 ? Math.max(0, c.delay * (1 + 0.3 * gauss(c.rnet))) : 0;
+    payload.arr = t + dly + (latency || 0);
+    c.queue.push(payload);
+  }
+  function sendAll(c, k, t, raw) {
+    raw.forEach((z) => sendMessage(c, z.node, { type: 'meas', z }, t, z.latency));
+    if (k % c.beaconEvery === 0) sendBeacons(c, t);
+  }
+  function sendBeacons(c, t) {
+    if (c.world.beacon.enabled !== false) {
+      c.world.friendlies.forEach((f) => {
+        if (!alive(c, f.id, t)) return;
+        const st = frState(f, Math.max(0, t - clockOffset(c, f.id, t)));
+        sendMessage(c, f.id, { type: 'beacon', id: f.id, x: st.x + gauss(c.rn) * c.beaconSigma, y: st.y + gauss(c.rn) * c.beaconSigma, t }, t);
+      });
+    }
+    c.world.ground.forEach((g) => {
+      if (alive(c, g.id, t)) noteLink(c, g.id, c.rnet() >= c.loss);
+    });
+  }
+  function deliver(c, t) {
+    const arrived = c.queue.filter((m) => m.arr <= t + 1e-9);
+    c.queue = c.queue.filter((m) => m.arr > t + 1e-9);
+    const beaconFirst = (m) => (m.type === 'beacon' ? 0 : 1);
+    return arrived.sort((a, b) => (a.arr - b.arr) || (beaconFirst(a) - beaconFirst(b)));
+  }
+
+  // ------------------------------------------------------------------- tracker
+  function trackFrame(c, t, arrived) {
+    c.tracks.forEach((tr) => { predict(tr, DT); tr.updated = false; });
+    const frameMeas = [];
+    arrived.forEach((m) => {
+      if (m.type === 'beacon') { applyBeacon(c, m, t); return; }
+      frameMeas.push(m.z);
+      associate(c, m.z, t);
+    });
+    c.pending = c.pending.filter((p) => t - p.t <= 1.0);
+    return frameMeas;
+  }
+  function applyBeacon(c, m, t) {
+    const z = { x: m.x, y: m.y, R: [9, 0, 9], t, node: m.id };
+    let tr = c.friends[m.id];
+    if (!tr) {
+      tr = c.friends[m.id] = newTrack(m.id, 'frd', z, 6, 100);
+      tr.cls = 'friendly';
+      c.tracks.push(tr);
+    } else update(tr, z, innov(tr, z));
+    tr.lastUpd = t; tr.srcs.self = t;
+  }
+  function bestTrack(c, rec) {
+    let best = null, bs = Infinity;
+    c.tracks.forEach((tr) => {
+      const sc = gateRecord(tr, rec);
+      if (sc !== null && sc < bs) { bs = sc; best = tr; }
+    });
+    return best;
+  }
+  function associate(c, rec, t) {
+    const best = bestTrack(c, rec);
+    if (best && best.kind === 'frd') return; // the detection is a friendly we already know about
+    if (best) feedTrack(best, rec, t);
+    else if (rec.m === 'rangeaz') spawnTrack(c, fixFromRangeAz(rec), t, [rec], true); // radar: range and bearing start a track alone
+    else if (rec.m === 'bearing') pairBearing(c, rec, t);
+  }
+  function feedTrack(tr, rec, t) {
+    applyRecord(tr, rec);
+    if (rec.m !== 'bearing') tr.rangeT = t;
+    tr.updated = true; tr.lastUpd = t;
+    tr.srcs[rec.node + ' ' + rec.k] = t;
+  }
+  // bearing only: needs a second bearing from another node to fix a position
+  function pairBearing(c, rec, t) {
+    const mate = c.pending.find((p) => p.node !== rec.node && t - p.t <= 1.0 && triangulate(p, rec));
+    if (!mate) { c.pending.push(rec); return; }
+    const fix = triangulate(mate, rec);
+    c.pending.splice(c.pending.indexOf(mate), 1);
+    spawnTrack(c, fix, t, [mate, rec], false);
+  }
+  function spawnTrack(c, fix, t, recs, hasRange) {
+    const near = c.tracks.some((tr) => tr.kind !== 'frd' && Math.hypot(tr.s[0] - fix.x, tr.s[1] - fix.y) < 60);
+    if (near) return;
+    const tr = newTrack('U' + (++c.n.unk), 'trk', fix, 3, 225);
+    if (hasRange) tr.rangeT = t;
+    tr.updated = true;
+    recs.forEach((r) => { tr.srcs[r.node + ' ' + r.k] = t; });
+    c.tracks.push(tr);
+  }
+
+  // ------------------------------------------------------------------ lifecycle
+  function updateLifecycle(c, t) {
+    c.tracks.forEach((tr) => {
+      if (tr.kind === 'frd') return;
+      if (tr.updated) tr.hitFrames++;
+      confirmTrack(c, tr, t);
+      announceTentative(c, tr, t);
+      setCoasting(tr, t);
+      checkSupport(tr, t);
+    });
+  }
+  // confirm only with enough hits, a pinned-down position, and either range data or three viewpoints (rules out ghost crossings)
+  function confirmTrack(c, tr, t) {
+    const supported = hasRangeSource(tr, t) || recentNodes(tr, t) >= 3;
+    if (tr.status !== 'tentative' || tr.hitFrames < 6 || Math.sqrt(Math.max(tr.P[0], tr.P[5])) >= 30 || !supported) return;
+    tr.status = 'confirmed';
+    tr.unsup = null;
+    if (!/^U/.test(tr.id)) return; // a demoted track that is confirmed again keeps its ID
+    tr.id = 'H' + (++c.n.hostile);
+    c.alerts.push({ t, sev: 'info', text: tr.id + ' confirmed hostile' });
+    c.timeline.push({ t, label: tr.id + ' seen', color: 'red' });
+  }
+  function announceTentative(c, tr, t) {
+    if (tr.status !== 'tentative' || tr.alerted || tr.hitFrames < 3) return;
+    tr.alerted = true;
+    c.alerts.push({ t, sev: 'info', text: 'New unknown drone in range: ' + tr.id + ' (' + Object.keys(tr.srcs)[0] + ')' });
+  }
+  function setCoasting(tr, t) {
+    if (tr.status === 'confirmed') tr.status = t - tr.lastUpd > 1.0 ? 'coasting' : 'confirmed';
+    if (tr.status === 'coasting' && t - tr.lastUpd <= 1.0) tr.status = 'confirmed';
+  }
+  // a confirmed track must keep its support (range data or three viewpoints); without it, back to 'unknown'
+  function checkSupport(tr, t) {
+    if (tr.status === 'tentative') return;
+    if (hasRangeSource(tr, t) || recentNodes(tr, t) >= 3) tr.unsup = null;
+    else if (tr.unsup === null || tr.unsup === undefined) tr.unsup = t;
+    else if (t - tr.unsup > 4) { tr.status = 'tentative'; tr.hitFrames = 0; tr.unsup = null; }
+  }
+
+  // ---------------------------------------------------------------------- pruning
+  function removeWhere(list, pred) {
+    for (let i = list.length - 1; i >= 0; i--) if (pred(list[i])) list.splice(i, 1);
+  }
+  function pruneTracks(c, t) {
+    removeWhere(c.tracks, (tr) => tr.kind !== 'frd' && isStale(tr, t));
+    removeWhere(c.tracks, (tr) => tr.kind !== 'frd' && tr.status !== 'confirmed' && ridesOnFriend(c, tr));
+    for (let dup = findDuplicate(c.tracks); dup; dup = findDuplicate(c.tracks)) c.tracks.splice(c.tracks.indexOf(dup), 1);
+  }
+  function isStale(tr, t) {
+    const silent = t - tr.lastUpd;
+    const tentative = tr.status === 'tentative';
+    return (tentative && silent > 1.5) || (!tentative && silent > 8) || tr.P[0] + tr.P[5] > 40000;
+  }
+  // a track riding on a beacon-known friendly is that friendly, not a new object
+  function ridesOnFriend(c, tr) {
+    return Object.keys(c.friends).some((id) => {
+      const f = c.friends[id];
+      const n = innov(f, { x: tr.s[0], y: tr.s[1], R: [tr.P[0], tr.P[1], tr.P[5]] });
+      return n.d2 < GATE && Math.hypot(f.s[2] - tr.s[2], f.s[3] - tr.s[3]) < 5;
+    });
+  }
+  // two confirmed tracks on top of each other moving alike are one object: returns the one to drop
+  function findDuplicate(tracks) {
+    for (let i = 0; i < tracks.length; i++) {
+      for (let j = i + 1; j < tracks.length; j++) {
+        const a = tracks[i], b = tracks[j];
+        if (a.kind === 'frd' || b.kind === 'frd' || a.status === 'tentative' || b.status === 'tentative') continue;
+        if (sameObject(a, b)) return a.hitFrames >= b.hitFrames ? b : a;
+      }
+    }
+    return null;
+  }
+  function sameObject(a, b) {
+    const n = innov(a, { x: b.s[0], y: b.s[1], R: [b.P[0], b.P[1], b.P[5]] });
+    const close = Math.hypot(a.s[0] - b.s[0], a.s[1] - b.s[1]) < 30;
+    return (n.d2 < 6 || close) && Math.hypot(a.s[2] - b.s[2], a.s[3] - b.s[3]) < 6;
+  }
+
+  // --------------------------------------------------------------------- snapshot
+  function classify(tr, t) {
+    if (tr.kind === 'frd') { const pF = Math.max(0.5, 1 - (t - tr.lastUpd) * 0.05); return { cls: 'friendly', pH: 0, pF, pU: 1 - pF }; }
+    if (tr.status === 'tentative') { const pH = Math.min(0.35, tr.hitFrames * 0.05); return { cls: 'unknown', pH, pF: 0.1, pU: 1 - pH - 0.1 }; }
+    const pH = Math.min(0.99, 0.7 + tr.hitFrames / 120), pU = (1 - pH) * 0.7;
+    return { cls: 'hostile', pH, pU, pF: 1 - pH - pU };
+  }
+  function snapTrack(tr, t) {
+    const { cls, pH, pU, pF } = classify(tr, t);
+    return {
+      id: tr.id, cls, st: tr.status, x: tr.s[0], y: tr.s[1], vx: tr.s[2], vy: tr.s[3],
+      pxx: tr.P[0], pyy: tr.P[5], pxy: tr.P[1], pvv: tr.P[10] + tr.P[15],
+      conf: cls === 'friendly' ? pF : cls === 'hostile' ? pH : pH + 0.3,
+      age: t - tr.lastUpd, nodes: Object.keys(tr.srcs).filter((n) => t - tr.srcs[n] <= 2), pH, pU, pF, born: tr.born,
+    };
+  }
+  function snapshot(c, t) {
+    const snap = c.tracks.map((tr) => snapTrack(tr, t));
+    return { snap, hostileTracks: snap.filter((o) => o.cls === 'hostile') };
+  }
+
+  // ---------------------------------------------------------- scoring against truth
+  function scoreFrame(c, t, truth, hostileTracks) {
+    const trueHost = truth.filter((o) => o.kind === 'hostile');
+    const { match, usedA } = matchTracks(c, t, hostileTracks, trueHost);
+    const sqSum = match.reduce((acc, m) => acc + m[2] * m[2], 0);
+    const rmse10 = rollingRmse(c, match.length ? [sqSum / match.length, 1] : [0, 0]);
+    flagFriendlies(c, t, truth, hostileTracks, usedA);
+    const countErr = hostileTracks.length - trueHost.length;
+    if (t >= c.EVAL[0] && t <= c.EVAL[1]) addToSummary(c.n, sqSum, match.length, countErr);
+    return { trueHost, match, rmse10, countErr };
+  }
+  function addToSummary(n, sqSum, matched, countErr) {
+    n.evalSq += sqSum; n.evalN += matched; n.evalCnt += Math.abs(countErr); n.evalCntN++;
+  }
+  // nearest-first pairing of estimated and true hostiles
+  function matchTracks(c, t, hostileTracks, trueHost) {
+    const pairs = [];
+    hostileTracks.forEach((a) => trueHost.forEach((b) => {
+      const d = Math.hypot(a.x - b.x, a.y - b.y);
+      // a pair that was matched before stays matched while it is still close, so two tracks near each other do not flicker
+      if (d < 60) pairs.push([c.lastMatch[b.id] === a.id && d < 40 ? d - 1000 : d, a, b, d]);
+    }));
+    pairs.sort((p, q) => p[0] - q[0]);
+    const usedA = new Set(), usedB = new Set(), match = [];
+    pairs.forEach(([, a, b, d]) => {
+      if (usedA.has(a.id) || usedB.has(b.id)) return;
+      usedA.add(a.id); usedB.add(b.id); match.push([a.id, b.id, d]);
+      a.err = d;
+      noteSwap(c, t, b.id, a.id);
+      c.lastMatch[b.id] = a.id;
+    });
+    return { match, usedA };
+  }
+  function noteSwap(c, t, trueId, trackId) {
+    const prev = c.lastMatch[trueId];
+    if (!prev || prev === trackId) return;
+    c.n.swaps++;
+    c.alerts.push({ t, sev: 'crit', text: 'Identity swap on ' + trueId + ': ' + prev + ' → ' + trackId });
+    c.timeline.push({ t, label: 'swap', color: 'red' });
+  }
+  // position error over the last 100 frames (10 s), weighted by how many pairs were matched
+  function rollingRmse(c, entry) {
+    c.sqHist.push(entry);
+    let ws = 0, wn = 0;
+    for (let i = Math.max(0, c.sqHist.length - 100); i < c.sqHist.length; i++) { ws += c.sqHist[i][0] * c.sqHist[i][1]; wn += c.sqHist[i][1]; }
+    return wn ? Math.sqrt(ws / wn) : null;
+  }
+  function flagFriendlies(c, t, truth, hostileTracks, usedA) {
+    hostileTracks.forEach((a) => {
+      if (usedA.has(a.id)) return;
+      const tr = c.tracks.find((x) => x.id === a.id);
+      if (!tr || tr.ffa) return;
+      const fr = truth.find((o) => o.kind === 'friendly' && Math.hypot(o.x - a.x, o.y - a.y) < 40);
+      if (!fr) return;
+      tr.ffa = true; c.n.ffa++;
+      c.alerts.push({ t, sev: 'crit', text: 'Friendly ' + fr.id + ' flagged as hostile (' + a.id + ')' });
+      c.timeline.push({ t, label: 'FFA', color: 'red' });
+    });
+  }
+
+  // ------------------------------------------------------------ crossing prediction
+  // the pair of hostile tracks that will come within 60 m soonest (closest approach within 15 s)
+  function findCrossing(hostileTracks) {
+    let cross = null;
+    for (let i = 0; i < hostileTracks.length; i++) {
+      for (let j = i + 1; j < hostileTracks.length; j++) {
+        const x = closestApproach(hostileTracks[i], hostileTracks[j]);
+        if (x && (!cross || x.tca < cross.tca)) cross = x;
+      }
+    }
+    return cross;
+  }
+  function closestApproach(a, b) {
+    const dx = b.x - a.x, dy = b.y - a.y, dvx = b.vx - a.vx, dvy = b.vy - a.vy, v2 = dvx * dvx + dvy * dvy;
+    if (v2 < 0.5) return null;
+    const tca = -(dx * dvx + dy * dvy) / v2;
+    if (tca <= 0 || tca > 15) return null;
+    const dmin = Math.hypot(dx + dvx * tca, dy + dvy * tca);
+    if (dmin > 60) return null;
+    return {
+      a: a.id, b: b.id, tca, dmin, sep: Math.hypot(dx, dy),
+      x: (a.x + a.vx * tca + b.x + b.vx * tca) / 2, y: (a.y + a.vy * tca + b.y + b.vy * tca) / 2,
+    };
+  }
+  function announceCrossing(c, t, cross) {
+    const key = cross.a + cross.b;
+    if (c.crossAlerted[key] && t - c.crossAlerted[key] <= 25) return;
+    c.crossAlerted[key] = t;
+    c.alerts.push({ t, sev: 'warn', text: 'Crossing predicted ' + cross.a + ' × ' + cross.b + ' in ' + cross.tca.toFixed(1) + ' s: identity risk' });
+    c.timeline.push({ t: t + cross.tca, label: 'crossing?', color: 'amber', dashed: true });
+  }
+
+  // ------------------------------------------------------------ native records
   // The record a sensor reports for one detection: only its native fields, with noise.
   function makeRecord(s, d, sp, t, isGround, rand, clutter) {
-    const nz = s.noise, nm = s.nm, r = d.r;
     const rec = { k: s.kind, node: s.node, module: s.module, t, sx: sp.x, sy: sp.y, svx: sp.vx || 0, svy: sp.vy || 0, rmax: s.range, latency: s.latency, merged: d.n > 1, clutter: !!clutter };
-    const tgtAlt = d.o.alt || (d.o.kind === 'friendly' ? ALT.friendly : ALT.hostile);
-    const own = isGround ? ALT.ground : (sp.alt || ALT.friendly);
-    const level = (sigma) => nz.source_level_db - 20 * Math.log10(Math.max(r, 1)) + gauss(rand) * sigma * nm;
-    switch (s.native) {
-      case 'bearing_elevation': {
-        const sigB = nz.bearing_deg * D2R * nm;
-        rec.m = 'bearing'; rec.b = d.az + gauss(rand) * sigB; rec.sigB = sigB;
-        const elev = Math.atan2(tgtAlt - own, r) * RAD2DEG + gauss(rand) * nz.elevation_deg * nm;
-        const pRight = Math.max(0.5, 0.95 - 0.45 * (r / s.range)); // the classifier gets worse with distance
-        const truthClass = d.o.kind === 'friendly' ? 'friendly' : 'unknown';
-        const hint = rand() < pRight ? truthClass : (truthClass === 'friendly' ? 'unknown' : 'friendly');
-        rec.fields = s.kind === 'IR'
-          ? { bearing_deg: compass(rec.b), elevation_deg: elev, intensity: Math.max(0, 1 - 0.5 * r / s.range + gauss(rand) * 0.05) }
-          : { bearing_deg: compass(rec.b), elevation_deg: elev, class_hint: hint };
-        break;
-      }
-      case 'bearing_level': {
-        const sigB = nz.bearing_deg * D2R * nm;
-        rec.m = 'bearing'; rec.b = d.az + gauss(rand) * sigB; rec.sigB = sigB;
-        rec.fields = { bearing_deg: compass(rec.b), level_db: 90 - 20 * Math.log10(Math.max(r, 1)) + gauss(rand) * nz.level_db * nm, presence: true };
-        break;
-      }
-      case 'level': {
-        const lv = level(nz.level_db); // a single microphone only hears how loud it is
-        rec.m = 'range'; rec.r = Math.pow(10, (nz.source_level_db - lv) / 20);
-        rec.sigR = rec.r * (Math.LN10 / 20) * nz.level_db * nm;
-        rec.fields = { level_db: lv, presence: true };
-        break;
-      }
-      case 'bearing_rssi': {
-        const sigB = nz.bearing_deg * D2R * nm;
-        rec.m = 'bearing'; rec.b = d.az + gauss(rand) * sigB; rec.sigB = sigB;
-        rec.fields = { bearing_deg: compass(rec.b), rssi_dbm: -40 - 20 * Math.log10(Math.max(r, 1)) + gauss(rand) * nz.rssi_db * nm, center_freq_mhz: d.o.kind === 'friendly' ? 5745 : 2437 };
-        break;
-      }
-      default: { // range_azimuth_doppler
-        const sigR = nz.range_m * nm, sigB = nz.azimuth_deg * D2R * nm, sigRR = nz.radial_mps * nm;
-        rec.m = 'rangeaz'; rec.r = r + gauss(rand) * sigR; rec.b = d.az + gauss(rand) * sigB;
-        rec.sigR = sigR; rec.sigB = sigB; rec.sigRR = sigRR;
-        const ux = Math.cos(d.az), uy = Math.sin(d.az);
-        rec.rr = (d.vx - (sp.vx || 0)) * ux + (d.vy - (sp.vy || 0)) * uy + gauss(rand) * sigRR;
-        rec.fields = { range_m: rec.r, azimuth_deg: compass(rec.b), radial_mps: rec.rr, snr_db: 20 - 20 * Math.log10(Math.max(r, 1) / 100) + gauss(rand) };
-      }
-    }
+    const ctx = {
+      s, d, sp, rand, nz: s.noise, nm: s.nm, r: d.r,
+      tgtAlt: d.o.alt || (d.o.kind === 'friendly' ? ALT.friendly : ALT.hostile),
+      own: isGround ? ALT.ground : (sp.alt || ALT.friendly),
+    };
+    (RECORD_BUILDERS[s.native] || buildRangeAzimuth)(rec, ctx);
     return rec;
   }
+  // the bearing every bearing-type sensor reports, with its noise
+  function addBearing(rec, x) {
+    const sigB = x.nz.bearing_deg * D2R * x.nm;
+    rec.m = 'bearing'; rec.b = x.d.az + gauss(x.rand) * sigB; rec.sigB = sigB;
+  }
+  const logRange = (r) => 20 * Math.log10(Math.max(r, 1));
+  function buildBearingElevation(rec, x) {
+    const { s, d, nz, nm, r, rand } = x;
+    addBearing(rec, x);
+    const elev = Math.atan2(x.tgtAlt - x.own, r) * RAD2DEG + gauss(rand) * nz.elevation_deg * nm;
+    const pRight = Math.max(0.5, 0.95 - 0.45 * (r / s.range)); // the classifier gets worse with distance
+    const truthClass = d.o.kind === 'friendly' ? 'friendly' : 'unknown';
+    const hint = rand() < pRight ? truthClass : (truthClass === 'friendly' ? 'unknown' : 'friendly');
+    const extra = s.kind === 'IR' ? { intensity: Math.max(0, 1 - 0.5 * r / s.range + gauss(rand) * 0.05) } : { class_hint: hint };
+    rec.fields = Object.assign({ bearing_deg: compass(rec.b), elevation_deg: elev }, extra);
+  }
+  function buildBearingLevel(rec, x) {
+    addBearing(rec, x);
+    rec.fields = { bearing_deg: compass(rec.b), level_db: 90 - logRange(x.r) + gauss(x.rand) * x.nz.level_db * x.nm, presence: true };
+  }
+  function buildLevel(rec, x) {
+    const { nz, nm } = x;
+    const lv = nz.source_level_db - logRange(x.r) + gauss(x.rand) * nz.level_db * nm; // a single microphone only hears how loud it is
+    rec.m = 'range'; rec.r = Math.pow(10, (nz.source_level_db - lv) / 20);
+    rec.sigR = rec.r * (Math.LN10 / 20) * nz.level_db * nm;
+    rec.fields = { level_db: lv, presence: true };
+  }
+  function buildBearingRssi(rec, x) {
+    addBearing(rec, x);
+    rec.fields = {
+      bearing_deg: compass(rec.b), rssi_dbm: -40 - logRange(x.r) + gauss(x.rand) * x.nz.rssi_db * x.nm,
+      center_freq_mhz: x.d.o.kind === 'friendly' ? 5745 : 2437,
+    };
+  }
+  function buildRangeAzimuth(rec, x) {
+    const { nz, nm, d, sp, rand } = x;
+    const sigR = nz.range_m * nm, sigB = nz.azimuth_deg * D2R * nm, sigRR = nz.radial_mps * nm;
+    rec.m = 'rangeaz'; rec.r = x.r + gauss(rand) * sigR; rec.b = d.az + gauss(rand) * sigB;
+    rec.sigR = sigR; rec.sigB = sigB; rec.sigRR = sigRR;
+    const ux = Math.cos(d.az), uy = Math.sin(d.az);
+    rec.rr = (d.vx - (sp.vx || 0)) * ux + (d.vy - (sp.vy || 0)) * uy + gauss(rand) * sigRR;
+    rec.fields = { range_m: rec.r, azimuth_deg: compass(rec.b), radial_mps: rec.rr, snr_db: 20 - 20 * Math.log10(Math.max(x.r, 1) / 100) + gauss(rand) };
+  }
+  const RECORD_BUILDERS = {
+    bearing_elevation: buildBearingElevation, bearing_level: buildBearingLevel, level: buildLevel,
+    bearing_rssi: buildBearingRssi, range_azimuth_doppler: buildRangeAzimuth,
+  };
 
   // targets closer than the cell in range and azimuth merge into one detection at their centroid
   function mergeCells(seen, cell) {

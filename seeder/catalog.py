@@ -46,45 +46,63 @@ def validate(catalog):
         if m["id"] in modules_by_id:
             errors.append("duplicate module id: " + m["id"])
         modules_by_id[m["id"]] = m
-        if m["kind"] in DETECTION_KINDS:
-            for w in WEATHERS:
-                eff = m["weather_effects"].get(w)
-                if not eff or not all(k in eff for k in ("range_mult", "noise_mult", "pd_mult")):
-                    errors.append("module %s: missing or incomplete weather effect '%s'" % (m["id"], w))
-            for k in ("range_m", "min_range_m", "fov_deg", "pointing", "pd", "pd_far", "rate_hz", "latency_ms", "noise"):
-                if k not in m["sim"]:
-                    errors.append("module %s: sim.%s missing" % (m["id"], k))
-            if m["sim"].get("pointing") not in ("forward", "omni"):
-                errors.append("module %s: sim.pointing must be forward or omni" % m["id"])
-            native = m.get("native") or {}
-            if native.get("type") not in NATIVE_NOISE:
-                errors.append("module %s: native.type must be one of %s" % (m["id"], sorted(NATIVE_NOISE)))
-            else:
-                for k in NATIVE_NOISE[native["type"]]:
-                    if k not in m["sim"]["noise"]:
-                        errors.append("module %s: sim.noise.%s missing for native type %s" % (m["id"], k, native["type"]))
-                if not native.get("fields"):
-                    errors.append("module %s: native.fields missing" % m["id"])
-        if m["kind"] == "radar" and "resolution_cell" not in m["sim"]:
-            errors.append("module %s: radar needs sim.resolution_cell (close targets merge)" % m["id"])
-        if m.get("verified") and not m.get("source"):
-            errors.append("module %s: verified=true needs a source" % m["id"])
-
+        errors += _check_module(m)
     seen = set()
     for p in catalog["platforms"]:
         if p["id"] in seen:
             errors.append("duplicate platform id: " + p["id"])
         seen.add(p["id"])
-        missing = [l["module_id"] for l in p["modules"] if l["module_id"] not in modules_by_id]
-        if missing:
-            errors.append("platform %s: unknown modules %s" % (p["id"], missing))
-            continue
-        kinds = {modules_by_id[l["module_id"]]["kind"] for l in p["modules"]} & DETECTION_KINDS
-        if len(kinds) < 2:
-            errors.append("platform %s: needs at least 2 different detection modalities, has %s" % (p["id"], sorted(kinds)))
-        for w in WEATHERS:
-            if not robust_modules(p, modules_by_id, w):
-                errors.append("platform %s: no module that still works in %s" % (p["id"], w))
+        errors += _check_platform(p, modules_by_id)
+    return errors
+
+
+def _check_module(m):
+    errors = []
+    if m["kind"] in DETECTION_KINDS:
+        errors += _check_detection_module(m)
+    if m["kind"] == "radar" and "resolution_cell" not in m["sim"]:
+        errors.append("module %s: radar needs sim.resolution_cell (close targets merge)" % m["id"])
+    if m.get("verified") and not m.get("source"):
+        errors.append("module %s: verified=true needs a source" % m["id"])
+    return errors
+
+
+def _check_detection_module(m):
+    errors = []
+    for w in WEATHERS:
+        eff = m["weather_effects"].get(w)
+        if not eff or not all(k in eff for k in ("range_mult", "noise_mult", "pd_mult")):
+            errors.append("module %s: missing or incomplete weather effect '%s'" % (m["id"], w))
+    for k in ("range_m", "min_range_m", "fov_deg", "pointing", "pd", "pd_far", "rate_hz", "latency_ms", "noise"):
+        if k not in m["sim"]:
+            errors.append("module %s: sim.%s missing" % (m["id"], k))
+    if m["sim"].get("pointing") not in ("forward", "omni"):
+        errors.append("module %s: sim.pointing must be forward or omni" % m["id"])
+    return errors + _check_native(m)
+
+
+def _check_native(m):
+    native = m.get("native") or {}
+    if native.get("type") not in NATIVE_NOISE:
+        return ["module %s: native.type must be one of %s" % (m["id"], sorted(NATIVE_NOISE))]
+    errors = ["module %s: sim.noise.%s missing for native type %s" % (m["id"], k, native["type"])
+              for k in NATIVE_NOISE[native["type"]] if k not in m["sim"]["noise"]]
+    if not native.get("fields"):
+        errors.append("module %s: native.fields missing" % m["id"])
+    return errors
+
+
+def _check_platform(p, modules_by_id):
+    missing = [l["module_id"] for l in p["modules"] if l["module_id"] not in modules_by_id]
+    if missing:
+        return ["platform %s: unknown modules %s" % (p["id"], missing)]
+    errors = []
+    kinds = {modules_by_id[l["module_id"]]["kind"] for l in p["modules"]} & DETECTION_KINDS
+    if len(kinds) < 2:
+        errors.append("platform %s: needs at least 2 different detection modalities, has %s" % (p["id"], sorted(kinds)))
+    for w in WEATHERS:
+        if not robust_modules(p, modules_by_id, w):
+            errors.append("platform %s: no module that still works in %s" % (p["id"], w))
     return errors
 
 

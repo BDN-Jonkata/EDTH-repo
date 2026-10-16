@@ -100,67 +100,93 @@ def validate_config(cfg, catalog=None):
     """Return a list of error strings (empty if the config can be generated)."""
     catalog = catalog or cat.load_catalog()
     platforms = {p["id"]: p for p in catalog["platforms"]}
-    errors = []
+    t = cfg["targets"]
+    return (_check_seed(cfg) + _check_area(cfg)
+            + (_check_target_rules(cfg, t) if isinstance(t, dict) else _check_target_paths(t))
+            + _check_friendlies(cfg, platforms) + _check_ground(cfg, platforms) + _check_environment(cfg))
+
+
+def _check_seed(cfg):
     if not isinstance(cfg["seed"], int) or isinstance(cfg["seed"], bool):
-        errors.append("seed must be an integer")
-    elif cfg.get("seed_set"):
-        if cfg["seed_set"] not in SEED_SETS:
-            errors.append("seed_set must be one of %s" % sorted(SEED_SETS))
-        else:
-            lo, hi = SEED_SETS[cfg["seed_set"]]
-            if not lo <= cfg["seed"] <= hi:
-                errors.append("seed %d is outside the %s seed set (%d-%d)" % (cfg["seed"], cfg["seed_set"], lo, hi))
+        return ["seed must be an integer"]
+    if not cfg.get("seed_set"):
+        return []
+    if cfg["seed_set"] not in SEED_SETS:
+        return ["seed_set must be one of %s" % sorted(SEED_SETS)]
+    lo, hi = SEED_SETS[cfg["seed_set"]]
+    if lo <= cfg["seed"] <= hi:
+        return []
+    return ["seed %d is outside the %s seed set (%d-%d)" % (cfg["seed"], cfg["seed_set"], lo, hi)]
+
+
+def _check_area(cfg):
+    errors = []
     if not 30 <= cfg["duration_s"] <= 3600:
         errors.append("duration_s must be between 30 and 3600")
     c2 = cfg["c2"]
     if len(c2) != 2 or not all(0 <= v <= AREA for v in c2):
         errors.append("c2 must be [x, y] inside the 1000 m area")
+    return errors
 
-    t = cfg["targets"]
-    if isinstance(t, dict):
-        if not 0 <= t["count"] <= 8:
-            errors.append("targets.count must be 0..8")
-        for key in ("speed_mps", "altitude_m", "enter_t"):
-            if len(t[key]) != 2 or t[key][0] > t[key][1]:
-                errors.append("targets.%s must be [low, high]" % key)
-        if t["motion"] not in MOTIONS:
-            errors.append("targets.motion must be one of %s" % (MOTIONS,))
-        for key in ("hover_prob", "sudden_turn_prob"):
-            if not 0 <= t[key] <= 1:
-                errors.append("targets.%s must be between 0 and 1" % key)
-        cr = t["crossing"]
-        if cr["enabled"] and t["count"] >= 2:
-            if not 15 <= cr["t"] <= cfg["duration_s"] - 15:
-                errors.append("targets.crossing.t must leave 15 s before and after the crossing")
-            if cr["min_sep_m"] > cr["max_sep_m"]:
-                errors.append("targets.crossing min_sep_m must not exceed max_sep_m")
-    else:
-        for i, tg in enumerate(t):
-            if not tg.get("waypoints") or len(tg["waypoints"]) < 2:
-                errors.append("targets[%d] needs at least 2 waypoints [t, x, y]" % i)
 
+def _check_target_rules(cfg, t):
+    errors = []
+    if not 0 <= t["count"] <= 8:
+        errors.append("targets.count must be 0..8")
+    for key in ("speed_mps", "altitude_m", "enter_t"):
+        if len(t[key]) != 2 or t[key][0] > t[key][1]:
+            errors.append("targets.%s must be [low, high]" % key)
+    if t["motion"] not in MOTIONS:
+        errors.append("targets.motion must be one of %s" % (MOTIONS,))
+    for key in ("hover_prob", "sudden_turn_prob"):
+        if not 0 <= t[key] <= 1:
+            errors.append("targets.%s must be between 0 and 1" % key)
+    cr = t["crossing"]
+    if cr["enabled"] and t["count"] >= 2:
+        if not 15 <= cr["t"] <= cfg["duration_s"] - 15:
+            errors.append("targets.crossing.t must leave 15 s before and after the crossing")
+        if cr["min_sep_m"] > cr["max_sep_m"]:
+            errors.append("targets.crossing min_sep_m must not exceed max_sep_m")
+    return errors
+
+
+def _check_target_paths(targets):
+    return ["targets[%d] needs at least 2 waypoints [t, x, y]" % i
+            for i, tg in enumerate(targets) if not tg.get("waypoints") or len(tg["waypoints"]) < 2]
+
+
+def _is_platform(platforms, pid, kind):
+    return pid in platforms and platforms[pid]["platform"] == kind
+
+
+def _check_friendlies(cfg, platforms):
     plats = cfg["friendlies"]["platforms"]
-    if not 1 <= len(plats) <= 8:
-        errors.append("friendlies.platforms needs 1..8 entries")
-    for pid in plats:
-        if pid not in platforms or platforms[pid]["platform"] != "uas":
-            errors.append("friendly platform '%s' is not a UAS in the catalog" % pid)
-    seen = set()
+    errors = ["friendlies.platforms needs 1..8 entries"] if not 1 <= len(plats) <= 8 else []
+    errors += ["friendly platform '%s' is not a UAS in the catalog" % pid for pid in plats if not _is_platform(platforms, pid, "uas")]
+    return errors
+
+
+def _check_ground(cfg, platforms):
+    errors, seen = [], set()
     for g in cfg["ground"]:
         if g["id"] in seen:
             errors.append("duplicate ground id " + g["id"])
         seen.add(g["id"])
-        if g["platform"] not in platforms or platforms[g["platform"]]["platform"] != "ground":
+        if not _is_platform(platforms, g["platform"], "ground"):
             errors.append("ground platform '%s' is not a ground sensor in the catalog" % g["platform"])
         if not all(0 <= v <= AREA for v in g["position"]):
             errors.append("ground sensor %s is outside the area" % g["id"])
+    return errors
+
+
+def _check_environment(cfg):
+    errors = []
     bad = [k for k in cfg["sensor_set"]["enabled_kinds"] if k not in SENSOR_KINDS]
     if bad:
         errors.append("unknown sensor kinds: %s" % bad)
     if cfg["environment"]["weather"] not in cat.WEATHERS + ("clear",):
         errors.append("environment.weather must be clear, fog, rain, wind or night")
-    net = cfg["degradations"]["network"]
-    if not 0 <= net["loss"] <= 1:
+    if not 0 <= cfg["degradations"]["network"]["loss"] <= 1:
         errors.append("degradations.network.loss must be between 0 and 1")
     return errors
 
@@ -232,8 +258,8 @@ def _make_friendlies(cfg, rng):
     for i, pid in enumerate(f["platforms"]):
         ax, ay = FRIENDLY_ANCHORS[i % len(FRIENDLY_ANCHORS)]
         radius = round(100 + 10 * i + rng.uniform(-10, 10), 1)
-        cx = min(AREA - radius - 20, max(radius + 20, ax + rng.uniform(-50, 50)))
-        cy = min(AREA - radius - 20, max(radius + 20, ay + rng.uniform(-50, 50)))
+        cx = _clamp(ax + rng.uniform(-50, 50), radius + 20)
+        cy = _clamp(ay + rng.uniform(-50, 50), radius + 20)
         loop = {"cx": round(cx, 1), "cy": round(cy, 1), "R": radius,
                 "v": round(rng.uniform(*f["speed_mps"]), 1), "dir": rng.choice((-1, 1)),
                 "th0": round(rng.uniform(0, 2 * math.pi), 3)}
@@ -314,15 +340,6 @@ def _free_path(spec, rng, motion, duration):
         motion = "hover"
     pts = [(ex, ey, 0)]
     q = (rng.uniform(250, 750), rng.uniform(250, 750))
-
-    def turn(prev, cur):
-        # a sudden turn: swing the next leg 60-120 degrees away from the current heading
-        if rng.random() < spec["sudden_turn_prob"]:
-            ang = math.atan2(cur[1] - prev[1], cur[0] - prev[0]) + rng.choice((-1, 1)) * math.radians(rng.uniform(60, 120))
-            d = rng.uniform(80, 160)
-            return (min(AREA - 30, max(30, cur[0] + d * math.cos(ang))), min(AREA - 30, max(30, cur[1] + d * math.sin(ang))), 0)
-        return None
-
     if motion == "straight":
         pts.append((q[0], q[1], 0))
     elif motion == "waypoints":
@@ -332,24 +349,52 @@ def _free_path(spec, rng, motion, duration):
         pts.append((q[0], q[1], rng.uniform(6, 15)))
     elif motion == "loiter":
         pts.append((q[0], q[1], 0))
-        r, a0, turns = rng.uniform(60, 100), rng.uniform(0, 2 * math.pi), rng.uniform(0.8, 1.6)
-        steps = int(turns * 16)
-        for k in range(1, steps + 1):
-            a = a0 + 2 * math.pi * turns * k / steps
-            pts.append((min(AREA - 20, max(20, q[0] + r * (math.cos(a) - math.cos(a0)))), min(AREA - 20, max(20, q[1] + r * (math.sin(a) - math.sin(a0)))), 0))
+        pts.extend(_loiter_points(rng, q))
+    _add_sudden_turns(rng, spec, pts)
+    pts.append(_exit_point(rng, pts[-1]))
+    return _finish(pts, v, t0), v, motion
+
+
+def _loiter_points(rng, q):
+    """Points on a circle of 60-100 m through q, 0.8-1.6 turns."""
+    r, a0, turns = rng.uniform(60, 100), rng.uniform(0, 2 * math.pi), rng.uniform(0.8, 1.6)
+    steps = int(turns * 16)
+    out = []
+    for k in range(1, steps + 1):
+        a = a0 + 2 * math.pi * turns * k / steps
+        out.append((_clamp(q[0] + r * (math.cos(a) - math.cos(a0)), 20), _clamp(q[1] + r * (math.sin(a) - math.sin(a0)), 20), 0))
+    return out
+
+
+def _clamp(v, margin):
+    return min(AREA - margin, max(margin, v))
+
+
+def _sudden_turn(rng, spec, prev, cur):
+    """Swing the next leg 60-120 degrees away from the current heading, or None."""
+    if rng.random() >= spec["sudden_turn_prob"]:
+        return None
+    ang = math.atan2(cur[1] - prev[1], cur[0] - prev[0]) + rng.choice((-1, 1)) * math.radians(rng.uniform(60, 120))
+    d = rng.uniform(80, 160)
+    return (_clamp(cur[0] + d * math.cos(ang), 30), _clamp(cur[1] + d * math.sin(ang), 30), 0)
+
+
+def _add_sudden_turns(rng, spec, pts):
     extra = []
     for i in range(1, len(pts)):
-        tp = turn(pts[i - 1], pts[i])
+        tp = _sudden_turn(rng, spec, pts[i - 1], pts[i])
         if tp:
             extra.append((i, tp))
     for off, (i, tp) in enumerate(extra):
         pts.insert(i + 1 + off, tp)
-    # leave through the far side
-    last = pts[-1]
+
+
+def _exit_point(rng, last):
+    """Leave through the far side of the area."""
     ang = math.atan2(AREA / 2 - last[1], AREA / 2 - last[0]) + math.pi + rng.uniform(-0.6, 0.6)
     ux, uy = math.cos(ang), math.sin(ang)
-    pts.append((last[0] + ux * (_ray_to_edge(last[0], last[1], ux, uy) + 5), last[1] + uy * (_ray_to_edge(last[0], last[1], ux, uy) + 5), 0))
-    return _finish(pts, v, t0), v, motion
+    reach = _ray_to_edge(last[0], last[1], ux, uy) + 5
+    return (last[0] + ux * reach, last[1] + uy * reach, 0)
 
 
 def _make_targets(cfg, rng):
@@ -425,48 +470,62 @@ def build_truth(scenario, dt=0.1):
     n = int(round(scenario["duration_s"] / dt))
     objects = []
     for f in scenario["friendlies"]:
-        samples = []
-        for k in range(n + 1):
-            t = k * dt
-            s = friendly_state(f, t)
-            samples.append([round(t, 3), round(s["x"], 1), round(s["y"], 1), round(s["vx"], 2), round(s["vy"], 2)])
-        objects.append({"id": f["id"], "kind": "friendly", "platform": f["platform"], "altitude_m": f["altitude_m"], "samples": samples})
-    hostile_samples = {}
+        objects.append({"id": f["id"], "kind": "friendly", "platform": f["platform"], "altitude_m": f["altitude_m"],
+                        "samples": _sample_rows(friendly_state, f, n, dt)})
+    hostile_rows = {}
     for tg in scenario["targets"]:
-        samples = []
-        for k in range(n + 1):
-            t = k * dt
-            s = target_state(tg, t)
-            if s:
-                samples.append([round(t, 3), round(s["x"], 1), round(s["y"], 1), round(s["vx"], 2), round(s["vy"], 2)])
-        hostile_samples[tg["id"]] = {row[0]: row for row in samples}
-        objects.append({"id": tg["id"], "kind": "hostile", "motion": tg["motion"], "altitude_m": tg["altitude_m"], "samples": samples})
-
-    events = []
-    for tg in scenario["targets"]:
-        rows = hostile_samples[tg["id"]]
-        if rows:
-            ts = sorted(rows)
-            events.append({"type": "enter", "id": tg["id"], "t": ts[0]})
-            events.append({"type": "exit", "id": tg["id"], "t": ts[-1]})
+        rows = _sample_rows(target_state, tg, n, dt)
+        hostile_rows[tg["id"]] = {row[0]: row for row in rows}
+        objects.append({"id": tg["id"], "kind": "hostile", "motion": tg["motion"], "altitude_m": tg["altitude_m"], "samples": rows})
     ids = [tg["id"] for tg in scenario["targets"]]
-    for i in range(len(ids)):
-        for j in range(i + 1, len(ids)):
-            a, b = hostile_samples[ids[i]], hostile_samples[ids[j]]
-            both = sorted(set(a) & set(b))
-            seps = [(math.hypot(a[t][1] - b[t][1], a[t][2] - b[t][2]), t) for t in both]
-            # local minima below 60 m are close crossings; minima within 3 s of each other are one crossing
-            found = []
-            for k in range(1, len(seps) - 1):
-                if seps[k][0] < 60 and seps[k][0] <= seps[k - 1][0] and seps[k][0] < seps[k + 1][0]:
-                    if found and seps[k][1] - found[-1][1] < 3:
-                        if seps[k][0] < found[-1][0]:
-                            found[-1] = seps[k]
-                    else:
-                        found.append(seps[k])
-            for sep, t in found:
-                events.append({"type": "crossing", "a": ids[i], "b": ids[j], "t": t, "sep_m": round(sep, 1),
-                               "x": round((a[t][1] + b[t][1]) / 2, 1), "y": round((a[t][2] + b[t][2]) / 2, 1)})
+    events = _enter_exit_events(ids, hostile_rows) + _crossing_events(ids, hostile_rows)
     events.sort(key=lambda e: e["t"])
     return {"schema": "edth.truth/2", "scenario_id": scenario["id"], "seed": scenario["seed"], "duration_s": scenario["duration_s"],
             "dt_s": dt, "columns": ["t", "x", "y", "vx", "vy"], "objects": objects, "events": events}
+
+
+def _sample_rows(state_fn, obj, n, dt):
+    """[t, x, y, vx, vy] every dt seconds while the object exists."""
+    rows = []
+    for k in range(n + 1):
+        t = k * dt
+        s = state_fn(obj, t)
+        if s:
+            rows.append([round(t, 3), round(s["x"], 1), round(s["y"], 1), round(s["vx"], 2), round(s["vy"], 2)])
+    return rows
+
+
+def _enter_exit_events(ids, hostile_rows):
+    events = []
+    for tid in ids:
+        ts = sorted(hostile_rows[tid])
+        if ts:
+            events.append({"type": "enter", "id": tid, "t": ts[0]})
+            events.append({"type": "exit", "id": tid, "t": ts[-1]})
+    return events
+
+
+def _crossing_events(ids, hostile_rows):
+    events = []
+    for i in range(len(ids)):
+        for j in range(i + 1, len(ids)):
+            a, b = hostile_rows[ids[i]], hostile_rows[ids[j]]
+            for sep, t in _close_approaches(a, b):
+                events.append({"type": "crossing", "a": ids[i], "b": ids[j], "t": t, "sep_m": round(sep, 1),
+                               "x": round((a[t][1] + b[t][1]) / 2, 1), "y": round((a[t][2] + b[t][2]) / 2, 1)})
+    return events
+
+
+def _close_approaches(a, b):
+    """(separation, t) of each close crossing: local minima below 60 m; minima within 3 s of each other count once."""
+    seps = [(math.hypot(a[t][1] - b[t][1], a[t][2] - b[t][2]), t) for t in sorted(set(a) & set(b))]
+    found = []
+    for k in range(1, len(seps) - 1):
+        if not (seps[k][0] < 60 and seps[k][0] <= seps[k - 1][0] and seps[k][0] < seps[k + 1][0]):
+            continue
+        if found and seps[k][1] - found[-1][1] < 3:
+            if seps[k][0] < found[-1][0]:
+                found[-1] = seps[k]
+        else:
+            found.append(seps[k])
+    return found
