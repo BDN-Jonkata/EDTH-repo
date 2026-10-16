@@ -4,7 +4,7 @@ Distributed multi-sensor fusion into a single Common Operational Picture (COP) u
 
 Combine partial, noisy observations from low-cost UAS and ground sensors, fused across distributed nodes with imperfect clocks, uncertain positions and lossy communication, into one picture that gives the **number of hostile targets** with a **stable identity, position and velocity** for each, and never flags friendlies as threats.
 
-> Status: **planning phase.** Folder structure and documents are in place; nothing is implemented yet.
+> Status: **planning phase.** Folder structure and documents are in place. A first simulation viewer with a built-in mock simulation runs from [ui/viewer](ui/viewer/) (see [ui/ui.md](ui/ui.md)); the real modules are not implemented yet.
 
 ## Documents
 
@@ -12,6 +12,7 @@ Combine partial, noisy observations from low-cost UAS and ground sensors, fused 
 |----------|----------|
 | [docs/concept.md](docs/concept.md) | Problem statement, scenario, success criteria, our approach, components, metrics |
 | [docs/system-design.md](docs/system-design.md) | Architecture, module responsibilities, conventions (time, coordinates, uncertainty), message schemas, module design, repo layout, open decisions |
+| [docs/seeder-config.md](docs/seeder-config.md) | Scenario config (one JSON + seed), degradation switches, presets, open questions for the mentor |
 | [docs/team-plan.md](docs/team-plan.md) | Work split between 3 people, interfaces between them, per-phase tasks, working agreements |
 
 ## Repository layout
@@ -21,7 +22,7 @@ Combine partial, noisy observations from low-cost UAS and ground sensors, fused 
 | [docs/](docs/) | Concept and system design |
 | [common/](common/) | Shared message schemas, time/frame helpers, bus interface |
 | [scenarios/](scenarios/) | Scenario definitions |
-| [seeder/](seeder/) | Generates realistic scenario components |
+| [seeder/](seeder/) | Platform/sensor catalog (PostgreSQL) and scenario components |
 | [simulation/](simulation/) | 2D world, ground truth, network channel emulator |
 | [sensors/](sensors/) | Camera, acoustic, RF, radar models incl. weather effects |
 | [tracker/](tracker/) | Per-node local multi-target tracker |
@@ -29,7 +30,7 @@ Combine partial, noisy observations from low-cost UAS and ground sensors, fused 
 | [fusion/](fusion/) | Cross-node track merge, global IDs, COP |
 | [predictor/](predictor/) | Optional short-horizon prediction |
 | [scoring/](scoring/) | Metrics harness |
-| [ui/](ui/) | Operator view and simulation viewer |
+| [ui/](ui/) | Operator view and simulation viewer (first version in `ui/viewer`, run with `python serve.py` there) |
 
 ## Architecture in one paragraph
 
@@ -132,3 +133,7 @@ Detailed split and per-phase tasks: [docs/team-plan.md](docs/team-plan.md).
 | 2026-10-16 | Revised: classical tracker is the core and AI only does prediction; hybrid fusion proposed; channel emulator in the simulation from the start; modules in one codebase instead of separate microservices; weather folded into sensor models; friendlies identified by broadcast first and behaviour second; metrics defined up front |
 | 2026-10-16 | Repo split into per-module folders; concept and system design moved to separate docs |
 | 2026-10-16 | Work split into 3 roles (A platform/world, B tracking/fusion, C sensing/evaluation) with agreed interfaces in `common/` |
+| 2026-10-17 | Seeder catalog: 5 real UAS models + 2 ground sensors with different sensor loadouts and per-weather effects; stored in PostgreSQL, simulations saved as plain JSONB; seeder in Python |
+| 2026-10-17 | Adopted team notes: scenarios are one JSON config + seed with a separate ground-truth file and separate tuning/test seeds; per-degradation switches; presets; radar resolution cell; sensor set switchable per scenario; catalog numbers moved to the more conservative values |
+| 2026-10-17 | Viewer runs the seed with a platform chosen per node from the catalog; weather now includes night; map fills its panel |
+| 2026-10-17 | Sensor limits enforced (range window, field of view, pointing, falling detection probability, rate, latency); sensors report native data only (cameras bearing+elevation, no range) and the tracker consumes it with EKF updates |
