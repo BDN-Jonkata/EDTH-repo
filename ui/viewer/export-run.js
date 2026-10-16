@@ -37,5 +37,5 @@ function pack(v, key) {
   return v;
 }
 const run = Sim.run(params);
-const { frames, alerts, timeline, summary, sensors } = run;
-process.stdout.write(JSON.stringify({ params: run.params, scenario: scenario || Sim.DEFAULT_SCENARIO, result: pack({ frames, alerts, timeline, summary, sensors }) }));
+const { frames, alerts, timeline, summary, sensors, commands } = run;
+process.stdout.write(JSON.stringify({ params: run.params, scenario: scenario || Sim.DEFAULT_SCENARIO, result: pack({ frames, alerts, timeline, summary, sensors, commands }) }));
