@@ -1,0 +1,610 @@
+/* DDS viewer: replays a precomputed Sim.run() result on the map. */
+(function () {
+  'use strict';
+  const $ = (id) => document.getElementById(id);
+  const NS = 'http://www.w3.org/2000/svg';
+  const SCEN = Sim.SCEN;
+  const COL = { h: '#FF5A5F', f: '#5B9BFF', u: '#F5B13D', line: '#C9D1DB', cyan: '#3FC1D9' };
+  const Y = (n) => 1000 - n; // world North -> svg y
+
+  const DEFAULTS = { seed: 4127, mode: 'optimistic', weather: 'clear', loss: 0, delayMs: 0, driftMs: 0, name: 'Crossing pair', assign: Sim.DEFAULT_ASSIGN };
+  const clone = (p) => Object.assign({}, p, { assign: Object.assign({}, p.assign) });
+  const NODES = Sim.SCEN.friendlies.map((f) => f.id).concat(Sim.SCEN.ground.map((g) => g.id));
+  const KINDS = { eo_camera: 'EO', thermal_camera: 'IR', microphone: 'MIC', rf_receiver: 'RF', radar: 'RAD' };
+  const LAYERS = [
+    ['terrain', 'Terrain / height', true, '<path d="M1 11c3-6 5-8 6-8s3 2 6 8" fill="none" stroke="#9AA4B2" stroke-width="1.4"/>'],
+    ['truth', 'Ground truth', true, '<circle cx="7" cy="7" r="4" fill="none" stroke="#E6EAF0" stroke-width="1.4"/>'],
+    ['tracks', 'Fused tracks', true, '<path d="M7 1l6 6-6 6-6-6z" fill="none" stroke="#FF5A5F" stroke-width="1.4"/>'],
+    ['unc', 'Uncertainty', true, '<ellipse cx="7" cy="7" rx="6" ry="3.5" fill="none" stroke="#C9D1DB" stroke-width="1.2"/>'],
+    ['pred', 'Predictions', true, '<path d="M1 7h12" stroke="#C9D1DB" stroke-width="1.4" stroke-dasharray="1.5 2"/>'],
+    ['raw', 'Raw observations', false, '<path d="M1 13L13 3M1 13L13 8" stroke="#C9D1DB" stroke-width="1"/>'],
+    ['cover', 'Sensor coverage', true, '<path d="M2 12L7 2l5 10z" fill="none" stroke="#9AA4B2" stroke-width="1.2" stroke-dasharray="2 1.5"/>'],
+    ['net', 'Network links', true, '<circle cx="2.5" cy="11.5" r="1.8" fill="#9AA4B2"/><circle cx="11.5" cy="2.5" r="1.8" fill="#9AA4B2"/><path d="M3.5 10.5l7-7" stroke="#9AA4B2" stroke-width="1.2"/>'],
+  ];
+  const WX_NOTE = {
+    clear: 'Clear: all sensors nominal.',
+    fog: 'Fog: EO range cut to 35 %, noisier, fewer detections.',
+    rain: 'Rain: radar clutter and noisier radar.',
+    wind: 'Wind: microphones much noisier, fewer detections.',
+    night: 'Night: visible cameras nearly blind; thermal, radar, RF and mics unaffected.',
+  };
+
+  const S = {
+    applied: null, staged: clone(DEFAULTS), res: null,
+    idx: 0, playing: true, speed: 1, acc: 0, last: 0, sel: null, tab: 'time', deg: null,
+    layers: {}, view: { x: 0, y: 0, w: 1000, h: 1000 },
+  };
+  LAYERS.forEach((l) => { S.layers[l[0]] = l[2]; });
+
+  // ------------------------------------------------------------- helpers
+  const fmtT = (t) => { const m = Math.floor(t / 60), s = t - m * 60; return String(m).padStart(2, '0') + ':' + s.toFixed(1).padStart(4, '0'); };
+  const pad4 = (v) => String(Math.round(Math.max(0, v))).padStart(4, '0');
+  const hdg = (vx, vy) => (((Math.atan2(vx, vy) * 180) / Math.PI) + 360) % 360;
+  const spd = (vx, vy) => Math.hypot(vx, vy);
+  function elev(x, y) {
+    const g = (cx, cy, sx, sy, a) => a * Math.exp(-(((x - cx) / sx) ** 2 + ((y - cy) / sy) ** 2));
+    return 205 + g(730, 748, 300, 225, 38) + g(160, 180, 120, 90, 15);
+  }
+  function eig(pxx, pyy, pxy) {
+    const tr = (pxx + pyy) / 2, d = Math.sqrt(Math.max(0, ((pxx - pyy) / 2) ** 2 + pxy * pxy));
+    return { a: Math.sqrt(Math.max(0.01, tr + d)), b: Math.sqrt(Math.max(0.01, tr - d)), th: 0.5 * Math.atan2(2 * pxy, pxx - pyy) };
+  }
+  const frame = () => S.res.frames[S.idx];
+  const el = (tag, attrs) => { const e = document.createElementNS(NS, tag); for (const k in attrs) e.setAttribute(k, attrs[k]); return e; };
+
+  // ---------------------------------------------------------- static map
+  const TERRAIN = `
+<ellipse cx="700" cy="225" rx="330" ry="250" fill="#FFF" opacity="0.022"/><ellipse cx="775" cy="290" rx="330" ry="250" fill="#000" opacity="0.22"/>
+<ellipse cx="712" cy="236" rx="190" ry="140" fill="#FFF" opacity="0.03"/><ellipse cx="752" cy="272" rx="190" ry="140" fill="#000" opacity="0.18"/>
+<ellipse cx="150" cy="805" rx="170" ry="125" fill="#FFF" opacity="0.02"/><ellipse cx="185" cy="840" rx="170" ry="125" fill="#000" opacity="0.18"/>
+<g stroke="#FFF" stroke-opacity="0.045"><path d="M100 0V1000M200 0V1000M300 0V1000M400 0V1000M500 0V1000M600 0V1000M700 0V1000M800 0V1000M900 0V1000M0 100H1000M0 200H1000M0 300H1000M0 400H1000M0 500H1000M0 600H1000M0 700H1000M0 800H1000M0 900H1000"/></g>
+<g class="t" style="font-size:9px;fill:#6F7B89"><text x="103" y="12">E100</text><text x="303" y="12">E300</text><text x="503" y="12">E500</text><text x="703" y="12">E700</text><text x="4" y="197">N800</text><text x="4" y="397">N600</text><text x="4" y="597">N400</text><text x="4" y="797">N200</text></g>
+<path d="M1000 840C900 880 820 900 760 940S650 990 620 1000" fill="none" stroke="#24404A" stroke-width="5"/><text class="t" x="820" y="925" style="font-style:italic;fill:#6F8A94">brook</text>
+<g transform="rotate(-12 730 252)" fill="none"><ellipse cx="730" cy="252" rx="410" ry="310" stroke="#2E3944" stroke-width="1.1"/><ellipse cx="730" cy="252" rx="300" ry="225" stroke="#3B4855" stroke-width="1.6"/><ellipse cx="730" cy="252" rx="200" ry="150" stroke="#2E3944" stroke-width="1.1"/><ellipse cx="730" cy="252" rx="110" ry="80" stroke="#3B4855" stroke-width="1.6"/>
+<text class="t" x="730" y="175" text-anchor="middle">240</text><text class="t" x="730" y="105" text-anchor="middle">230</text><text class="t" x="430" y="256" text-anchor="middle">220</text><text class="t" x="320" y="256" text-anchor="middle">210</text></g>
+<g fill="none"><ellipse cx="160" cy="820" rx="150" ry="110" stroke="#2E3944" stroke-width="1.1"/><ellipse cx="160" cy="820" rx="70" ry="50" stroke="#3B4855" stroke-width="1.6"/></g>
+<text class="t" x="160" y="713" text-anchor="middle">210</text><text class="t" x="160" y="773" text-anchor="middle">220</text><path d="M724 246l6-10 6 10z" fill="#9AA4B2"/><text class="t" x="742" y="250">243 m</text>
+<g fill="none" stroke-linecap="round"><path d="M0 610C220 590 400 520 540 500S820 460 1000 420" stroke="#2C3642" stroke-width="15"/><path d="M505 0C510 180 520 340 528 500S545 800 560 1000" stroke="#2C3642" stroke-width="12"/><path d="M0 610C220 590 400 520 540 500S820 460 1000 420" stroke="#161D25" stroke-width="11"/><path d="M505 0C510 180 520 340 528 500S545 800 560 1000" stroke="#161D25" stroke-width="8"/></g>
+<text class="t" x="70" y="590" transform="rotate(-4 70 590)">MAIN RD</text>
+<g fill="#1C242E" stroke="#4A5664"><rect x="410" y="440" width="40" height="26"/><rect x="460" y="430" width="30" height="34"/><rect x="560" y="440" width="46" height="30"/><rect x="615" y="450" width="30" height="24"/><rect x="400" y="520" width="36" height="30"/><rect x="445" y="535" width="50" height="28"/><rect x="565" y="520" width="40" height="40"/><rect x="612" y="515" width="28" height="22"/><rect x="420" y="580" width="30" height="30"/><rect x="470" y="590" width="44" height="26"/><rect x="560" y="580" width="36" height="28"/><rect x="606" y="574" width="40" height="30"/><rect x="652" y="480" width="28" height="22"/><rect x="360" y="470" width="28" height="24"/><rect x="480" y="360" width="30" height="26"/><rect x="580" y="380" width="34" height="24"/><rect x="700" y="430" width="40" height="28"/><rect x="330" y="560" width="30" height="26"/></g>
+<g class="t" text-anchor="middle" style="font-size:9px;fill:#A9B3BF;stroke-width:0"><text x="430" y="456">8 m</text><text x="475" y="450">6 m</text><text x="583" y="458">12 m</text><text x="630" y="465">7 m</text><text x="418" y="538">6 m</text><text x="470" y="552">9 m</text><text x="585" y="543">15 m</text><text x="492" y="606">7 m</text><text x="626" y="592">10 m</text><text x="495" y="376">6 m</text><text x="597" y="395">8 m</text><text x="720" y="447">12 m</text></g>`;
+  const FURNITURE = `
+<g transform="translate(958 54)"><circle r="22" fill="#0F141A" stroke="#2C3644"/><path d="M0 -15L7 8L0 3L-7 8Z" fill="#E6EAF0"/><text class="tb" y="-26" text-anchor="middle" fill="#E6EAF0" style="font-size:10px">N</text></g>
+<g transform="translate(28 958)"><rect x="-8" y="-24" width="232" height="40" rx="3" fill="#0F141A" fill-opacity="0.9" stroke="#2C3644"/><rect x="0" y="0" width="100" height="6" fill="#E6EAF0"/><rect x="100" y="0" width="100" height="6" fill="#0F141A" stroke="#E6EAF0"/>
+<text class="tb" x="0" y="-8" fill="#C9D1DB" style="font-size:10px;font-weight:400">0</text><text class="tb" x="100" y="-8" text-anchor="middle" fill="#C9D1DB" style="font-size:10px;font-weight:400">100</text><text class="tb" x="200" y="-8" text-anchor="middle" fill="#C9D1DB" style="font-size:10px;font-weight:400">200 m</text></g>`;
+
+  // ------------------------------------------------------------- run / apply
+  function runSim(p) {
+    S.applied = clone(p);
+    S.res = Sim.run({ seed: p.seed, mode: p.mode, weather: p.weather, loss: p.loss, delayMs: p.delayMs, driftMs: p.driftMs, assign: p.assign });
+    S.deg = null; S.idx = 0; S.acc = 0; S.playing = true; S.sel = null; S.userSel = false;
+    $('runTitle').textContent = SCEN.id + ' · ' + p.name + ' · seed ' + p.seed;
+    $('modeChip').textContent = p.mode.toUpperCase();
+    $('modeChip').className = 'chip ' + (p.mode === 'optimistic' ? 'cyan' : 'amber');
+    buildTimeline();
+    buildLimits();
+    render();
+  }
+  function degradation() {
+    if (S.deg) return S.deg;
+    const p = S.applied, out = [];
+    for (let l = 0; l <= 90; l += 10) {
+      const r = Sim.run({ seed: p.seed, mode: 'realistic', weather: p.weather, loss: l, delayMs: p.delayMs, driftMs: p.driftMs, assign: p.assign }, { lite: true });
+      out.push({ loss: l, rmse: r.summary.rmse, count: r.summary.countErr, swaps: r.summary.swaps, ffa: r.summary.ffa });
+    }
+    S.deg = out;
+    return out;
+  }
+
+  // --------------------------------------------------------------- left panel
+  // ---- models per node (platforms come from the catalog)
+  function buildLoadout() {
+    const box = $('loadout');
+    box.innerHTML = '';
+    NODES.forEach((id) => {
+      const ground = id.startsWith('GS');
+      const opts = Object.values(Sim.PLATFORMS).filter((p) => p.platform === (ground ? 'ground' : 'uas'));
+      const row = document.createElement('div');
+      row.className = 'node-row';
+      row.innerHTML = '<label><b>' + id + '</b><select aria-label="Platform for ' + id + '" data-node="' + id + '">' +
+        opts.map((p) => '<option value="' + p.id + '">' + p.name + '</option>').join('') + '</select></label><div class="mods" id="mods-' + id + '"></div>';
+      box.appendChild(row);
+    });
+    box.addEventListener('change', (e) => {
+      const sel = e.target.closest('select');
+      if (sel) { S.staged.assign[sel.dataset.node] = sel.value; renderLoadout(); }
+    });
+    renderLoadout();
+  }
+  function renderLoadout() {
+    const wx = S.staged.weather;
+    NODES.forEach((id) => {
+      const sel = document.querySelector('select[data-node="' + id + '"]');
+      if (sel) sel.value = S.staged.assign[id];
+      const plat = Sim.PLATFORMS[S.staged.assign[id]];
+      $('mods-' + id).innerHTML = plat.modules.filter((l) => KINDS[Sim.MODULES[l.module_id].kind]).map((l) => {
+        const m = Sim.MODULES[l.module_id], eff = (m.weather_effects && m.weather_effects[wx]) || { range_mult: 1, pd_mult: 1 };
+        const bad = eff.range_mult < 0.7 || eff.pd_mult < 0.8;
+        return '<span class="mod' + (bad ? ' warn' : '') + '" title="' + m.name + (bad ? ' (degraded in ' + wx + ')' : '') + '">' + KINDS[m.kind] + (bad ? ' ▼' : '') + '</span>';
+      }).join('');
+    });
+  }
+
+  function buildLeft() {
+    const box = $('layers');
+    LAYERS.forEach((l) => {
+      const lab = document.createElement('label');
+      lab.className = 'lyr';
+      lab.innerHTML = '<svg width="14" height="14" viewBox="0 0 14 14" aria-hidden="true">' + l[3] + '</svg><span class="n">' + l[1] + '</span><input class="sw" type="checkbox"' + (l[2] ? ' checked' : '') + '>';
+      lab.querySelector('input').addEventListener('change', (e) => { S.layers[l[0]] = e.target.checked; render(); });
+      box.appendChild(lab);
+    });
+    buildLoadout();
+    seg('modeSeg', (v) => { S.staged.mode = v; syncStaged(); });
+    seg('wxSeg', (v) => { S.staged.weather = v; syncStaged(); renderLoadout(); });
+    seg('speedSeg', (v) => { S.speed = parseFloat(v); });
+    $('seed').addEventListener('input', (e) => { S.staged.seed = Math.max(1, parseInt(e.target.value, 10) || 1); });
+    $('name').addEventListener('input', (e) => { S.staged.name = e.target.value; });
+    $('newSeed').addEventListener('click', () => { S.staged.seed = 1 + Math.floor(Math.random() * 9999); $('seed').value = S.staged.seed; });
+    $('loss').addEventListener('input', (e) => { S.staged.loss = +e.target.value; syncStaged(); });
+    $('delay').addEventListener('input', (e) => { S.staged.delayMs = Math.max(0, +e.target.value || 0); });
+    $('drift').addEventListener('input', (e) => { S.staged.driftMs = Math.max(0, +e.target.value || 0); });
+    $('apply').addEventListener('click', () => runSim(S.staged));
+    $('reset').addEventListener('click', () => { S.staged = clone(DEFAULTS); fillInputs(); syncStaged(); renderLoadout(); runSim(S.staged); });
+  }
+  function seg(id, fn) {
+    const box = $(id);
+    box.addEventListener('click', (e) => {
+      const b = e.target.closest('button');
+      if (!b) return;
+      box.querySelectorAll('button').forEach((x) => { x.classList.toggle('on', x === b); x.setAttribute('aria-checked', x === b); });
+      fn(b.dataset.v);
+    });
+  }
+  function setSeg(id, v) {
+    $(id).querySelectorAll('button').forEach((x) => { const on = x.dataset.v === String(v); x.classList.toggle('on', on); x.setAttribute('aria-checked', on); });
+  }
+  function fillInputs() {
+    const s = S.staged;
+    $('seed').value = s.seed; $('name').value = s.name; $('loss').value = s.loss; $('delay').value = s.delayMs; $('drift').value = s.driftMs;
+    setSeg('modeSeg', s.mode); setSeg('wxSeg', s.weather);
+  }
+  function syncStaged() {
+    const s = S.staged, opt = s.mode === 'optimistic';
+    $('comms').disabled = opt;
+    $('commsLegend').textContent = opt ? 'Comms impairments, locked in Optimistic' : 'Comms impairments';
+    $('modeNote').textContent = opt
+      ? 'Ideal comms: no loss, no delay, synced clocks. Sensor noise still on.'
+      : 'Lossy, delayed links and drifting node clocks. Press Apply & restart to run.';
+    $('lossVal').textContent = s.loss + '%';
+    $('wxNote').textContent = WX_NOTE[s.weather];
+  }
+
+  // --------------------------------------------------------------- map layers
+  const KCOL = { EO: '#C9D1DB', IR: '#E58C5B', MIC: '#F5B13D', RAD: '#3FC1D9', RF: '#B58CFF' };
+  const KDASH = { EO: '5 4', IR: '4 3', MIC: '1 4', RAD: '8 3', RF: '2 5' };
+  // where a node is and which way it faces (drones face along their flight path, ground sensors along their mast)
+  function nodeState(f, id) {
+    const g = SCEN.ground.find((q) => q.id === id);
+    if (g) return { x: g.x, y: g.y, heading: g.heading };
+    const o = f.truth.find((q) => q.id === id);
+    return o ? { x: o.x, y: o.y, heading: Math.atan2(o.vy, o.vx) } : null;
+  }
+  // each sensor's real coverage: a wedge for pointed sensors, a ring for 360-degree ones
+  function coverageSvg(f) {
+    const out = [];
+    S.res.sensors.forEach((s) => {
+      const n = nodeState(f, s.node);
+      if (!n) return;
+      const col = KCOL[s.kind], r = s.range;
+      const common = 'fill="' + col + '" fill-opacity="0.045" stroke="' + col + '" stroke-opacity="0.45" stroke-dasharray="' + KDASH[s.kind] + '" stroke-width="1.2"';
+      let labelAt;
+      if (s.fovDeg >= 360) {
+        out.push('<circle cx="' + n.x + '" cy="' + Y(n.y) + '" r="' + r + '" ' + common.replace('fill-opacity="0.045"', 'fill-opacity="0.015"') + '/>');
+        labelAt = [n.x + r * Math.cos(2.4), Y(n.y) - r * Math.sin(2.4)];
+      } else {
+        const h = s.fovDeg * Math.PI / 360, a0 = n.heading - h, a1 = n.heading + h;
+        const p0 = [n.x + r * Math.cos(a0), Y(n.y + r * Math.sin(a0))], p1 = [n.x + r * Math.cos(a1), Y(n.y + r * Math.sin(a1))];
+        out.push('<path d="M' + n.x + ' ' + Y(n.y) + 'L' + p0[0].toFixed(1) + ' ' + p0[1].toFixed(1) + 'A' + r + ' ' + r + ' 0 ' + (s.fovDeg > 180 ? 1 : 0) + ' 0 ' + p1[0].toFixed(1) + ' ' + p1[1].toFixed(1) + 'Z" ' + common + '/>');
+        labelAt = [n.x + r * Math.cos(n.heading), Y(n.y + r * Math.sin(n.heading))];
+      }
+      if (s.node.startsWith('GS')) out.push('<text class="t" x="' + labelAt[0].toFixed(0) + '" y="' + labelAt[1].toFixed(0) + '" text-anchor="middle">' + s.kind + ' ' + Math.round(r) + ' m' + (s.fovDeg < 360 ? ' ∠' + s.fovDeg + '°' : '') + '</text>');
+    });
+    return out.join('');
+  }
+  function drawLinks(f, out) {
+    const c2 = SCEN.c2;
+    const nodes = SCEN.ground.map((g) => ({ id: g.id, x: g.x, y: g.y })).concat(f.truth.filter((o) => o.kind === 'friendly').map((o) => ({ id: o.id, x: o.x, y: o.y })));
+    nodes.forEach((n) => {
+      const q = f.links[n.id] === undefined ? 1 : f.links[n.id];
+      const col = q > 0.9 ? '#7D8794' : q > 0.5 ? '#F5B13D' : '#FF5A5F';
+      const dash = q > 0.9 ? '' : q > 0.5 ? '6 4' : '2 5';
+      out.push('<path d="M' + n.x + ' ' + Y(n.y) + 'L' + c2.x + ' ' + Y(c2.y) + '" stroke="' + col + '" stroke-width="1.2" stroke-opacity="0.8" stroke-dasharray="' + dash + '" fill="none"/>');
+      out.push('<text class="t" text-anchor="middle" style="font-size:9px;fill:#8B96A5" x="' + ((n.x + c2.x) / 2) + '" y="' + (Y((n.y + c2.y) / 2) - 4) + '">' + Math.round((1 - q) * 100) + '%</text>');
+    });
+  }
+  function ellipseSvg(x, y, p, color, dash, k) {
+    const e = eig(p.pxx, p.pyy, p.pxy);
+    const a = Math.min(150, e.a * k), b = Math.min(150, e.b * k);
+    return '<ellipse cx="' + x + '" cy="' + Y(y) + '" rx="' + a.toFixed(1) + '" ry="' + b.toFixed(1) + '" transform="rotate(' + (-e.th * 180 / Math.PI).toFixed(1) + ' ' + x + ' ' + Y(y) + ')" fill="' + color + '" fill-opacity="0.08" stroke="' + color + '" stroke-opacity="0.75"' + (dash ? ' stroke-dasharray="4 3"' : '') + '/>';
+  }
+  function trackSvg(t, f, sel) {
+    const x = t.x, y = Y(t.y);
+    const col = t.cls === 'hostile' ? COL.h : t.cls === 'friendly' ? COL.f : COL.u;
+    const mk = t.cls === 'hostile' ? 'm-r' : t.cls === 'friendly' ? 'm-b' : 'm-a';
+    const sp = spd(t.vx, t.vy);
+    const coast = t.st === 'coasting';
+    const o = [];
+    o.push('<g' + (coast ? ' opacity="0.55"' : '') + '>');
+    if (S.layers.unc && t.cls !== 'friendly') o.push(ellipseSvg(t.x, t.y, t, col, t.st === 'tentative' || coast, 2.45));
+    if (S.layers.pred && t.cls === 'hostile') {
+      const L = 10, ex = t.x + t.vx * L, ey = t.y + t.vy * L;
+      const w = Math.min(120, 2.45 * Math.sqrt(Math.max(t.pxx, t.pyy)) + 3 * L);
+      const n = Math.hypot(t.vx, t.vy) || 1, nx = -t.vy / n, ny = t.vx / n;
+      o.push('<path d="M' + x + ' ' + y + 'L' + (ex + nx * w) + ' ' + Y(ey + ny * w) + 'L' + (ex - nx * w) + ' ' + Y(ey - ny * w) + 'Z" fill="' + col + '" fill-opacity="0.06"/>');
+      o.push('<path d="M' + x + ' ' + y + 'L' + ex + ' ' + Y(ey) + '" stroke="' + col + '" stroke-width="1.6" stroke-dasharray="1.5 4" stroke-linecap="round" fill="none"/>');
+    }
+    // trail
+    if (t.cls !== 'friendly') {
+      let px = t.x, py = t.y;
+      for (let j = 1; j <= 4; j++) {
+        const pf = S.res.frames[Math.max(0, f.k - j * 10)];
+        const pt = pf && pf.tracks.find((q) => q.id === t.id);
+        if (!pt) break;
+        o.push('<path d="M' + px + ' ' + Y(py) + 'L' + pt.x + ' ' + Y(pt.y) + '" stroke="' + col + '" stroke-width="2" stroke-linecap="round" stroke-opacity="' + (0.65 - j * 0.14).toFixed(2) + '" fill="none"/>');
+        px = pt.x; py = pt.y;
+      }
+    }
+    if (sp > 0.5) {
+      const L = t.cls === 'friendly' ? 30 : 12 + Math.min(30, sp * 2.4), ux = t.vx / sp, uy = t.vy / sp;
+      o.push('<path d="M' + (x + ux * 12) + ' ' + (y - uy * 12) + 'L' + (x + ux * L) + ' ' + (y - uy * L) + '" stroke="' + col + '" stroke-width="2" marker-end="url(#' + mk + ')"/>');
+    }
+    if (t.cls === 'hostile') {
+      o.push('<path d="M' + x + ' ' + (y - 12) + 'L' + (x + 12) + ' ' + y + 'L' + x + ' ' + (y + 12) + 'L' + (x - 12) + ' ' + y + 'Z" fill="#2A1012" stroke="' + col + '" stroke-width="2"/>');
+    } else if (t.cls === 'friendly') {
+      o.push('<circle cx="' + x + '" cy="' + y + '" r="10" fill="#0E1A2E" stroke="' + col + '" stroke-width="2"/><path d="M' + (x - 4) + ' ' + (y - 4) + 'L' + (x + 4) + ' ' + (y + 4) + 'M' + (x + 4) + ' ' + (y - 4) + 'L' + (x - 4) + ' ' + (y + 4) + '" stroke="' + col + '" stroke-width="1.6"/>');
+    } else {
+      o.push('<circle cx="' + x + '" cy="' + y + '" r="7" fill="#241A08" stroke="' + col + '" stroke-width="2.2" stroke-dasharray="3 2"/>');
+    }
+    if (sel) o.push('<circle cx="' + x + '" cy="' + y + '" r="20" fill="none" stroke="#8FE3F2" stroke-width="1.4"/>');
+    if (t.cls === 'friendly') {
+      o.push('<text class="t tb" x="' + (x + 13) + '" y="' + (y - 11) + '" style="fill:#8DB8FF">' + t.id + '</text>');
+    } else if (t.cls === 'hostile') {
+      o.push('<rect x="' + (x - 13) + '" y="' + (y - 38) + '" width="26" height="16" rx="2" fill="' + col + '"' + (sel ? ' stroke="#E6EAF0" stroke-width="1.5"' : '') + '/><text class="tb" x="' + x + '" y="' + (y - 26) + '" text-anchor="middle" fill="#14080A">' + t.id + '</text>');
+      o.push('<text class="t" x="' + (x + 17) + '" y="' + (y - 26) + '">' + sp.toFixed(0) + ' m/s</text>');
+    } else {
+      o.push('<rect x="' + (x - 13) + '" y="' + (y - 34) + '" width="26" height="16" rx="2" fill="#0D1318" stroke="' + col + '" stroke-dasharray="3 2"/><text class="tb" x="' + x + '" y="' + (y - 22) + '" text-anchor="middle" fill="' + col + '">' + t.id + '</text><text class="t" x="' + (x + 17) + '" y="' + (y - 22) + '" style="fill:' + col + '">TENT</text>');
+    }
+    o.push('</g>');
+    return o.join('');
+  }
+
+  function renderMap(f) {
+    $('terrain').innerHTML = S.layers.terrain ? TERRAIN : '';
+    $('terrain').style.display = '';
+    $('cover').innerHTML = S.layers.cover ? coverageSvg(f) : '';
+    const links = [];
+    if (S.layers.net) drawLinks(f, links);
+    $('links').innerHTML = links.join('');
+
+    // fixed infrastructure
+    const c2 = SCEN.c2;
+    const fx = ['<g transform="translate(' + c2.x + ' ' + Y(c2.y) + ')"><path d="M-9 -9H9V9H-9Z" fill="#141A22" stroke="#9AA4B2" stroke-width="1.5"/><path d="M-5 0H5M0 -5V5" stroke="#9AA4B2" stroke-width="1.5"/></g><text class="t" x="' + (c2.x + 14) + '" y="' + (Y(c2.y) + 18) + '">C2</text>'];
+    SCEN.ground.forEach((g) => {
+      fx.push('<g transform="translate(' + g.x + ' ' + Y(g.y) + ')"><rect x="-8" y="-8" width="16" height="16" fill="#141A22" stroke="#C9D1DB" stroke-width="1.6"/><circle r="3" fill="#C9D1DB"/></g><text class="t" x="' + (g.x + 12) + '" y="' + (Y(g.y) + 22) + '" style="fill:#C9D1DB">' + g.id + ' ' + S.res.sensors.filter((q) => q.node === g.id).map((q) => q.kind).join('·') + '</text>');
+    });
+    $('fixed').innerHTML = fx.join('');
+    $('furniture').innerHTML = FURNITURE;
+
+    // raw observations
+    const raw = [];
+    if (S.layers.raw) {
+      f.meas.forEach((m) => {
+        const c = KCOL[m.k], dash = m.clutter ? ' stroke-dasharray="1 3"' : '';
+        if (m.m === 'bearing') { // a direction only: a ray, no range
+          const L = Math.min(m.rmax, 450);
+          raw.push('<path d="M' + m.sx + ' ' + Y(m.sy) + 'L' + (m.sx + L * Math.cos(m.b)).toFixed(1) + ' ' + Y(m.sy + L * Math.sin(m.b)).toFixed(1) + '" stroke="' + c + '" stroke-opacity="0.4" stroke-width="1"' + dash + '/>');
+        } else if (m.m === 'range') { // a distance only: a ring around the sensor
+          raw.push('<circle cx="' + m.sx + '" cy="' + Y(m.sy) + '" r="' + m.r.toFixed(1) + '" fill="none" stroke="' + c + '" stroke-opacity="0.35" stroke-width="1" stroke-dasharray="2 3"/>');
+        } else { // range + bearing: a point
+          const x = m.sx + m.r * Math.cos(m.b), y = Y(m.sy + m.r * Math.sin(m.b));
+          raw.push('<path d="M' + m.sx + ' ' + Y(m.sy) + 'L' + x.toFixed(1) + ' ' + y.toFixed(1) + '" stroke="' + c + '" stroke-opacity="0.25" stroke-width="1"/>');
+          raw.push('<path d="M' + (x - 3).toFixed(1) + ' ' + (y - 3).toFixed(1) + 'l6 6m0 -6l-6 6" stroke="' + c + '" stroke-width="1.4"' + (m.merged ? ' stroke-dasharray="2 1"' : '') + '/>');
+          if (m.merged) raw.push('<circle cx="' + x.toFixed(1) + '" cy="' + y.toFixed(1) + '" r="9" fill="none" stroke="' + c + '" stroke-width="1"/>');
+        }
+      });
+    }
+    $('raw').innerHTML = raw.join('');
+
+    // truth + residual lines
+    const tr = [];
+    if (S.layers.truth) {
+      const mp = {};
+      f.match.forEach((m) => { mp[m[1]] = m[0]; });
+      f.truth.forEach((o) => {
+        const t = mp[o.id] && f.tracks.find((q) => q.id === mp[o.id]);
+        if (t) tr.push('<path d="M' + o.x + ' ' + Y(o.y) + 'L' + t.x + ' ' + Y(t.y) + '" stroke="#E6EAF0" stroke-width="1" stroke-opacity="0.7"/>');
+        tr.push('<circle cx="' + o.x + '" cy="' + Y(o.y) + '" r="' + (o.kind === 'hostile' ? 6 : 5) + '" fill="none" stroke="#E6EAF0" stroke-width="1.3"/>');
+      });
+    }
+    $('truth').innerHTML = tr.join('');
+
+    // crossing zone
+    const cz = [];
+    if (f.cross) {
+      cz.push('<circle class="pulse" cx="' + f.cross.x + '" cy="' + Y(f.cross.y) + '" r="48" fill="#F5B13D" fill-opacity="0.07" stroke="#F5B13D" stroke-width="1.6" stroke-dasharray="6 4"/><text class="t" x="' + f.cross.x + '" y="' + (Y(f.cross.y) + 66) + '" text-anchor="middle" style="fill:#F5B13D">PRED. CROSSING T−' + f.cross.tca.toFixed(1) + ' s</text>');
+    }
+    $('cross').innerHTML = cz.join('');
+
+    // tracks
+    const tk = [];
+    if (S.layers.tracks) {
+      const order = { friendly: 0, unknown: 1, hostile: 2 };
+      f.tracks.slice().sort((a, b) => order[a.cls] - order[b.cls]).forEach((t) => tk.push(trackSvg(t, f, t.id === S.sel)));
+    }
+    $('trk').innerHTML = tk.join('');
+  }
+
+  // -------------------------------------------------------------- right panel
+  function renderRight(f) {
+    $('cntEst').textContent = f.m.est; $('cntTrue').textContent = f.m.tru;
+    const ok = f.m.est === f.m.tru;
+    const chip = $('cntChip');
+    chip.className = 'chip ' + (ok ? 'cyan' : 'amber');
+    chip.textContent = ok ? '✓ MATCH' : '▲ MISMATCH ' + (f.m.countErr > 0 ? '+' : '') + f.m.countErr;
+
+    const order = { hostile: 0, unknown: 1, friendly: 2 };
+    const list = f.tracks.slice().sort((a, b) => order[a.cls] - order[b.cls] || a.id.localeCompare(b.id, undefined, { numeric: true }));
+    const cur = list.find((t) => t.id === S.sel);
+    const firstHostile = list.find((t) => t.cls === 'hostile');
+    // keep the user's pick; otherwise follow the first hostile once there is one
+    if (!cur || (!S.userSel && firstHostile && cur.cls !== 'hostile')) S.sel = (list.find((t) => t.cls === 'hostile') || list[0] || {}).id || null;
+    $('trkCount').textContent = list.length + ' active';
+    $('trkBody').innerHTML = list.map((t) => {
+      const cls = t.cls === 'hostile' ? '◆ HOS' : t.cls === 'friendly' ? '● FRD' : '✣ UNK·T';
+      const ccol = t.cls === 'friendly' ? '#8DB8FF' : t.cls === 'unknown' ? '#F5B13D' : '#D5DBE3';
+      const b = t.cls === 'hostile' ? 'h' : t.cls === 'unknown' ? 'u' : 'f';
+      return '<tr data-id="' + t.id + '"' + (t.id === S.sel ? ' class="sel"' : '') + '><td><button class="idb ' + b + '" aria-label="Select ' + t.id + '">' + t.id + '</button></td><td style="color:' + ccol + '">' + cls + '</td><td>' + pad4(t.x) + ' ' + pad4(t.y) + '</td><td>' + spd(t.vx, t.vy).toFixed(1) + '</td><td>' + String(Math.round(hdg(t.vx, t.vy))).padStart(3, '0') + '</td><td>' + Math.min(1, t.conf).toFixed(2) + '</td><td>' + t.age.toFixed(1) + 's</td><td>' + (t.cls === 'friendly' ? 'self' : t.nodes.map((n) => n.split(' ')[0]).filter((v, i, a) => a.indexOf(v) === i).join(' ')) + '</td></tr>';
+    }).join('');
+
+    const al = S.res.alerts.filter((a) => a.t <= f.t + 1e-6);
+    const warn = al.filter((a) => a.sev === 'warn').length, crit = al.filter((a) => a.sev === 'crit').length;
+    $('alertCount').textContent = warn + ' warn · ' + crit + ' crit';
+    const sev = { info: ['● INFO', '#C9D1DB'], warn: ['▲ WARN', '#F5B13D'], crit: ['■ CRIT', '#FF5A5F'] };
+    const recent = al.slice(-8).reverse();
+    $('alerts').innerHTML = recent.length ? recent.map((a) => '<div class="al"><span class="sev" style="color:' + sev[a.sev][1] + '">' + sev[a.sev][0] + '</span><span style="flex:1 1 auto">' + a.text + '</span><span class="mono" style="font-size:11px;color:#8B96A5">' + fmtT(a.t).slice(0, 7) + '</span></div>').join('') : '<div class="empty">No alerts yet.</div>';
+
+    renderFeed(f);
+    renderDetail(f);
+  }
+  const SHORT = { bearing_deg: 'brg', elevation_deg: 'el', level_db: 'lvl', rssi_dbm: 'rssi', center_freq_mhz: 'f', range_m: 'rng', azimuth_deg: 'az', radial_mps: 'vr', snr_db: 'snr', intensity: 'int', class_hint: '' };
+  function fieldText(rec) {
+    const mod = Sim.MODULES[rec.module], units = {};
+    ((mod && mod.native && mod.native.fields) || []).forEach((q) => { units[q.name] = q.unit; });
+    return Object.keys(rec.fields).filter((k) => k !== 'presence').map((k) => {
+      const v = rec.fields[k];
+      if (typeof v === 'string') return '[' + v + ']';
+      const u = units[k] === 'deg' ? '°' : units[k] && units[k] !== 'a.u.' ? ' ' + units[k] : '';
+      return SHORT[k] + ' ' + v.toFixed(Math.abs(v) < 10 ? 2 : 1) + u;
+    }).join('  ');
+  }
+  function renderFeed(f) {
+    const rows = [];
+    for (let j = f.k; j >= Math.max(0, f.k - 20) && rows.length < 10; j--) {
+      const fr = S.res.frames[j];
+      for (let q = fr.meas.length - 1; q >= 0 && rows.length < 10; q--) rows.push(fr.meas[q]);
+    }
+    $('feed').innerHTML = rows.length ? rows.map((m) =>
+      '<div style="display:flex;gap:8px"><span style="color:#8B96A5;flex:none">' + fmtT(m.t).slice(0, 7) + '</span><span style="flex:none;width:76px;color:' + KCOL[m.k] + '">' + m.node + ' ' + m.k + '</span><span style="color:#D5DBE3">' + fieldText(m) + (m.merged ? ' (2 merged)' : '') + (m.clutter ? ' (clutter)' : '') + '</span></div>').join('')
+      : '<div style="color:#8B96A5">Nothing detected in the last 2 s.</div>';
+  }
+  function buildLimits() {
+    $('limits').innerHTML = S.res.sensors.map((s) => {
+      const nominal = Sim.MODULES[s.module].sim.range_m, weak = s.range < nominal * 0.999;
+      return '<tr><td>' + s.node + '</td><td style="color:' + KCOL[s.kind] + '">' + s.kind + '</td><td' + (weak ? ' style="color:#F5B13D"' : '') + '>' + Math.round(s.minRange) + '–' + Math.round(s.range) + (weak ? ' ▼' : '') + '</td><td>' + (s.fovDeg >= 360 ? '360°' : s.fovDeg + '°') + '</td><td>' + (s.pointing === 'omni' ? 'all' : 'ahead') + '</td><td>' + s.rateHz + '</td><td style="white-space:normal">' + s.fields.map((n) => SHORT[n] === undefined ? n : (SHORT[n] || 'class')).join(' ') + '</td></tr>';
+    }).join('');
+  }
+  function renderDetail(f) {
+    const box = $('detail');
+    const t = f.tracks.find((q) => q.id === S.sel);
+    if (!t) { box.innerHTML = '<div class="empty">No track selected.</div>'; return; }
+    const e = eig(t.pxx, t.pyy, t.pxy);
+    const rho = t.pxy / Math.sqrt(t.pxx * t.pyy);
+    const label = t.cls === 'hostile' ? 'Hostile · ' + (t.st === 'coasting' ? 'coasting' : 'confirmed') : t.cls === 'friendly' ? 'Friendly · ' + ((Sim.PLATFORMS[S.applied.assign[t.id]] || {}).name || 'beacon') : 'Unknown · tentative';
+    const b = t.cls === 'hostile' ? 'background:#FF5A5F;color:#14080A' : t.cls === 'friendly' ? 'background:#5B9BFF;color:#06101F' : 'border:1px dashed #F5B13D;color:#F5B13D';
+    // position error sparkline over last 30 s
+    const pts = [];
+    for (let j = 0; j <= 30; j++) {
+      const pf = S.res.frames[f.k - j * 10 >= 0 ? f.k - j * 10 : -1];
+      if (!pf) break;
+      const pt = pf.tracks.find((q) => q.id === t.id);
+      if (pt && pt.err !== undefined) pts.unshift([(30 - j) * 11.33, pt.err]);
+    }
+    const now = t.err !== undefined ? t.err : null;
+    const path = pts.map((p, i) => (i ? 'L' : 'M') + p[0].toFixed(1) + ' ' + (46 - Math.min(20, p[1]) * 2).toFixed(1)).join('');
+    const sources = t.nodes.length ? t.nodes.map((n) => '<span class="tag">' + n + '</span>').join('') : '<span style="color:#8B96A5">none in last 2 s</span>';
+    box.innerHTML =
+      '<div class="row" style="align-items:center"><span class="mono" style="padding:1px 6px;font-size:12px;font-weight:600;border-radius:2px;' + b + '">' + t.id + '</span><span style="font-size:13px;font-weight:600">' + label + '</span><span class="grow"></span><button class="ibtn" id="centre" aria-label="Centre map on ' + t.id + '"><svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="5" fill="none" stroke="currentColor" stroke-width="1.4"/><circle cx="8" cy="8" r="1.5" fill="currentColor"/></svg></button></div>' +
+      '<div style="display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px">' +
+      [['σ east', Math.sqrt(t.pxx).toFixed(1) + ' m'], ['σ north', Math.sqrt(t.pyy).toFixed(1) + ' m'], ['ρ', rho.toFixed(2)], ['95% ellipse', (e.a * 2.45).toFixed(0) + '×' + (e.b * 2.45).toFixed(0) + ' m']]
+        .map((c) => '<div style="display:flex;flex-direction:column;gap:2px"><span style="font-size:11px;color:#8B96A5">' + c[0] + '</span><span class="mono" style="font-size:13px">' + c[1] + '</span></div>').join('') + '</div>' +
+      '<div style="display:flex;flex-direction:column;gap:6px"><span style="font-size:11px;color:#8B96A5">Contributing sensors (last 2 s)</span><div class="mono" style="display:flex;flex-wrap:wrap;gap:6px;font-size:11px">' + sources + '</div></div>' +
+      '<div style="display:flex;flex-direction:column;gap:6px"><div style="display:flex;justify-content:space-between;font-size:11px;color:#8B96A5"><span>Friend / foe presumption</span><span class="mono" style="color:#FF8A8D">P(hostile) ' + t.pH.toFixed(2) + '</span></div>' +
+      '<div style="display:flex;height:10px;border-radius:2px;overflow:hidden;background:#1B222C"><div style="width:' + t.pH * 100 + '%;background:#FF5A5F"></div><div style="width:' + t.pU * 100 + '%;background:#F5B13D"></div><div style="width:' + t.pF * 100 + '%;background:#5B9BFF"></div></div>' +
+      '<div class="mono" style="display:flex;justify-content:space-between;font-size:10px;color:#8B96A5"><span>◆ hostile ' + t.pH.toFixed(2) + '</span><span>✣ unknown ' + t.pU.toFixed(2) + '</span><span>● friend ' + t.pF.toFixed(2) + '</span></div></div>' +
+      '<div style="display:flex;flex-direction:column;gap:4px"><div style="display:flex;justify-content:space-between;font-size:11px;color:#8B96A5"><span>Position error vs truth, last 30 s</span><span class="mono" style="color:#C9D1DB">' + (now === null ? 'no truth match' : 'now ' + now.toFixed(1) + ' m') + '</span></div>' +
+      '<svg viewBox="0 0 340 56" width="100%" role="img" aria-label="Position error sparkline"><path d="M0 46H340M0 6H340" stroke="#222A35"/>' + (path ? '<path d="' + path + '" fill="none" stroke="#3FC1D9" stroke-width="1.6"/>' : '') + '<text x="0" y="55" class="mono" style="font-size:9px;fill:#8B96A5">0 m</text><text x="0" y="14" class="mono" style="font-size:9px;fill:#8B96A5">20 m</text></svg></div>';
+    $('centre').addEventListener('click', () => centreOn(t));
+  }
+
+  // ------------------------------------------------------------------ footer
+  function buildTimeline() {
+    const r = S.res, W = 1000;
+    const x = (t) => (t / r.T_END) * W;
+    const marks = r.timeline.filter((m, i, a) => a.findIndex((q) => q.label === m.label && Math.abs(q.t - m.t) < 1) === i);
+    S.marks = marks;
+    const col = { red: '#FF5A5F', amber: '#F5B13D' };
+    $('tlSvg').innerHTML = '<rect x="0" y="22" width="1000" height="6" rx="3" fill="#1B222C"/><rect id="tlFill" x="0" y="22" width="0" height="6" rx="3" fill="#1D6A79"/>' +
+      marks.map((m) => '<path d="M' + x(m.t) + ' 14V28" stroke="' + col[m.color] + '" stroke-width="2"' + (m.dashed ? ' stroke-dasharray="2 2"' : '') + '/>').join('') +
+      '<path id="tlHead" d="M0 6V36" stroke="#E6EAF0" stroke-width="2"/>';
+    $('tlLabels').innerHTML = marks.filter((m) => !/^H\d seen$/.test(m.label)).slice(0, 8).map((m) => '<span style="position:absolute;left:' + (m.t / r.T_END * 100) + '%;transform:translateX(-50%);color:' + (m.color === 'amber' ? '#F5B13D' : '#8B96A5') + '">' + m.label + '</span>').join('');
+  }
+  function renderFooter(f) {
+    const r = S.res;
+    $('tNow').textContent = fmtT(f.t);
+    $('scrub').value = S.idx;
+    $('tlFill').setAttribute('width', (f.t / r.T_END) * 1000);
+    $('tlHead').setAttribute('d', 'M' + (f.t / r.T_END) * 1000 + ' 6V36');
+    $('play').innerHTML = S.playing
+      ? '<svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true"><path d="M4 3h3v10H4zM9 3h3v10H9z" fill="currentColor"/></svg>'
+      : '<svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true"><path d="M4 2l10 6-10 6z" fill="currentColor"/></svg>';
+    $('play').setAttribute('aria-label', S.playing ? 'Pause' : 'Play');
+    const set = (id, v, bad) => { const m = $(id); m.querySelector('b').textContent = v; m.classList.toggle('bad', !!bad); };
+    set('mCount', (f.m.countErr > 0 ? '+' : '') + f.m.countErr, f.m.countErr !== 0);
+    set('mRmse', f.m.rmse10 === null ? '-' : f.m.rmse10.toFixed(1) + ' m', false);
+    set('mSwap', f.m.swaps, f.m.swaps > 0);
+    set('mFfa', f.m.ffa, f.m.ffa > 0);
+    renderChart(f);
+  }
+  function renderChart(f) {
+    const svg = $('chart');
+    const X0 = 40, X1 = 790;
+    if (S.tab === 'time') {
+      $('chartLegend').innerHTML = '<span style="color:#3FC1D9">━</span> RMSE (m) &nbsp; <span style="color:#F5B13D">┅</span> |count error| ×5';
+      $('chartNote').textContent = 'Position RMSE (10 s window) and absolute hostile-count error up to the playhead.';
+      const xs = (t) => X0 + (t / S.res.T_END) * (X1 - X0);
+      let rm = '', ce = '';
+      for (let k = 0; k <= S.idx; k += 3) {
+        const fr = S.res.frames[k];
+        if (fr.m.rmse10 !== null) rm += (rm ? 'L' : 'M') + xs(fr.t).toFixed(1) + ' ' + (100 - Math.min(20, fr.m.rmse10) * 4).toFixed(1);
+        ce += (ce ? 'L' : 'M') + xs(fr.t).toFixed(1) + ' ' + (100 - Math.min(20, Math.abs(fr.m.countErr) * 5) * 4).toFixed(1);
+      }
+      svg.innerHTML = '<path d="M40 20H800M40 60H800M40 100H800" stroke="#1B222C"/>' +
+        [['20', 24], ['10', 64], ['0', 104]].map((l) => '<text x="32" y="' + l[1] + '" text-anchor="end" class="mono" style="font-size:10px;fill:#8B96A5">' + l[0] + '</text>').join('') +
+        (rm ? '<path d="' + rm + '" fill="none" stroke="#3FC1D9" stroke-width="1.8"/>' : '') + (ce ? '<path d="' + ce + '" fill="none" stroke="#F5B13D" stroke-width="1.8" stroke-dasharray="4 3"/>' : '') +
+        '<path d="M' + xs(f.t) + ' 10V106" stroke="#E6EAF0" stroke-dasharray="2 2"/>' +
+        '<text x="40" y="124" class="mono" style="font-size:10px;fill:#8B96A5">0 s</text><text x="415" y="124" text-anchor="middle" class="mono" style="font-size:10px;fill:#8B96A5">60 s</text><text x="790" y="124" text-anchor="end" class="mono" style="font-size:10px;fill:#8B96A5">120 s</text>';
+    } else {
+      const d = degradation();
+      const xs = (l) => X0 + 20 + (l / 90) * (X1 - X0 - 40);
+      const ys = (v) => 100 - Math.min(20, v) * 4;
+      const line = (key, dash) => 'M' + d.filter((p) => p[key] !== null).map((p) => xs(p.loss).toFixed(1) + ' ' + ys(key === 'count' ? p[key] * 5 : p[key]).toFixed(1)).join('L');
+      $('chartLegend').innerHTML = '<span style="color:#3FC1D9">━</span> RMSE (m) &nbsp; <span style="color:#F5B13D">┅</span> mean |count err| ×5 &nbsp; <span style="color:#FF5A5F">╌</span> ID swaps + friendly FAs';
+      $('chartNote').textContent = 'Realistic mode, same seed and weather, message loss 0-90 %, scored over t = ' + S.res.EVAL[0] + '-' + S.res.EVAL[1] + ' s (around the crossing); swaps/FAs over the whole run.';
+      svg.innerHTML = '<path d="M40 20H800M40 60H800M40 100H800" stroke="#1B222C"/>' +
+        [['20', 24], ['10', 64], ['0', 104]].map((l) => '<text x="32" y="' + l[1] + '" text-anchor="end" class="mono" style="font-size:10px;fill:#8B96A5">' + l[0] + '</text>').join('') +
+        '<path d="' + line('rmse') + '" fill="none" stroke="#3FC1D9" stroke-width="1.8"/><path d="' + line('count') + '" fill="none" stroke="#F5B13D" stroke-width="1.8" stroke-dasharray="4 3"/>' +
+        '<path d="M' + d.map((p) => xs(p.loss).toFixed(1) + ' ' + ys((p.swaps + p.ffa) * 2).toFixed(1)).join('L') + '" fill="none" stroke="#FF5A5F" stroke-width="1.6" stroke-dasharray="1.5 3"/>' +
+        d.map((p) => '<text x="' + xs(p.loss) + '" y="124" text-anchor="middle" class="mono" style="font-size:10px;fill:#8B96A5">' + p.loss + '%</text>').join('');
+    }
+    $('tabTime').setAttribute('aria-selected', S.tab === 'time');
+    $('tabDeg').setAttribute('aria-selected', S.tab === 'deg');
+  }
+
+  // ------------------------------------------------------------------ render
+  function render() {
+    const f = frame();
+    $('clock').textContent = 'T+' + fmtT(f.t);
+    $('frameInfo').textContent = 'frame ' + f.k + ' · fused @ 10 Hz';
+    const cb = $('crossBanner');
+    if (f.cross) {
+      cb.style.display = 'inline-flex';
+      cb.innerHTML = '▲ Crossing in ' + f.cross.tca.toFixed(1) + ' s: identity risk <span class="mono" style="font-weight:500;color:#F5D9A0">' + f.cross.a + ' × ' + f.cross.b + ' · sep ' + f.cross.sep.toFixed(0) + ' m</span>';
+    } else cb.style.display = 'none';
+    renderRight(f); // first: it settles the selected track the map highlights
+    renderMap(f);
+    renderFooter(f);
+    applyView();
+  }
+
+  // ----------------------------------------------------------------- view
+  function applyView() {
+    const v = S.view;
+    $('map').setAttribute('viewBox', v.x + ' ' + v.y + ' ' + v.w + ' ' + v.h);
+  }
+  const clampV = (x, size) => Math.min(1300 - size, Math.max(-300, x)); // the view may move a little past the area edge
+  function zoom(k, cx, cy) {
+    const v = S.view;
+    const w = Math.min(1000, Math.max(120, v.w * k)), h = w;
+    cx = cx === undefined ? v.x + v.w / 2 : cx; cy = cy === undefined ? v.y + v.h / 2 : cy;
+    v.x = clampV(cx - ((cx - v.x) / v.w) * w, w); v.y = clampV(cy - ((cy - v.y) / v.h) * h, h);
+    v.w = w; v.h = h;
+    applyView();
+  }
+  function centreOn(t) {
+    const v = S.view;
+    v.x = clampV(t.x - v.w / 2, v.w); v.y = clampV(Y(t.y) - v.h / 2, v.h);
+    applyView();
+  }
+  function wireMap() {
+    const svg = $('map');
+    const pt = (e) => { const p = svg.createSVGPoint(); p.x = e.clientX; p.y = e.clientY; return p.matrixTransform(svg.getScreenCTM().inverse()); };
+    svg.addEventListener('wheel', (e) => { e.preventDefault(); const p = pt(e); zoom(e.deltaY > 0 ? 1.15 : 1 / 1.15, p.x, p.y); }, { passive: false });
+    let drag = null;
+    svg.addEventListener('pointerdown', (e) => { drag = { p: pt(e), x: S.view.x, y: S.view.y }; svg.setPointerCapture(e.pointerId); svg.style.cursor = 'grabbing'; });
+    svg.addEventListener('pointerup', () => { drag = null; svg.style.cursor = 'grab'; });
+    svg.addEventListener('pointermove', (e) => {
+      const p = pt(e);
+      $('coord').textContent = 'E' + pad4(p.x) + ' N' + pad4(Y(p.y)) + ' · elev ' + Math.round(elev(p.x, Y(p.y))) + ' m';
+      if (drag) {
+        const q = { x: drag.p.x - p.x, y: drag.p.y - p.y };
+        S.view.x = clampV(S.view.x + q.x, S.view.w); S.view.y = clampV(S.view.y + q.y, S.view.h);
+        applyView();
+      }
+    });
+    $('zin').addEventListener('click', () => zoom(1 / 1.3));
+    $('zout').addEventListener('click', () => zoom(1.3));
+    $('zfit').addEventListener('click', () => { S.view = { x: 0, y: 0, w: 1000, h: 1000 }; applyView(); });
+  }
+
+  // ---------------------------------------------------------------- playback
+  function setIdx(i) { S.idx = Math.max(0, Math.min(S.res.NF, i)); render(); }
+  function wirePlayback() {
+    $('play').addEventListener('click', () => { if (S.idx >= S.res.NF) S.idx = 0; S.playing = !S.playing; S.last = 0; render(); });
+    $('back').addEventListener('click', () => { S.playing = false; setIdx(S.idx - 1); });
+    $('fwd').addEventListener('click', () => { S.playing = false; setIdx(S.idx + 1); });
+    $('scrub').addEventListener('input', (e) => { S.playing = false; setIdx(+e.target.value); });
+    $('tabTime').addEventListener('click', () => { S.tab = 'time'; renderChart(frame()); });
+    $('tabDeg').addEventListener('click', () => { S.tab = 'deg'; renderChart(frame()); });
+    $('trkBody').addEventListener('click', (e) => { const tr = e.target.closest('tr'); if (tr) { S.sel = tr.dataset.id; S.userSel = true; render(); } });
+    document.addEventListener('keydown', (e) => {
+      if (/INPUT|SELECT|TEXTAREA/.test(document.activeElement.tagName) || e.target.closest('button')) return;
+      if (e.key === ' ') { e.preventDefault(); $('play').click(); }
+      else if (e.key === 'ArrowLeft') { S.playing = false; setIdx(S.idx - (e.shiftKey ? 10 : 1)); }
+      else if (e.key === 'ArrowRight') { S.playing = false; setIdx(S.idx + (e.shiftKey ? 10 : 1)); }
+    });
+    function tick(ts) {
+      if (S.playing && S.res) {
+        if (S.last) {
+          S.acc += ((ts - S.last) / 1000) * S.speed * 10;
+          const steps = Math.floor(S.acc);
+          if (steps > 0) {
+            S.acc -= steps;
+            S.idx = Math.min(S.res.NF, S.idx + steps);
+            if (S.idx >= S.res.NF) S.playing = false;
+            render();
+          }
+        }
+        S.last = ts;
+      } else S.last = 0;
+      requestAnimationFrame(tick);
+    }
+    requestAnimationFrame(tick);
+  }
+
+  // -------------------------------------------------------------------- init
+  buildLeft();
+  fillInputs();
+  syncStaged();
+  wireMap();
+  wirePlayback();
+  $('scrub').max = Sim.NF;
+  const q = new URLSearchParams(location.search); // ?weather=night&seed=7&t=49.5&tab=deg
+  if (Sim.WEATHERS.indexOf(q.get('weather')) >= 0) S.staged.weather = q.get('weather');
+  if (q.get('seed')) S.staged.seed = parseInt(q.get('seed'), 10) || S.staged.seed;
+  fillInputs(); syncStaged(); renderLoadout();
+  runSim(S.staged); // ?t=45 opens paused at 45 s; ?tab=deg opens the degradation chart
+  if (q.has('t')) { S.playing = false; setIdx(Math.round(parseFloat(q.get('t')) * 10) || 0); }
+  if (q.get('tab') === 'deg') { S.tab = 'deg'; renderChart(frame()); }
+  window.__dds = S; // handy for debugging in the console
+})();

@@ -7,6 +7,7 @@ Combine partial, noisy observations from low-cost UAS and ground sensors, fused 
 > Status: **planning phase, first standalone code in.** Weather and sensor quality (`sensors/`), the friend/foe estimator with investigation trigger (`friend_foe/`) and the JSON codec (`common/codec.py`) exist and are tested. Simulation, seeder, tracker and fusion are not started.
 
 Run the tests (Python 3.11+): `python -m pip install pytest`, then `python -m pytest` from the repo root.
+> Status: **planning phase.** Folder structure and documents are in place. A first simulation viewer with a built-in mock simulation runs from [ui/viewer](ui/viewer/) (see [ui/ui.md](ui/ui.md)); the real modules are not implemented yet.
 
 ## Documents
 
@@ -14,6 +15,7 @@ Run the tests (Python 3.11+): `python -m pip install pytest`, then `python -m py
 |----------|----------|
 | [docs/concept.md](docs/concept.md) | Problem statement, scenario, success criteria, our approach, components, metrics |
 | [docs/system-design.md](docs/system-design.md) | Architecture, module responsibilities, conventions (time, coordinates, uncertainty), message schemas, module design, repo layout, open decisions |
+| [docs/seeder-config.md](docs/seeder-config.md) | Scenario config (one JSON + seed), degradation switches, presets, open questions for the mentor |
 | [docs/team-plan.md](docs/team-plan.md) | Work split between 3 people, interfaces between them, per-phase tasks, working agreements |
 
 ## Repository layout
@@ -23,7 +25,7 @@ Run the tests (Python 3.11+): `python -m pip install pytest`, then `python -m py
 | [docs/](docs/) | Concept and system design |
 | [common/](common/) | Shared message schemas, time/frame helpers, bus interface |
 | [scenarios/](scenarios/) | Scenario definitions |
-| [seeder/](seeder/) | Generates realistic scenario components |
+| [seeder/](seeder/) | Platform/sensor catalog (PostgreSQL) and scenario components |
 | [simulation/](simulation/) | 2D world, ground truth, network channel emulator |
 | [sensors/](sensors/) | Camera, acoustic, RF, radar models incl. weather effects |
 | [tracker/](tracker/) | Per-node local multi-target tracker |
@@ -31,7 +33,7 @@ Run the tests (Python 3.11+): `python -m pip install pytest`, then `python -m py
 | [fusion/](fusion/) | Cross-node track merge, global IDs, COP |
 | [predictor/](predictor/) | Optional short-horizon prediction |
 | [scoring/](scoring/) | Metrics harness |
-| [ui/](ui/) | Operator view and simulation viewer |
+| [ui/](ui/) | Operator view and simulation viewer (first version in `ui/viewer`, run with `python serve.py` there) |
 
 ## Architecture in one paragraph
 
@@ -139,3 +141,7 @@ Detailed split and per-phase tasks: [docs/team-plan.md](docs/team-plan.md).
 | 2026-10-17 | Tracks get a `suspicious` class. Suspicious tracks are investigated by sending the closest suitable drone. The drone-behaviour owner picks and flies the drone; the weather/estimator owner provides the trigger and the weather-based standoff distance (`required_standoff`). Messages `InvestigationRequest` and `InvestigationStatus` added to the draft schemas |
 | 2026-10-17 | First standalone code: `sensors/weather.py` and `sensors/quality.py`, `friend_foe/estimator.py` and `friend_foe/investigation.py`, `common/codec.py` (`encode`/`decode` plus message size log). Placeholder numbers throughout, to be tuned |
 | 2026-10-17 | JSON (JSON Lines) for messages while building the pipeline. `encode`/`decode` pair at the channel boundary so a compact binary format (Protobuf/CBOR) can replace it later without touching modules |
+| 2026-10-17 | Seeder catalog: 5 real UAS models + 2 ground sensors with different sensor loadouts and per-weather effects; stored in PostgreSQL, simulations saved as plain JSONB; seeder in Python |
+| 2026-10-17 | Adopted team notes: scenarios are one JSON config + seed with a separate ground-truth file and separate tuning/test seeds; per-degradation switches; presets; radar resolution cell; sensor set switchable per scenario; catalog numbers moved to the more conservative values |
+| 2026-10-17 | Viewer runs the seed with a platform chosen per node from the catalog; weather now includes night; map fills its panel |
+| 2026-10-17 | Sensor limits enforced (range window, field of view, pointing, falling detection probability, rate, latency); sensors report native data only (cameras bearing+elevation, no range) and the tracker consumes it with EKF updates |
