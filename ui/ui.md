@@ -22,6 +22,8 @@ python serve.py
 
 Scenarios: the **Preset** picker (easy, medium, hard, challenge) loads a scenario made by the seeder, and its weather, platforms and degradations become the starting settings. With `python serve.py`, the **Seed** field makes a new scenario for that preset (new hostile paths and patrols) when you press Apply & restart, through `/api/scenario?preset=hard&seed=7`. Opened as a file or with plain `http.server`, only the default seed of each preset is available (`scenarios.js`, made by `python seeder/export_scenarios.py`).
 
+Commanded drones: the mock accepts `commands` from the scenario (or `params.commands`) and flies the drone under its platform's speed, acceleration and turn limits; commands and acks cross the same lossy channel, with retries. Motion maths is in `drones.js`; test with `node ui/viewer/test-commands.js`. The viewer has no control for sending commands yet.
+
 What the mock does:
 
 | Part | Mock behaviour |

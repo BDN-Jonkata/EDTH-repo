@@ -1,12 +1,12 @@
 {
-  "_comment": "Platform catalog. Every UAS must carry at least 2 different detection modalities (eo_camera, thermal_camera, microphone, rf_receiver, radar) so that in any weather at least one module still works. Checked by seed_catalog.py --check.",
+  "_comment": "Platform catalog. Every UAS must carry at least 2 different detection modalities (eo_camera, thermal_camera, microphone, rf_receiver, radar) so that in any weather at least one module still works. Checked by seed_catalog.py --check. Every UAS has spec.flight (max_speed_mps, max_accel_mps2, max_turn_dps): ASSUMED limits for commanded motion, to be replaced with datasheet values.",
   "platforms": [
     {
       "id": "mini4pro",
       "name": "DJI Mini 4 Pro (class)",
       "platform": "uas",
       "cost_tier": "low",
-      "spec": {"mass_g": 249, "obstacle_sensing": "omnidirectional vision"},
+      "spec": {"mass_g": 249, "obstacle_sensing": "omnidirectional vision", "flight": {"max_speed_mps": 16, "max_accel_mps2": 5, "max_turn_dps": 180, "assumed": true}},
       "modules": [
         {"module_id": "eo_visible_mini4", "count": 1, "mount": "gimbal"},
         {"module_id": "mic_mems_single", "count": 1, "mount": "body"},
@@ -21,7 +21,7 @@
       "name": "Parrot ANAFI Thermal",
       "platform": "uas",
       "cost_tier": "mid",
-      "spec": {},
+      "spec": {"flight": {"max_speed_mps": 15, "max_accel_mps2": 4, "max_turn_dps": 150, "assumed": true}},
       "modules": [
         {"module_id": "eo_visible_anafi", "count": 1, "mount": "gimbal"},
         {"module_id": "thermal_lepton35", "count": 1, "mount": "gimbal"},
@@ -36,7 +36,7 @@
       "name": "DIY PX4 quad, passive sensing",
       "platform": "uas",
       "cost_tier": "low",
-      "spec": {"flight_controller": "Pixhawk class running PX4"},
+      "spec": {"flight_controller": "Pixhawk class running PX4", "flight": {"max_speed_mps": 18, "max_accel_mps2": 6, "max_turn_dps": 200, "assumed": true}},
       "modules": [
         {"module_id": "rf_sdr_receiver", "count": 1, "mount": "body"},
         {"module_id": "mic_array_4ch", "count": 1, "mount": "body"},
@@ -51,7 +51,7 @@
       "name": "DIY PX4 quad, radar + camera",
       "platform": "uas",
       "cost_tier": "low",
-      "spec": {"flight_controller": "Pixhawk class running PX4"},
+      "spec": {"flight_controller": "Pixhawk class running PX4", "flight": {"max_speed_mps": 14, "max_accel_mps2": 4, "max_turn_dps": 150, "assumed": true}},
       "modules": [
         {"module_id": "radar_mmwave_small", "count": 1, "mount": "front"},
         {"module_id": "eo_visible_basic", "count": 1, "mount": "front"},
@@ -66,7 +66,7 @@
       "name": "Skydio X10 (high-end reference)",
       "platform": "uas",
       "cost_tier": "high",
-      "spec": {"nav_cameras": 6, "obstacle_sensing_range_m": 20},
+      "spec": {"nav_cameras": 6, "obstacle_sensing_range_m": 20, "flight": {"max_speed_mps": 16, "max_accel_mps2": 5, "max_turn_dps": 200, "assumed": true}},
       "modules": [
         {"module_id": "eo_visible_x10", "count": 1, "mount": "gimbal"},
         {"module_id": "thermal_boson_plus_640", "count": 1, "mount": "gimbal"},

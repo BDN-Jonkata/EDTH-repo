@@ -777,7 +777,13 @@
      "cost_tier": "low",
      "spec": {
       "mass_g": 249,
-      "obstacle_sensing": "omnidirectional vision"
+      "obstacle_sensing": "omnidirectional vision",
+      "flight": {
+       "max_speed_mps": 16,
+       "max_accel_mps2": 5,
+       "max_turn_dps": 180,
+       "assumed": true
+      }
      },
      "modules": [
       {
@@ -809,7 +815,14 @@
      "name": "Parrot ANAFI Thermal",
      "platform": "uas",
      "cost_tier": "mid",
-     "spec": {},
+     "spec": {
+      "flight": {
+       "max_speed_mps": 15,
+       "max_accel_mps2": 4,
+       "max_turn_dps": 150,
+       "assumed": true
+      }
+     },
      "modules": [
       {
        "module_id": "eo_visible_anafi",
@@ -841,7 +854,13 @@
      "platform": "uas",
      "cost_tier": "low",
      "spec": {
-      "flight_controller": "Pixhawk class running PX4"
+      "flight_controller": "Pixhawk class running PX4",
+      "flight": {
+       "max_speed_mps": 18,
+       "max_accel_mps2": 6,
+       "max_turn_dps": 200,
+       "assumed": true
+      }
      },
      "modules": [
       {
@@ -874,7 +893,13 @@
      "platform": "uas",
      "cost_tier": "low",
      "spec": {
-      "flight_controller": "Pixhawk class running PX4"
+      "flight_controller": "Pixhawk class running PX4",
+      "flight": {
+       "max_speed_mps": 14,
+       "max_accel_mps2": 4,
+       "max_turn_dps": 150,
+       "assumed": true
+      }
      },
      "modules": [
       {
@@ -908,7 +933,13 @@
      "cost_tier": "high",
      "spec": {
       "nav_cameras": 6,
-      "obstacle_sensing_range_m": 20
+      "obstacle_sensing_range_m": 20,
+      "flight": {
+       "max_speed_mps": 16,
+       "max_accel_mps2": 5,
+       "max_turn_dps": 200,
+       "assumed": true
+      }
      },
      "modules": [
       {

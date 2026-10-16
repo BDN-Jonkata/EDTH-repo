@@ -7,6 +7,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "seeder"))
 
+import catalog as cat  # noqa: E402
 import scenario as sc  # noqa: E402
 
 PRESETS = sorted((ROOT / "scenarios").glob("*.json"))
@@ -120,6 +121,26 @@ class Generator(unittest.TestCase):
         self.assertLess(min(speeds), 0.5)
 
 
+class Commands(unittest.TestCase):
+    def test_commands_are_sorted_and_marked_in_truth(self):
+        cfg = load("easy")
+        cfg["commands"] = [{"t": 30, "drone_id": "F1", "command": "return_to_patrol"},
+                           {"t": 10, "drone_id": "F1", "command": "goto", "target": [500, 500], "face_target": [600, 600]}]
+        scenario, truth = sc.generate(cfg)
+        self.assertEqual([c["t"] for c in scenario["commands"]], [10, 30])
+        self.assertTrue(truth["scripted_baseline_only"])
+
+    def test_no_commands_by_default(self):
+        scenario, truth = sc.generate(load("easy"))
+        self.assertEqual(scenario["commands"], [])
+        self.assertNotIn("scripted_baseline_only", truth)
+
+    def test_every_uas_has_flight_limits(self):
+        for p in cat.load_catalog()["platforms"]:
+            if p["platform"] == "uas":
+                self.assertEqual(sorted(p["spec"]["flight"]), ["assumed", "max_accel_mps2", "max_speed_mps", "max_turn_dps"], p["id"])
+
+
 class Validation(unittest.TestCase):
     def check(self, mutate, text):
         cfg = load("challenge")
@@ -145,6 +166,15 @@ class Validation(unittest.TestCase):
 
     def test_rejects_ground_outside_area(self):
         self.check(lambda c: c.update(ground=[{"id": "G", "platform": "gs_radar_rf", "position": [2000, 5]}]), "outside the area")
+
+    def test_rejects_command_to_unknown_drone(self):
+        self.check(lambda c: c.update(commands=[{"t": 5, "drone_id": "F9", "command": "hold"}]), "drone_id must be one of")
+
+    def test_rejects_goto_outside_area(self):
+        self.check(lambda c: c.update(commands=[{"t": 5, "drone_id": "F1", "command": "goto", "target": [1500, 5]}]), "target must be")
+
+    def test_rejects_unknown_command(self):
+        self.check(lambda c: c.update(commands=[{"t": 5, "drone_id": "F1", "command": "dance"}]), "command must be one of")
 
     def test_seed_sets(self):
         self.assertEqual(sc.seed_for("tuning", 0), 1)

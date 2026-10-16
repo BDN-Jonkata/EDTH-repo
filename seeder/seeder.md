@@ -53,6 +53,8 @@ python seeder/export_scenarios.py                              # refresh ui/view
 python -m unittest discover -s seeder/tests -v                 # 21 tests
 ```
 
+Commands: a config may list `commands` (goto, hold, return_to_patrol for a friendly drone at time `t`, with optional speed cap and camera direction). The scenario carries them sorted; the simulation sends them over the channel. The generator's own `truth.json` stays the scripted baseline and is marked `scripted_baseline_only`. Every UAS in the catalog has assumed flight limits (`spec.flight`) used for commanded motion. Message formats: [data-formats.md](../docs/data-formats.md#drone-commands).
+
 The viewer's simulation uses the same motion maths; a test run showed the generator's truth and the simulation's truth agree to within 0.01 m.
 
 ## Sensor limits and native output

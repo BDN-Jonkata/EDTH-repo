@@ -90,7 +90,7 @@ Modules in one codebase with clear interfaces and a message bus between them. Th
 Field names are provisional; the final contract lives in `common/`.
 
 ```
-Header        { msg_id, source_id, t_sent, seq }
+Header        { msg_id, source_id, t_sent, seq, schema_version }   -- every message also has a top-level `type`; encode/decode in common/codec.py
 
 Observation   { header, sensor_type, sensor_id, t_obs,
                 kind: bearing | range_bearing | position | detection,

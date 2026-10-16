@@ -278,52 +278,60 @@
   function trackSvg(t, f, sel) {
     const x = t.x, y = Y(t.y);
     const col = t.cls === 'hostile' ? COL.h : t.cls === 'friendly' ? COL.f : COL.u;
-    const mk = t.cls === 'hostile' ? 'm-r' : t.cls === 'friendly' ? 'm-b' : 'm-a';
     const sp = spd(t.vx, t.vy);
     const coast = t.st === 'coasting';
-    const o = [];
-    o.push('<g' + (coast ? ' opacity="0.55"' : '') + '>');
+    const o = ['<g' + (coast ? ' opacity="0.55"' : '') + '>'];
     if (S.layers.unc && t.cls !== 'friendly') o.push(ellipseSvg(t.x, t.y, t, col, t.st === 'tentative' || coast, 2.45));
-    if (S.layers.pred && t.cls === 'hostile') {
-      const L = 10, ex = t.x + t.vx * L, ey = t.y + t.vy * L;
-      const w = Math.min(120, 2.45 * Math.sqrt(Math.max(t.pxx, t.pyy)) + 3 * L);
-      const n = Math.hypot(t.vx, t.vy) || 1, nx = -t.vy / n, ny = t.vx / n;
-      o.push('<path d="M' + x + ' ' + y + 'L' + (ex + nx * w) + ' ' + Y(ey + ny * w) + 'L' + (ex - nx * w) + ' ' + Y(ey - ny * w) + 'Z" fill="' + col + '" fill-opacity="0.06"/>');
-      o.push('<path d="M' + x + ' ' + y + 'L' + ex + ' ' + Y(ey) + '" stroke="' + col + '" stroke-width="1.6" stroke-dasharray="1.5 4" stroke-linecap="round" fill="none"/>');
-    }
-    // trail
-    if (t.cls !== 'friendly') {
-      let px = t.x, py = t.y;
-      for (let j = 1; j <= 4; j++) {
-        const pf = S.res.frames[Math.max(0, f.k - j * 10)];
-        const pt = pf && pf.tracks.find((q) => q.id === t.id);
-        if (!pt) break;
-        o.push('<path d="M' + px + ' ' + Y(py) + 'L' + pt.x + ' ' + Y(pt.y) + '" stroke="' + col + '" stroke-width="2" stroke-linecap="round" stroke-opacity="' + (0.65 - j * 0.14).toFixed(2) + '" fill="none"/>');
-        px = pt.x; py = pt.y;
-      }
-    }
-    if (sp > 0.5) {
-      const L = t.cls === 'friendly' ? 30 : 12 + Math.min(30, sp * 2.4), ux = t.vx / sp, uy = t.vy / sp;
-      o.push('<path d="M' + (x + ux * 12) + ' ' + (y - uy * 12) + 'L' + (x + ux * L) + ' ' + (y - uy * L) + '" stroke="' + col + '" stroke-width="2" marker-end="url(#' + mk + ')"/>');
-    }
-    if (t.cls === 'hostile') {
-      o.push('<path d="M' + x + ' ' + (y - 12) + 'L' + (x + 12) + ' ' + y + 'L' + x + ' ' + (y + 12) + 'L' + (x - 12) + ' ' + y + 'Z" fill="#2A1012" stroke="' + col + '" stroke-width="2"/>');
-    } else if (t.cls === 'friendly') {
-      o.push('<circle cx="' + x + '" cy="' + y + '" r="10" fill="#0E1A2E" stroke="' + col + '" stroke-width="2"/><path d="M' + (x - 4) + ' ' + (y - 4) + 'L' + (x + 4) + ' ' + (y + 4) + 'M' + (x + 4) + ' ' + (y - 4) + 'L' + (x - 4) + ' ' + (y + 4) + '" stroke="' + col + '" stroke-width="1.6"/>');
-    } else {
-      o.push('<circle cx="' + x + '" cy="' + y + '" r="7" fill="#241A08" stroke="' + col + '" stroke-width="2.2" stroke-dasharray="3 2"/>');
-    }
+    if (S.layers.pred && t.cls === 'hostile') o.push(predictionSvg(t, col));
+    if (t.cls !== 'friendly') o.push(trailSvg(t, f, col));
+    if (sp > 0.5) o.push(headingSvg(t, sp, col));
+    o.push(glyphSvg(t, col));
     if (sel) o.push('<circle cx="' + x + '" cy="' + y + '" r="20" fill="none" stroke="#8FE3F2" stroke-width="1.4"/>');
-    if (t.cls === 'friendly') {
-      o.push('<text class="t tb" x="' + (x + 13) + '" y="' + (y - 11) + '" style="fill:#8DB8FF">' + t.id + '</text>');
-    } else if (t.cls === 'hostile') {
-      o.push('<rect x="' + (x - 13) + '" y="' + (y - 38) + '" width="26" height="16" rx="2" fill="' + col + '"' + (sel ? ' stroke="#E6EAF0" stroke-width="1.5"' : '') + '/><text class="tb" x="' + x + '" y="' + (y - 26) + '" text-anchor="middle" fill="#14080A">' + t.id + '</text>');
-      o.push('<text class="t" x="' + (x + 17) + '" y="' + (y - 26) + '">' + sp.toFixed(0) + ' m/s</text>');
-    } else {
-      o.push('<rect x="' + (x - 13) + '" y="' + (y - 34) + '" width="26" height="16" rx="2" fill="#0D1318" stroke="' + col + '" stroke-dasharray="3 2"/><text class="tb" x="' + x + '" y="' + (y - 22) + '" text-anchor="middle" fill="' + col + '">' + t.id + '</text><text class="t" x="' + (x + 17) + '" y="' + (y - 22) + '" style="fill:' + col + '">TENT</text>');
-    }
+    o.push(labelSvg(t, col, sp, sel));
     o.push('</g>');
     return o.join('');
+  }
+  // where a hostile will be in 10 s: a widening cone around its velocity
+  function predictionSvg(t, col) {
+    const x = t.x, y = Y(t.y);
+    const L = 10, ex = t.x + t.vx * L, ey = t.y + t.vy * L;
+    const w = Math.min(120, 2.45 * Math.sqrt(Math.max(t.pxx, t.pyy)) + 3 * L);
+    const n = Math.hypot(t.vx, t.vy) || 1, nx = -t.vy / n, ny = t.vx / n;
+    return '<path d="M' + x + ' ' + y + 'L' + (ex + nx * w) + ' ' + Y(ey + ny * w) + 'L' + (ex - nx * w) + ' ' + Y(ey - ny * w) + 'Z" fill="' + col + '" fill-opacity="0.06"/>' +
+      '<path d="M' + x + ' ' + y + 'L' + ex + ' ' + Y(ey) + '" stroke="' + col + '" stroke-width="1.6" stroke-dasharray="1.5 4" stroke-linecap="round" fill="none"/>';
+  }
+  // the last 4 s of the track, one fading segment per second
+  function trailSvg(t, f, col) {
+    let px = t.x, py = t.y, out = '';
+    for (let j = 1; j <= 4; j++) {
+      const pf = S.res.frames[Math.max(0, f.k - j * 10)];
+      const pt = pf && pf.tracks.find((q) => q.id === t.id);
+      if (!pt) break;
+      out += '<path d="M' + px + ' ' + Y(py) + 'L' + pt.x + ' ' + Y(pt.y) + '" stroke="' + col + '" stroke-width="2" stroke-linecap="round" stroke-opacity="' + (0.65 - j * 0.14).toFixed(2) + '" fill="none"/>';
+      px = pt.x; py = pt.y;
+    }
+    return out;
+  }
+  function headingSvg(t, sp, col) {
+    const x = t.x, y = Y(t.y), mk = t.cls === 'hostile' ? 'm-r' : t.cls === 'friendly' ? 'm-b' : 'm-a';
+    const L = t.cls === 'friendly' ? 30 : 12 + Math.min(30, sp * 2.4), ux = t.vx / sp, uy = t.vy / sp;
+    return '<path d="M' + (x + ux * 12) + ' ' + (y - uy * 12) + 'L' + (x + ux * L) + ' ' + (y - uy * L) + '" stroke="' + col + '" stroke-width="2" marker-end="url(#' + mk + ')"/>';
+  }
+  // the marker: diamond = hostile, crossed circle = friendly, dashed circle = unknown
+  function glyphSvg(t, col) {
+    const x = t.x, y = Y(t.y);
+    if (t.cls === 'hostile') return '<path d="M' + x + ' ' + (y - 12) + 'L' + (x + 12) + ' ' + y + 'L' + x + ' ' + (y + 12) + 'L' + (x - 12) + ' ' + y + 'Z" fill="#2A1012" stroke="' + col + '" stroke-width="2"/>';
+    if (t.cls === 'friendly') return '<circle cx="' + x + '" cy="' + y + '" r="10" fill="#0E1A2E" stroke="' + col + '" stroke-width="2"/><path d="M' + (x - 4) + ' ' + (y - 4) + 'L' + (x + 4) + ' ' + (y + 4) + 'M' + (x + 4) + ' ' + (y - 4) + 'L' + (x - 4) + ' ' + (y + 4) + '" stroke="' + col + '" stroke-width="1.6"/>';
+    return '<circle cx="' + x + '" cy="' + y + '" r="7" fill="#241A08" stroke="' + col + '" stroke-width="2.2" stroke-dasharray="3 2"/>';
+  }
+  function labelSvg(t, col, sp, sel) {
+    const x = t.x, y = Y(t.y);
+    if (t.cls === 'friendly') return '<text class="t tb" x="' + (x + 13) + '" y="' + (y - 11) + '" style="fill:#8DB8FF">' + t.id + '</text>';
+    if (t.cls === 'hostile') {
+      return '<rect x="' + (x - 13) + '" y="' + (y - 38) + '" width="26" height="16" rx="2" fill="' + col + '"' + (sel ? ' stroke="#E6EAF0" stroke-width="1.5"' : '') + '/><text class="tb" x="' + x + '" y="' + (y - 26) + '" text-anchor="middle" fill="#14080A">' + t.id + '</text>' +
+        '<text class="t" x="' + (x + 17) + '" y="' + (y - 26) + '">' + sp.toFixed(0) + ' m/s</text>';
+    }
+    return '<rect x="' + (x - 13) + '" y="' + (y - 34) + '" width="26" height="16" rx="2" fill="#0D1318" stroke="' + col + '" stroke-dasharray="3 2"/><text class="tb" x="' + x + '" y="' + (y - 22) + '" text-anchor="middle" fill="' + col + '">' + t.id + '</text><text class="t" x="' + (x + 17) + '" y="' + (y - 22) + '" style="fill:' + col + '">TENT</text>';
   }
 
   function renderMap(f) {
@@ -333,63 +341,54 @@
     const links = [];
     if (S.layers.net) drawLinks(f, links);
     $('links').innerHTML = links.join('');
-
-    // fixed infrastructure
+    $('fixed').innerHTML = fixedSvg();
+    $('furniture').innerHTML = FURNITURE;
+    $('raw').innerHTML = S.layers.raw ? f.meas.map(measSvg).join('') : '';
+    $('truth').innerHTML = S.layers.truth ? truthSvg(f) : '';
+    $('cross').innerHTML = f.cross ? crossSvg(f.cross) : '';
+    $('trk').innerHTML = S.layers.tracks ? tracksSvg(f) : '';
+  }
+  // fixed infrastructure: the C2 node and the ground sensors
+  function fixedSvg() {
     const c2 = scen().c2;
     const fx = ['<g transform="translate(' + c2.x + ' ' + Y(c2.y) + ')"><path d="M-9 -9H9V9H-9Z" fill="#141A22" stroke="#9AA4B2" stroke-width="1.5"/><path d="M-5 0H5M0 -5V5" stroke="#9AA4B2" stroke-width="1.5"/></g><text class="t" x="' + (c2.x + 14) + '" y="' + (Y(c2.y) + 18) + '">C2</text>'];
     scen().ground.forEach((g) => {
-      fx.push('<g transform="translate(' + g.x + ' ' + Y(g.y) + ')"><rect x="-8" y="-8" width="16" height="16" fill="#141A22" stroke="#C9D1DB" stroke-width="1.6"/><circle r="3" fill="#C9D1DB"/></g><text class="t" x="' + (g.x + 12) + '" y="' + (Y(g.y) + 22) + '" style="fill:#C9D1DB">' + g.id + ' ' + S.res.sensors.filter((q) => q.node === g.id).map((q) => q.kind).join('·') + '</text>');
+      const kinds = S.res.sensors.filter((q) => q.node === g.id).map((q) => q.kind).join('·');
+      fx.push('<g transform="translate(' + g.x + ' ' + Y(g.y) + ')"><rect x="-8" y="-8" width="16" height="16" fill="#141A22" stroke="#C9D1DB" stroke-width="1.6"/><circle r="3" fill="#C9D1DB"/></g><text class="t" x="' + (g.x + 12) + '" y="' + (Y(g.y) + 22) + '" style="fill:#C9D1DB">' + g.id + ' ' + kinds + '</text>');
     });
-    $('fixed').innerHTML = fx.join('');
-    $('furniture').innerHTML = FURNITURE;
-
-    // raw observations
-    const raw = [];
-    if (S.layers.raw) {
-      f.meas.forEach((m) => {
-        const c = KCOL[m.k], dash = m.clutter ? ' stroke-dasharray="1 3"' : '';
-        if (m.m === 'bearing') { // a direction only: a ray, no range
-          const L = Math.min(m.rmax, 450);
-          raw.push('<path d="M' + m.sx + ' ' + Y(m.sy) + 'L' + (m.sx + L * Math.cos(m.b)).toFixed(1) + ' ' + Y(m.sy + L * Math.sin(m.b)).toFixed(1) + '" stroke="' + c + '" stroke-opacity="0.4" stroke-width="1"' + dash + '/>');
-        } else if (m.m === 'range') { // a distance only: a ring around the sensor
-          raw.push('<circle cx="' + m.sx + '" cy="' + Y(m.sy) + '" r="' + m.r.toFixed(1) + '" fill="none" stroke="' + c + '" stroke-opacity="0.35" stroke-width="1" stroke-dasharray="2 3"/>');
-        } else { // range + bearing: a point
-          const x = m.sx + m.r * Math.cos(m.b), y = Y(m.sy + m.r * Math.sin(m.b));
-          raw.push('<path d="M' + m.sx + ' ' + Y(m.sy) + 'L' + x.toFixed(1) + ' ' + y.toFixed(1) + '" stroke="' + c + '" stroke-opacity="0.25" stroke-width="1"/>');
-          raw.push('<path d="M' + (x - 3).toFixed(1) + ' ' + (y - 3).toFixed(1) + 'l6 6m0 -6l-6 6" stroke="' + c + '" stroke-width="1.4"' + (m.merged ? ' stroke-dasharray="2 1"' : '') + '/>');
-          if (m.merged) raw.push('<circle cx="' + x.toFixed(1) + '" cy="' + y.toFixed(1) + '" r="9" fill="none" stroke="' + c + '" stroke-width="1"/>');
-        }
-      });
+    return fx.join('');
+  }
+  // one raw observation in its native form: a ray (bearing), a ring (range) or a point (range + bearing)
+  function measSvg(m) {
+    const c = KCOL[m.k], dash = m.clutter ? ' stroke-dasharray="1 3"' : '';
+    if (m.m === 'bearing') {
+      const L = Math.min(m.rmax, 450);
+      return '<path d="M' + m.sx + ' ' + Y(m.sy) + 'L' + (m.sx + L * Math.cos(m.b)).toFixed(1) + ' ' + Y(m.sy + L * Math.sin(m.b)).toFixed(1) + '" stroke="' + c + '" stroke-opacity="0.4" stroke-width="1"' + dash + '/>';
     }
-    $('raw').innerHTML = raw.join('');
-
-    // truth + residual lines
-    const tr = [];
-    if (S.layers.truth) {
-      const mp = {};
-      f.match.forEach((m) => { mp[m[1]] = m[0]; });
-      f.truth.forEach((o) => {
-        const t = mp[o.id] && f.tracks.find((q) => q.id === mp[o.id]);
-        if (t) tr.push('<path d="M' + o.x + ' ' + Y(o.y) + 'L' + t.x + ' ' + Y(t.y) + '" stroke="#E6EAF0" stroke-width="1" stroke-opacity="0.7"/>');
-        tr.push('<circle cx="' + o.x + '" cy="' + Y(o.y) + '" r="' + (o.kind === 'hostile' ? 6 : 5) + '" fill="none" stroke="#E6EAF0" stroke-width="1.3"/>');
-      });
+    if (m.m === 'range') {
+      return '<circle cx="' + m.sx + '" cy="' + Y(m.sy) + '" r="' + m.r.toFixed(1) + '" fill="none" stroke="' + c + '" stroke-opacity="0.35" stroke-width="1" stroke-dasharray="2 3"/>';
     }
-    $('truth').innerHTML = tr.join('');
-
-    // crossing zone
-    const cz = [];
-    if (f.cross) {
-      cz.push('<circle class="pulse" cx="' + f.cross.x + '" cy="' + Y(f.cross.y) + '" r="48" fill="#F5B13D" fill-opacity="0.07" stroke="#F5B13D" stroke-width="1.6" stroke-dasharray="6 4"/><text class="t" x="' + f.cross.x + '" y="' + (Y(f.cross.y) + 66) + '" text-anchor="middle" style="fill:#F5B13D">PRED. CROSSING T−' + f.cross.tca.toFixed(1) + ' s</text>');
-    }
-    $('cross').innerHTML = cz.join('');
-
-    // tracks
-    const tk = [];
-    if (S.layers.tracks) {
-      const order = { friendly: 0, unknown: 1, hostile: 2 };
-      f.tracks.slice().sort((a, b) => order[a.cls] - order[b.cls]).forEach((t) => tk.push(trackSvg(t, f, t.id === S.sel)));
-    }
-    $('trk').innerHTML = tk.join('');
+    const x = m.sx + m.r * Math.cos(m.b), y = Y(m.sy + m.r * Math.sin(m.b));
+    return '<path d="M' + m.sx + ' ' + Y(m.sy) + 'L' + x.toFixed(1) + ' ' + y.toFixed(1) + '" stroke="' + c + '" stroke-opacity="0.25" stroke-width="1"/>' +
+      '<path d="M' + (x - 3).toFixed(1) + ' ' + (y - 3).toFixed(1) + 'l6 6m0 -6l-6 6" stroke="' + c + '" stroke-width="1.4"' + (m.merged ? ' stroke-dasharray="2 1"' : '') + '/>' +
+      (m.merged ? '<circle cx="' + x.toFixed(1) + '" cy="' + y.toFixed(1) + '" r="9" fill="none" stroke="' + c + '" stroke-width="1"/>' : '');
+  }
+  // truth markers, with a residual line to the track matched with each
+  function truthSvg(f) {
+    const mp = {};
+    f.match.forEach((m) => { mp[m[1]] = m[0]; });
+    return f.truth.map((o) => {
+      const t = mp[o.id] && f.tracks.find((q) => q.id === mp[o.id]);
+      const line = t ? '<path d="M' + o.x + ' ' + Y(o.y) + 'L' + t.x + ' ' + Y(t.y) + '" stroke="#E6EAF0" stroke-width="1" stroke-opacity="0.7"/>' : '';
+      return line + '<circle cx="' + o.x + '" cy="' + Y(o.y) + '" r="' + (o.kind === 'hostile' ? 6 : 5) + '" fill="none" stroke="#E6EAF0" stroke-width="1.3"/>';
+    }).join('');
+  }
+  function crossSvg(cross) {
+    return '<circle class="pulse" cx="' + cross.x + '" cy="' + Y(cross.y) + '" r="48" fill="#F5B13D" fill-opacity="0.07" stroke="#F5B13D" stroke-width="1.6" stroke-dasharray="6 4"/><text class="t" x="' + cross.x + '" y="' + (Y(cross.y) + 66) + '" text-anchor="middle" style="fill:#F5B13D">PRED. CROSSING T−' + cross.tca.toFixed(1) + ' s</text>';
+  }
+  function tracksSvg(f) {
+    const order = { friendly: 0, unknown: 1, hostile: 2 };
+    return f.tracks.slice().sort((a, b) => order[a.cls] - order[b.cls]).map((t) => trackSvg(t, f, t.id === S.sel)).join('');
   }
 
   // -------------------------------------------------------------- right panel
