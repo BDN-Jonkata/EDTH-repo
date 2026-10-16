@@ -1,0 +1,107 @@
+{
+  "_comment": "Platform catalog. Every UAS must carry at least 2 different detection modalities (eo_camera, thermal_camera, microphone, rf_receiver, radar) so that in any weather at least one module still works. Checked by seed_catalog.py --check.",
+  "platforms": [
+    {
+      "id": "mini4pro",
+      "name": "DJI Mini 4 Pro (class)",
+      "platform": "uas",
+      "cost_tier": "low",
+      "spec": {"mass_g": 249, "obstacle_sensing": "omnidirectional vision"},
+      "modules": [
+        {"module_id": "eo_visible_mini4", "count": 1, "mount": "gimbal"},
+        {"module_id": "mic_mems_single", "count": 1, "mount": "body"},
+        {"module_id": "gnss_basic", "count": 1, "mount": "body"},
+        {"module_id": "imu_basic", "count": 1, "mount": "body"}
+      ],
+      "verified": false,
+      "source": "https://www.adorama.com/alc/dji-mini-4-pro-drone (retailer; confirm on dji.com). Audio payload assumed."
+    },
+    {
+      "id": "anafi_thermal",
+      "name": "Parrot ANAFI Thermal",
+      "platform": "uas",
+      "cost_tier": "mid",
+      "spec": {},
+      "modules": [
+        {"module_id": "eo_visible_anafi", "count": 1, "mount": "gimbal"},
+        {"module_id": "thermal_lepton35", "count": 1, "mount": "gimbal"},
+        {"module_id": "gnss_basic", "count": 1, "mount": "body"},
+        {"module_id": "imu_basic", "count": 1, "mount": "body"}
+      ],
+      "verified": false,
+      "source": "https://www.parrot.com/us/drones/anafi-thermal/technical-specifications (mass, endurance not recorded yet)"
+    },
+    {
+      "id": "px4_quad_passive",
+      "name": "DIY PX4 quad, passive sensing",
+      "platform": "uas",
+      "cost_tier": "low",
+      "spec": {"flight_controller": "Pixhawk class running PX4"},
+      "modules": [
+        {"module_id": "rf_sdr_receiver", "count": 1, "mount": "body"},
+        {"module_id": "mic_array_4ch", "count": 1, "mount": "body"},
+        {"module_id": "gnss_basic", "count": 1, "mount": "body"},
+        {"module_id": "imu_basic", "count": 1, "mount": "body"}
+      ],
+      "verified": false,
+      "source": "https://docs.px4.io/v1.16/en/msg_docs/"
+    },
+    {
+      "id": "px4_quad_radar",
+      "name": "DIY PX4 quad, radar + camera",
+      "platform": "uas",
+      "cost_tier": "low",
+      "spec": {"flight_controller": "Pixhawk class running PX4"},
+      "modules": [
+        {"module_id": "radar_mmwave_small", "count": 1, "mount": "front"},
+        {"module_id": "eo_visible_basic", "count": 1, "mount": "front"},
+        {"module_id": "gnss_basic", "count": 1, "mount": "body"},
+        {"module_id": "imu_basic", "count": 1, "mount": "body"}
+      ],
+      "verified": false,
+      "source": "https://docs.px4.io/v1.16/en/msg_docs/"
+    },
+    {
+      "id": "skydio_x10",
+      "name": "Skydio X10 (high-end reference)",
+      "platform": "uas",
+      "cost_tier": "high",
+      "spec": {"nav_cameras": 6, "obstacle_sensing_range_m": 20},
+      "modules": [
+        {"module_id": "eo_visible_x10", "count": 1, "mount": "gimbal"},
+        {"module_id": "thermal_boson_plus_640", "count": 1, "mount": "gimbal"},
+        {"module_id": "mic_mems_single", "count": 1, "mount": "body"},
+        {"module_id": "gnss_basic", "count": 1, "mount": "body"},
+        {"module_id": "imu_basic", "count": 1, "mount": "body"}
+      ],
+      "verified": false,
+      "source": "https://skydio.com/x10/technical-specs (camera and thermal facts verified; audio payload assumed)"
+    },
+    {
+      "id": "gs_eo_acoustic",
+      "name": "Ground sensor, camera + acoustic array",
+      "platform": "ground",
+      "cost_tier": "low",
+      "spec": {"fixed": true},
+      "modules": [
+        {"module_id": "eo_visible_basic", "count": 1, "mount": "mast"},
+        {"module_id": "mic_array_4ch", "count": 1, "mount": "mast"}
+      ],
+      "verified": false,
+      "source": null
+    },
+    {
+      "id": "gs_radar_rf",
+      "name": "Ground sensor, radar + RF",
+      "platform": "ground",
+      "cost_tier": "low",
+      "spec": {"fixed": true},
+      "modules": [
+        {"module_id": "radar_mmwave_small", "count": 1, "mount": "mast"},
+        {"module_id": "rf_sdr_receiver", "count": 1, "mount": "mast"}
+      ],
+      "verified": false,
+      "source": null
+    }
+  ]
+}

@@ -1,0 +1,771 @@
+{
+  "_comment": "Sensor module catalog. 'sim' = the module's limits and noise: range window (min_range_m..range_m), horizontal field of view (fov_deg) and pointing (forward = along the platform heading, omni = 360 degrees), detection probability pd that falls to pd*pd_far at max range, rate_hz, latency_ms, and noise per native field. 'native' = what the module really reports (type + fields with units); a camera reports bearing and elevation, never range. 'weather_effects' = multipliers on range, noise and pd. All numbers are ASSUMED starting points to be tuned (confirm with the mentor) unless verified=true; 'spec' holds manufacturer facts.",
+  "modules": [
+    {
+      "id": "eo_visible_mini4",
+      "kind": "eo_camera",
+      "name": "Visible camera, 1/1.3-inch CMOS (DJI Mini 4 Pro class)",
+      "spec": {
+        "sensor": "1/1.3-inch CMOS",
+        "megapixels": 48,
+        "aperture": "f/1.7"
+      },
+      "sim": {
+        "range_m": 150,
+        "min_range_m": 3,
+        "fov_deg": 82,
+        "pointing": "forward",
+        "pd": 0.85,
+        "pd_far": 0.5,
+        "rate_hz": 5,
+        "latency_ms": 100,
+        "noise": {
+          "bearing_deg": 0.8,
+          "elevation_deg": 1.2
+        }
+      },
+      "outputs": [
+        "bearing_deg",
+        "elevation_deg",
+        "class_hint"
+      ],
+      "weather_effects": {
+        "fog": {
+          "range_mult": 0.35,
+          "noise_mult": 1.8,
+          "pd_mult": 0.8
+        },
+        "rain": {
+          "range_mult": 0.7,
+          "noise_mult": 1.3,
+          "pd_mult": 0.9
+        },
+        "wind": {
+          "range_mult": 1.0,
+          "noise_mult": 1.2,
+          "pd_mult": 0.95
+        },
+        "night": {
+          "range_mult": 0.3,
+          "noise_mult": 2.0,
+          "pd_mult": 0.5
+        }
+      },
+      "verified": false,
+      "source": "Retailer pages only (adorama.com, t3.com); confirm on dji.com",
+      "native": {
+        "type": "bearing_elevation",
+        "fields": [
+          {
+            "name": "bearing_deg",
+            "unit": "deg",
+            "desc": "direction to target, 0 = north, clockwise"
+          },
+          {
+            "name": "elevation_deg",
+            "unit": "deg",
+            "desc": "angle above the horizon"
+          },
+          {
+            "name": "class_hint",
+            "unit": "label",
+            "desc": "friendly or unknown, less reliable with distance"
+          }
+        ]
+      }
+    },
+    {
+      "id": "eo_visible_anafi",
+      "kind": "eo_camera",
+      "name": "Visible camera (Parrot ANAFI Thermal)",
+      "spec": {
+        "note": "Visible camera figures not confirmed; read the ANAFI Thermal technical specifications page"
+      },
+      "sim": {
+        "range_m": 150,
+        "min_range_m": 3,
+        "fov_deg": 70,
+        "pointing": "forward",
+        "pd": 0.85,
+        "pd_far": 0.5,
+        "rate_hz": 5,
+        "latency_ms": 100,
+        "noise": {
+          "bearing_deg": 0.8,
+          "elevation_deg": 1.2
+        }
+      },
+      "outputs": [
+        "bearing_deg",
+        "elevation_deg",
+        "class_hint"
+      ],
+      "weather_effects": {
+        "fog": {
+          "range_mult": 0.35,
+          "noise_mult": 1.8,
+          "pd_mult": 0.8
+        },
+        "rain": {
+          "range_mult": 0.7,
+          "noise_mult": 1.3,
+          "pd_mult": 0.9
+        },
+        "wind": {
+          "range_mult": 1.0,
+          "noise_mult": 1.2,
+          "pd_mult": 0.95
+        },
+        "night": {
+          "range_mult": 0.3,
+          "noise_mult": 2.0,
+          "pd_mult": 0.5
+        }
+      },
+      "verified": false,
+      "source": "https://www.parrot.com/us/drones/anafi-thermal/technical-specifications",
+      "native": {
+        "type": "bearing_elevation",
+        "fields": [
+          {
+            "name": "bearing_deg",
+            "unit": "deg",
+            "desc": "direction to target, 0 = north, clockwise"
+          },
+          {
+            "name": "elevation_deg",
+            "unit": "deg",
+            "desc": "angle above the horizon"
+          },
+          {
+            "name": "class_hint",
+            "unit": "label",
+            "desc": "friendly or unknown, less reliable with distance"
+          }
+        ]
+      }
+    },
+    {
+      "id": "eo_visible_x10",
+      "kind": "eo_camera",
+      "name": "Wide visible camera, 1-inch 50.3 MP (Skydio X10)",
+      "spec": {
+        "sensor": "1-inch",
+        "megapixels": 50.3,
+        "fov_deg": 93,
+        "max_resolution": "3840x2880"
+      },
+      "sim": {
+        "range_m": 250,
+        "min_range_m": 3,
+        "fov_deg": 93,
+        "pointing": "forward",
+        "pd": 0.9,
+        "pd_far": 0.55,
+        "rate_hz": 5,
+        "latency_ms": 80,
+        "noise": {
+          "bearing_deg": 0.5,
+          "elevation_deg": 0.8
+        }
+      },
+      "outputs": [
+        "bearing_deg",
+        "elevation_deg",
+        "class_hint"
+      ],
+      "weather_effects": {
+        "fog": {
+          "range_mult": 0.35,
+          "noise_mult": 1.8,
+          "pd_mult": 0.8
+        },
+        "rain": {
+          "range_mult": 0.7,
+          "noise_mult": 1.3,
+          "pd_mult": 0.9
+        },
+        "wind": {
+          "range_mult": 1.0,
+          "noise_mult": 1.1,
+          "pd_mult": 0.95
+        },
+        "night": {
+          "range_mult": 0.4,
+          "noise_mult": 1.8,
+          "pd_mult": 0.6
+        }
+      },
+      "verified": true,
+      "source": "https://www.skydio.com/resources/datasheets/skydio-x10",
+      "native": {
+        "type": "bearing_elevation",
+        "fields": [
+          {
+            "name": "bearing_deg",
+            "unit": "deg",
+            "desc": "direction to target, 0 = north, clockwise"
+          },
+          {
+            "name": "elevation_deg",
+            "unit": "deg",
+            "desc": "angle above the horizon"
+          },
+          {
+            "name": "class_hint",
+            "unit": "label",
+            "desc": "friendly or unknown, less reliable with distance"
+          }
+        ]
+      }
+    },
+    {
+      "id": "eo_visible_basic",
+      "kind": "eo_camera",
+      "name": "Basic low-cost visible camera module (DIY / ground sensor)",
+      "spec": {
+        "note": "Generic hobby-grade camera module, for example a Raspberry Pi camera class; pick a real part before relying on numbers"
+      },
+      "sim": {
+        "range_m": 150,
+        "min_range_m": 3,
+        "fov_deg": 62,
+        "pointing": "forward",
+        "pd": 0.8,
+        "pd_far": 0.45,
+        "rate_hz": 5,
+        "latency_ms": 150,
+        "noise": {
+          "bearing_deg": 1.2,
+          "elevation_deg": 1.8
+        }
+      },
+      "outputs": [
+        "bearing_deg",
+        "elevation_deg",
+        "class_hint"
+      ],
+      "weather_effects": {
+        "fog": {
+          "range_mult": 0.35,
+          "noise_mult": 1.8,
+          "pd_mult": 0.8
+        },
+        "rain": {
+          "range_mult": 0.7,
+          "noise_mult": 1.3,
+          "pd_mult": 0.9
+        },
+        "wind": {
+          "range_mult": 1.0,
+          "noise_mult": 1.3,
+          "pd_mult": 0.95
+        },
+        "night": {
+          "range_mult": 0.25,
+          "noise_mult": 2.2,
+          "pd_mult": 0.4
+        }
+      },
+      "verified": false,
+      "source": null,
+      "native": {
+        "type": "bearing_elevation",
+        "fields": [
+          {
+            "name": "bearing_deg",
+            "unit": "deg",
+            "desc": "direction to target, 0 = north, clockwise"
+          },
+          {
+            "name": "elevation_deg",
+            "unit": "deg",
+            "desc": "angle above the horizon"
+          },
+          {
+            "name": "class_hint",
+            "unit": "label",
+            "desc": "friendly or unknown, less reliable with distance"
+          }
+        ]
+      }
+    },
+    {
+      "id": "thermal_lepton35",
+      "kind": "thermal_camera",
+      "name": "FLIR Lepton 3.5 thermal, 160x120 (Parrot ANAFI Thermal)",
+      "spec": {
+        "sensor": "FLIR Lepton 3.5 microbolometer (radiometric)",
+        "resolution": "160x120",
+        "hfov_deg": 57
+      },
+      "sim": {
+        "range_m": 120,
+        "min_range_m": 3,
+        "fov_deg": 57,
+        "pointing": "forward",
+        "pd": 0.8,
+        "pd_far": 0.4,
+        "rate_hz": 8,
+        "latency_ms": 120,
+        "noise": {
+          "bearing_deg": 0.8,
+          "elevation_deg": 1.0
+        }
+      },
+      "outputs": [
+        "bearing_deg",
+        "elevation_deg",
+        "intensity"
+      ],
+      "weather_effects": {
+        "fog": {
+          "range_mult": 0.7,
+          "noise_mult": 1.2,
+          "pd_mult": 0.9
+        },
+        "rain": {
+          "range_mult": 0.7,
+          "noise_mult": 1.3,
+          "pd_mult": 0.85
+        },
+        "wind": {
+          "range_mult": 1.0,
+          "noise_mult": 1.0,
+          "pd_mult": 1.0
+        },
+        "night": {
+          "range_mult": 1.0,
+          "noise_mult": 1.0,
+          "pd_mult": 1.0
+        }
+      },
+      "verified": true,
+      "source": "https://www.parrot.com/us/drones/anafi-thermal/technical-specifications",
+      "native": {
+        "type": "bearing_elevation",
+        "fields": [
+          {
+            "name": "bearing_deg",
+            "unit": "deg",
+            "desc": "direction to target, 0 = north, clockwise"
+          },
+          {
+            "name": "elevation_deg",
+            "unit": "deg",
+            "desc": "angle above the horizon"
+          },
+          {
+            "name": "intensity",
+            "unit": "a.u.",
+            "desc": "brightness of the heat blob"
+          }
+        ]
+      }
+    },
+    {
+      "id": "thermal_boson_plus_640",
+      "kind": "thermal_camera",
+      "name": "FLIR Boson+ thermal, 640x512 (Skydio X10)",
+      "spec": {
+        "sensor": "Teledyne FLIR Boson+ uncooled VOx microbolometer",
+        "resolution": "640x512",
+        "fov_deg": 41,
+        "nedt_mk": 30
+      },
+      "sim": {
+        "range_m": 300,
+        "min_range_m": 3,
+        "fov_deg": 41,
+        "pointing": "forward",
+        "pd": 0.9,
+        "pd_far": 0.5,
+        "rate_hz": 8,
+        "latency_ms": 80,
+        "noise": {
+          "bearing_deg": 0.3,
+          "elevation_deg": 0.4
+        }
+      },
+      "outputs": [
+        "bearing_deg",
+        "elevation_deg",
+        "intensity"
+      ],
+      "weather_effects": {
+        "fog": {
+          "range_mult": 0.7,
+          "noise_mult": 1.2,
+          "pd_mult": 0.9
+        },
+        "rain": {
+          "range_mult": 0.7,
+          "noise_mult": 1.3,
+          "pd_mult": 0.85
+        },
+        "wind": {
+          "range_mult": 1.0,
+          "noise_mult": 1.0,
+          "pd_mult": 1.0
+        },
+        "night": {
+          "range_mult": 1.0,
+          "noise_mult": 1.0,
+          "pd_mult": 1.0
+        }
+      },
+      "verified": true,
+      "source": "https://www.skydio.com/resources/datasheets/skydio-x10",
+      "native": {
+        "type": "bearing_elevation",
+        "fields": [
+          {
+            "name": "bearing_deg",
+            "unit": "deg",
+            "desc": "direction to target, 0 = north, clockwise"
+          },
+          {
+            "name": "elevation_deg",
+            "unit": "deg",
+            "desc": "angle above the horizon"
+          },
+          {
+            "name": "intensity",
+            "unit": "a.u.",
+            "desc": "brightness of the heat blob"
+          }
+        ]
+      }
+    },
+    {
+      "id": "mic_mems_single",
+      "kind": "microphone",
+      "name": "Single MEMS microphone (onboard audio)",
+      "spec": {
+        "note": "Single omnidirectional mic, no bearing from one channel; used for presence and loudness"
+      },
+      "sim": {
+        "range_m": 60,
+        "min_range_m": 0,
+        "fov_deg": 360,
+        "pointing": "omni",
+        "pd": 0.5,
+        "pd_far": 0.3,
+        "rate_hz": 2,
+        "latency_ms": 60,
+        "noise": {
+          "level_db": 4.0,
+          "source_level_db": 90
+        }
+      },
+      "outputs": [
+        "level_db",
+        "presence"
+      ],
+      "weather_effects": {
+        "fog": {
+          "range_mult": 1.0,
+          "noise_mult": 1.0,
+          "pd_mult": 1.0
+        },
+        "rain": {
+          "range_mult": 0.8,
+          "noise_mult": 1.4,
+          "pd_mult": 0.8
+        },
+        "wind": {
+          "range_mult": 0.5,
+          "noise_mult": 2.5,
+          "pd_mult": 0.4
+        },
+        "night": {
+          "range_mult": 1.0,
+          "noise_mult": 1.0,
+          "pd_mult": 1.0
+        }
+      },
+      "verified": false,
+      "source": null,
+      "native": {
+        "type": "level",
+        "fields": [
+          {
+            "name": "level_db",
+            "unit": "dB",
+            "desc": "sound level; range is estimated from it"
+          },
+          {
+            "name": "presence",
+            "unit": "bool",
+            "desc": "a drone-like sound is heard"
+          }
+        ]
+      }
+    },
+    {
+      "id": "mic_array_4ch",
+      "kind": "microphone",
+      "name": "4-channel MEMS microphone array (acoustic direction finding)",
+      "spec": {
+        "channels": 4,
+        "note": "Generic array; pick a real part before relying on numbers"
+      },
+      "sim": {
+        "range_m": 150,
+        "min_range_m": 0,
+        "fov_deg": 360,
+        "pointing": "omni",
+        "pd": 0.6,
+        "pd_far": 0.3,
+        "rate_hz": 5,
+        "latency_ms": 100,
+        "noise": {
+          "bearing_deg": 7.5,
+          "level_db": 3.0
+        }
+      },
+      "outputs": [
+        "bearing_deg",
+        "level_db",
+        "presence"
+      ],
+      "weather_effects": {
+        "fog": {
+          "range_mult": 1.0,
+          "noise_mult": 1.0,
+          "pd_mult": 1.0
+        },
+        "rain": {
+          "range_mult": 0.8,
+          "noise_mult": 1.4,
+          "pd_mult": 0.8
+        },
+        "wind": {
+          "range_mult": 0.5,
+          "noise_mult": 2.5,
+          "pd_mult": 0.4
+        },
+        "night": {
+          "range_mult": 1.0,
+          "noise_mult": 1.0,
+          "pd_mult": 1.0
+        }
+      },
+      "verified": false,
+      "source": null,
+      "native": {
+        "type": "bearing_level",
+        "fields": [
+          {
+            "name": "bearing_deg",
+            "unit": "deg",
+            "desc": "direction of the sound, 0 = north, clockwise"
+          },
+          {
+            "name": "level_db",
+            "unit": "dB",
+            "desc": "sound level"
+          },
+          {
+            "name": "presence",
+            "unit": "bool",
+            "desc": "a drone-like sound is heard"
+          }
+        ]
+      }
+    },
+    {
+      "id": "rf_sdr_receiver",
+      "kind": "rf_receiver",
+      "name": "Wideband RF receiver (RTL-SDR class)",
+      "spec": {
+        "note": "Passive; only sees emitting drones (control link, video link). Pick a real part before relying on numbers"
+      },
+      "sim": {
+        "range_m": 300,
+        "min_range_m": 0,
+        "fov_deg": 360,
+        "pointing": "omni",
+        "pd": 0.8,
+        "pd_far": 0.5,
+        "rate_hz": 5,
+        "latency_ms": 100,
+        "noise": {
+          "bearing_deg": 12,
+          "rssi_db": 4.0
+        }
+      },
+      "outputs": [
+        "bearing_deg",
+        "rssi_dbm",
+        "center_freq_mhz"
+      ],
+      "weather_effects": {
+        "fog": {
+          "range_mult": 1.0,
+          "noise_mult": 1.0,
+          "pd_mult": 1.0
+        },
+        "rain": {
+          "range_mult": 0.95,
+          "noise_mult": 1.1,
+          "pd_mult": 0.95
+        },
+        "wind": {
+          "range_mult": 1.0,
+          "noise_mult": 1.0,
+          "pd_mult": 1.0
+        },
+        "night": {
+          "range_mult": 1.0,
+          "noise_mult": 1.0,
+          "pd_mult": 1.0
+        }
+      },
+      "verified": false,
+      "source": "https://www.rtl-sdr.com (not yet read)",
+      "native": {
+        "type": "bearing_rssi",
+        "fields": [
+          {
+            "name": "bearing_deg",
+            "unit": "deg",
+            "desc": "direction of the emitter, 0 = north, clockwise"
+          },
+          {
+            "name": "rssi_dbm",
+            "unit": "dBm",
+            "desc": "received signal strength"
+          },
+          {
+            "name": "center_freq_mhz",
+            "unit": "MHz",
+            "desc": "emitter frequency"
+          }
+        ]
+      }
+    },
+    {
+      "id": "radar_mmwave_small",
+      "kind": "radar",
+      "name": "Small low-cost mmWave radar",
+      "spec": {
+        "note": "Generic short-range radar module with range, azimuth and Doppler output. Two targets inside one resolution cell (sim.resolution_cell) merge into a single measurement. The Ainstein US-D1 (24 GHz, 0.5-50 m) is only an altimeter, shown at https://store.sundance.com/docs/Ainstein/US-D1-Data-Sheetv2.pdf as a pattern for spec format"
+      },
+      "sim": {
+        "range_m": 400,
+        "min_range_m": 10,
+        "fov_deg": 90,
+        "pointing": "forward",
+        "pd": 0.9,
+        "pd_far": 0.6,
+        "rate_hz": 5,
+        "latency_ms": 50,
+        "noise": {
+          "range_m": 7,
+          "azimuth_deg": 2.5,
+          "radial_mps": 0.5
+        },
+        "resolution_cell": {
+          "range_m": 15,
+          "azimuth_deg": 3
+        }
+      },
+      "outputs": [
+        "range_m",
+        "azimuth_deg",
+        "radial_mps",
+        "snr_db"
+      ],
+      "weather_effects": {
+        "fog": {
+          "range_mult": 0.9,
+          "noise_mult": 1.05,
+          "pd_mult": 0.95
+        },
+        "rain": {
+          "range_mult": 0.85,
+          "noise_mult": 1.3,
+          "pd_mult": 0.85,
+          "clutter_rate_per_s": 0.5
+        },
+        "wind": {
+          "range_mult": 1.0,
+          "noise_mult": 1.0,
+          "pd_mult": 1.0
+        },
+        "night": {
+          "range_mult": 1.0,
+          "noise_mult": 1.0,
+          "pd_mult": 1.0
+        }
+      },
+      "verified": false,
+      "source": null,
+      "native": {
+        "type": "range_azimuth_doppler",
+        "fields": [
+          {
+            "name": "range_m",
+            "unit": "m",
+            "desc": "distance to target"
+          },
+          {
+            "name": "azimuth_deg",
+            "unit": "deg",
+            "desc": "direction, 0 = north, clockwise"
+          },
+          {
+            "name": "radial_mps",
+            "unit": "m/s",
+            "desc": "speed toward (-) or away from (+) the radar"
+          },
+          {
+            "name": "snr_db",
+            "unit": "dB",
+            "desc": "signal to noise"
+          }
+        ]
+      }
+    },
+    {
+      "id": "gnss_basic",
+      "kind": "gnss",
+      "name": "Consumer GNSS receiver",
+      "spec": {},
+      "sim": {
+        "rate_hz": 5,
+        "noise": {
+          "position_m": 2.5
+        }
+      },
+      "outputs": [
+        "lat_deg",
+        "lon_deg",
+        "alt_m",
+        "hdop",
+        "fix_type"
+      ],
+      "weather_effects": {},
+      "verified": false,
+      "source": "https://docs.px4.io/v1.16/en/msg_docs/ (SensorGps)"
+    },
+    {
+      "id": "imu_basic",
+      "kind": "imu",
+      "name": "Inertial measurement unit with barometer",
+      "spec": {},
+      "sim": {
+        "rate_hz": 100
+      },
+      "outputs": [
+        "accel_mps2",
+        "gyro_radps",
+        "baro_pa"
+      ],
+      "weather_effects": {},
+      "verified": false,
+      "source": "https://docs.px4.io/v1.16/en/msg_docs/ (SensorCombined, SensorBaro)"
+    }
+  ]
+}
