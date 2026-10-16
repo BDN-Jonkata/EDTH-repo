@@ -29,7 +29,7 @@ Files:
 
 ## Sharing the database
 
-The data in your database travels through git as [data/db-dump.json](data/db-dump.json): catalog, generated scenarios and saved simulations.
+The data in your database travels through git as [data/db-dump.json.gz](data/db-dump.json.gz): catalog, generated scenarios and saved simulations.
 
 ```
 python seeder/dump.py export    # you: refresh the dump after saving new scenarios or runs, then commit it

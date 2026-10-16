@@ -67,7 +67,7 @@ class Generator(unittest.TestCase):
             cfg["seed"] = seed
             _, truth = sc.generate(cfg)
             for o in truth["objects"]:
-                for t, x, y, z, vx, vy in o["samples"]:
+                for t, x, y, vx, vy in o["samples"]:
                     self.assertTrue(0 <= x <= 1000 and 0 <= y <= 1000, (o["id"], t, x, y))
                     self.assertLess((vx * vx + vy * vy) ** 0.5, 40)
 
@@ -116,7 +116,7 @@ class Generator(unittest.TestCase):
         cfg = load("easy")
         cfg["targets"] = {"count": 1, "motion": "hover", "crossing": {"enabled": False}}
         _, truth = sc.generate(cfg)
-        speeds = [(vx * vx + vy * vy) ** 0.5 for _, _, _, _, vx, vy in truth["objects"][-1]["samples"]]
+        speeds = [(vx * vx + vy * vy) ** 0.5 for _, _, _, vx, vy in truth["objects"][-1]["samples"]]
         self.assertLess(min(speeds), 0.5)
 
 

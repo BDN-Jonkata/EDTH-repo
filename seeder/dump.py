@@ -1,6 +1,6 @@
 """Share the database contents through git: export to a JSON file, import into any database.
 
-    python seeder/dump.py export     # write seeder/data/db-dump.json from your database
+    python seeder/dump.py export     # write seeder/data/db-dump.json.gz from your database
     python seeder/dump.py import     # create the schema, load the catalog, then the dump (safe to repeat)
 
 The dump holds the catalog tables, the generated scenarios and the saved simulations.
@@ -10,6 +10,7 @@ simulations by (name, seed, created_at).
 from __future__ import annotations
 
 import argparse
+import gzip
 import json
 from pathlib import Path
 
@@ -18,7 +19,7 @@ from psycopg.types.json import Jsonb
 import catalog as cat
 import db
 
-DUMP = Path(__file__).parent / "data" / "db-dump.json"
+DUMP = Path(__file__).parent / "data" / "db-dump.json.gz"
 
 
 def export_dump(conn):
@@ -33,12 +34,14 @@ def export_dump(conn):
         "simulations": rows("SELECT name, seed, params, scenario, result, created_at FROM simulations ORDER BY created_at"),
     }
     DUMP.parent.mkdir(exist_ok=True)
-    DUMP.write_text(json.dumps(out, default=lambda v: v.isoformat(), separators=(",", ":")), encoding="utf-8")
+    with gzip.open(DUMP, "wt", encoding="utf-8", compresslevel=9) as fh:
+        json.dump(out, fh, default=lambda v: v.isoformat(), separators=(",", ":"))
     print("Wrote %s (%d scenarios, %d simulations, %.1f MB)" % (DUMP, len(out["scenarios"]), len(out["simulations"]), DUMP.stat().st_size / 1e6))
 
 
 def import_dump(conn):
-    data = json.loads(DUMP.read_text(encoding="utf-8"))
+    with gzip.open(DUMP, "rt", encoding="utf-8") as fh:
+        data = json.load(fh)
     for s in data["scenarios"]:
         conn.execute(
             """INSERT INTO scenarios (scenario_id, name, preset, seed, config, scenario, truth, created_at)
