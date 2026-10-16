@@ -17,6 +17,7 @@
   'use strict';
 
   const Drones = typeof window !== 'undefined' ? window.Drones : require('./drones.js');
+  const Messages = typeof window !== 'undefined' ? window.Messages : require('./messages.js');
   const CAT = typeof CATALOG !== 'undefined' ? CATALOG : require('./catalog.js'); // eslint-disable-line no-undef
   const DT = 0.1;
   const T_END = 120;
@@ -270,6 +271,7 @@
   function run(P, opts) {
     const c = newContext(P);
     c.lite = !!(opts && opts.lite);
+    c.tap = (opts && opts.tap) || null; // tests: called with every message sent, lost or not
     startFriendTracks(c);
     for (let k = 0; k <= c.NF; k++) stepFrame(c, k);
     return finish(c);
@@ -444,6 +446,7 @@
     c.linkQ[node] = 0.97 * c.linkQ[node] + 0.03 * (ok ? 1 : 0);
   }
   function sendMessage(c, node, payload, t, latency) {
+    if (c.tap) c.tap(payload);
     const ok = c.rnet() >= c.loss;
     noteLink(c, node, ok);
     if (!ok) return;
@@ -452,25 +455,45 @@
     c.queue.push(payload);
   }
   function sendAll(c, k, t, raw) {
-    raw.forEach((z) => sendMessage(c, z.node, { type: 'meas', z }, t, z.latency));
+    raw.forEach((z) => sendMessage(c, z.node, observation(c, z, t), t, z.latency));
     if (k % c.beaconEvery === 0) sendBeacons(c, t);
   }
+  // Fields as in docs/data-formats.md. MOCK: `z` is the internal record the baseline tracker reads; it is not
+  // part of the format and a real node would not send it.
+  function observation(c, z, t) {
+    const covFields = Object.keys(z.sd);
+    return stamped(c, z.node, 'observation', {
+      sensor_type: SENSOR_TYPE[z.k], sensor_id: z.module, t_obs: localTime(c, z.node, t), kind: OBS_KIND[z.m],
+      value: z.fields, cov_fields: covFields, covariance: diagonal(covFields.map((f) => z.sd[f])), z,
+    }, t);
+  }
+  const SENSOR_TYPE = Object.keys(KIND).reduce((o, k) => Object.assign(o, { [KIND[k]]: k }), {});
+  const OBS_KIND = { bearing: 'bearing', rangeaz: 'range_bearing', range: 'detection' }; // a lone microphone only hears how loud
+  const diagonal = (sd) => sd.map((a, i) => sd.map((_, j) => (i === j ? a * a : 0)));
   function sendBeacons(c, t) {
     if (c.world.beacon.enabled !== false) {
-      c.world.friendlies.forEach((f) => {
-        if (!alive(c, f.id, t)) return;
-        const st = friendlyState(c, f, Math.max(0, t - clockOffset(c, f.id, t)));
-        sendMessage(c, f.id, { type: 'beacon', id: f.id, x: st.x + gauss(c.rn) * c.beaconSigma, y: st.y + gauss(c.rn) * c.beaconSigma, t }, t);
-      });
+      c.world.friendlies.forEach((f) => { if (alive(c, f.id, t)) sendBeacon(c, f, t); });
     }
     c.world.ground.forEach((g) => {
       if (alive(c, g.id, t)) noteLink(c, g.id, c.rnet() >= c.loss);
     });
   }
+  // the friendly reports where its own (drifted) clock says it is, with GNSS-like noise
+  function sendBeacon(c, f, t) {
+    const st = friendlyState(c, f, Math.max(0, localTime(c, f.id, t))), s = c.beaconSigma;
+    const position = [st.x + gauss(c.rn) * s, st.y + gauss(c.rn) * s, f.alt];
+    const body = { friend_id: f.id, position, velocity: [st.vx, st.vy, 0], covariance: diagonal([s, s, s]) };
+    sendMessage(c, f.id, stamped(c, f.id, 'friendly_beacon', body, t), t);
+  }
+  // every message: top-level type, the shared header stamped with the sender's clock, then the body
+  function stamped(c, source, type, body, t) {
+    return Object.assign({ type, header: Messages.makeHeader(c.seqs, source, localTime(c, source, t)) }, body);
+  }
+  const localTime = (c, node, t) => (node === 'C2' ? t : t - clockOffset(c, node, t));
   function deliver(c, t) {
     const arrived = c.queue.filter((m) => m.arr <= t + 1e-9);
     c.queue = c.queue.filter((m) => m.arr > t + 1e-9);
-    const beaconFirst = (m) => (m.type === 'beacon' ? 0 : 1);
+    const beaconFirst = (m) => (m.type === 'friendly_beacon' ? 0 : 1);
     return arrived.sort((a, b) => (a.arr - b.arr) || (beaconFirst(a) - beaconFirst(b)));
   }
 
@@ -479,7 +502,7 @@
     c.tracks.forEach((tr) => { predict(tr, DT); tr.updated = false; });
     const frameMeas = [];
     arrived.forEach((m) => {
-      if (m.type === 'beacon') { applyBeacon(c, m, t); return; }
+      if (m.type === 'friendly_beacon') { applyBeacon(c, m, t); return; }
       frameMeas.push(m.z);
       associate(c, m.z, t);
     });
@@ -487,10 +510,10 @@
     return frameMeas;
   }
   function applyBeacon(c, m, t) {
-    const z = { x: m.x, y: m.y, R: [9, 0, 9], t, node: m.id };
-    let tr = c.friends[m.id];
+    const id = m.friend_id, z = { x: m.position[0], y: m.position[1], R: [9, 0, 9], t, node: id };
+    let tr = c.friends[id];
     if (!tr) {
-      tr = c.friends[m.id] = newTrack(m.id, 'frd', z, 6, 100);
+      tr = c.friends[id] = newTrack(id, 'frd', z, 6, 100);
       tr.cls = 'friendly';
       c.tracks.push(tr);
     } else update(tr, z, innov(tr, z));
@@ -796,10 +819,6 @@
     }, extra);
     sendMessage(c, f.id, stamped(c, f.id, 'drone_state', body, t), t);
   }
-  function stamped(c, source, type, body, t) {
-    const local = source === 'C2' ? t : t - clockOffset(c, source, t);
-    return Object.assign({ type, header: Drones.makeHeader(c.seqs, source, local) }, body);
-  }
 
   // ---- the C2 side
   function issueCommands(c, t) {
@@ -865,9 +884,11 @@
     return rec;
   }
   // the bearing every bearing-type sensor reports, with its noise
+  // rec.sd = 1-sigma noise of each native field, which becomes the observation's covariance
   function addBearing(rec, x) {
     const sigB = x.nz.bearing_deg * D2R * x.nm;
     rec.m = 'bearing'; rec.b = x.d.az + gauss(x.rand) * sigB; rec.sigB = sigB;
+    rec.sd = { bearing_deg: sigB * RAD2DEG };
   }
   const logRange = (r) => 20 * Math.log10(Math.max(r, 1));
   function buildBearingElevation(rec, x) {
@@ -879,10 +900,12 @@
     const hint = rand() < pRight ? truthClass : (truthClass === 'friendly' ? 'unknown' : 'friendly');
     const extra = s.kind === 'IR' ? { intensity: Math.max(0, 1 - 0.5 * r / s.range + gauss(rand) * 0.05) } : { class_hint: hint };
     rec.fields = Object.assign({ bearing_deg: compass(rec.b), elevation_deg: elev }, extra);
+    rec.sd.elevation_deg = nz.elevation_deg * nm;
   }
   function buildBearingLevel(rec, x) {
     addBearing(rec, x);
     rec.fields = { bearing_deg: compass(rec.b), level_db: 90 - logRange(x.r) + gauss(x.rand) * x.nz.level_db * x.nm, presence: true };
+    rec.sd.level_db = x.nz.level_db * x.nm;
   }
   function buildLevel(rec, x) {
     const { nz, nm } = x;
@@ -890,6 +913,7 @@
     rec.m = 'range'; rec.r = Math.pow(10, (nz.source_level_db - lv) / 20);
     rec.sigR = rec.r * (Math.LN10 / 20) * nz.level_db * nm;
     rec.fields = { level_db: lv, presence: true };
+    rec.sd = { level_db: nz.level_db * nm };
   }
   function buildBearingRssi(rec, x) {
     addBearing(rec, x);
@@ -897,6 +921,7 @@
       bearing_deg: compass(rec.b), rssi_dbm: -40 - logRange(x.r) + gauss(x.rand) * x.nz.rssi_db * x.nm,
       center_freq_mhz: x.d.o.kind === 'friendly' ? 5745 : 2437,
     };
+    rec.sd.rssi_dbm = x.nz.rssi_db * x.nm;
   }
   function buildRangeAzimuth(rec, x) {
     const { nz, nm, d, sp, rand } = x;
@@ -906,6 +931,7 @@
     const ux = Math.cos(d.az), uy = Math.sin(d.az);
     rec.rr = (d.vx - (sp.vx || 0)) * ux + (d.vy - (sp.vy || 0)) * uy + gauss(rand) * sigRR;
     rec.fields = { range_m: rec.r, azimuth_deg: compass(rec.b), radial_mps: rec.rr, snr_db: 20 - 20 * Math.log10(Math.max(x.r, 1) / 100) + gauss(rand) };
+    rec.sd = { range_m: sigR, azimuth_deg: sigB * RAD2DEG, radial_mps: sigRR };
   }
   const RECORD_BUILDERS = {
     bearing_elevation: buildBearingElevation, bearing_level: buildBearingLevel, level: buildLevel,

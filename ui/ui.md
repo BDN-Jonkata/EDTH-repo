@@ -24,6 +24,8 @@ Scenarios: the **Preset** picker (easy, medium, hard, challenge) loads a scenari
 
 Commanded drones: the mock accepts `commands` from the scenario (or `params.commands`) and flies the drone under its platform's speed, acceleration and turn limits; commands and acks cross the same lossy channel, with retries. Motion maths is in `drones.js`; test with `node ui/viewer/test-commands.js`. The viewer has no control for sending commands yet.
 
+Messages: every message the mock sends (`observation`, `friendly_beacon`, `drone_command`, `drone_state`) has the shared header from `messages.js`, with the fields in [docs/data-formats.md](../docs/data-formats.md#messages); test with `node ui/viewer/test-messages.js`.
+
 What the mock does:
 
 | Part | Mock behaviour |

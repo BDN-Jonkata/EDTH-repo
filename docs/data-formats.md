@@ -81,9 +81,41 @@ A camera never gives range, a single microphone never gives a bearing. The track
 
 Every UAS has `spec.flight` = `{max_speed_mps, max_accel_mps2, max_turn_dps, assumed: true}`: the limits for commanded motion. `max_accel_mps2` limits the change of speed, `max_turn_dps` the change of course. These numbers are **assumed**, not from datasheets.
 
+## Messages
+
+Everything that crosses the channel is a message with a top-level `type` and a `header`, as in [common/codec.py](../common/codec.py):
+
+| Header field | Meaning |
+|--------------|---------|
+| `msg_id` | `<source_id>-<seq>`, unique in a run |
+| `source_id` | the sending node: `F1`..`F5`, `GS1`, `GS2`, or `C2` |
+| `t_sent` | seconds, on the sender's own clock (it drifts when the run has clock drift) |
+| `seq` | counts up by one per source, from 1 |
+| `schema_version` | `1` |
+
+`observation` (a node's sensor saw something; one per detection):
+
+| Field | Meaning |
+|-------|---------|
+| `sensor_type` | the module's catalog `kind`: `eo_camera`, `thermal_camera`, `microphone`, `rf_receiver`, `radar` |
+| `sensor_id` | the module's catalog `id`; the node carrying it is `header.source_id` |
+| `t_obs` | when the sensor saw it, on the node's clock (the mock sends at once, so it equals `t_sent`) |
+| `kind` | `bearing` (cameras, microphone array, RF), `range_bearing` (radar) or `detection` (a single microphone: only how loud) |
+| `value` | the module's native fields, as in the `native.type` table above; angles are compass degrees |
+| `cov_fields`, `covariance` | the noisy fields of `value`, in order, and their covariance matrix (noise is independent, so it is diagonal; units are the field's unit squared) |
+
+`friendly_beacon` (a friendly drone reports its own position; read by [friend_foe/jsonl_io.py](../friend_foe/jsonl_io.py)):
+
+| Field | Meaning |
+|-------|---------|
+| `friend_id` | `F1`..`F5`, same as `header.source_id` |
+| `position` | `[x, y, z]` metres, with the beacon noise (`beacon.pos_sigma_m`); taken at the drone's own clock, so drift shows up as a position error |
+| `velocity` | `[vx, vy, vz]` m/s |
+| `covariance` | 3 × 3 position covariance |
+
 ## Drone commands
 
-Friendly drones fly their scripted patrol loop until commanded. Commands and acks are ordinary messages over the lossy channel, so they carry the standard header (`msg_id`, `source_id`, `t_sent`, `seq`, `schema_version`) and a top-level `type`, as in [common/codec.py](../common/codec.py).
+Friendly drones fly their scripted patrol loop until commanded. Commands and acks are ordinary messages over the lossy channel, with the header above.
 
 `drone_command` (C2 to a drone):
 
@@ -112,7 +144,7 @@ Retries: the sender repeats an unacknowledged command every 1.5 s, at most 5 tim
 
 `drone_state` can serve as `investigation_status`: `accepted` = `assigned`; `mode` `goto` or `return` = `en_route`; `on_station` = `on_station`; `patrolling` after the investigation = `done`; `rejected` or a command reported lost = `aborted`.
 
-Today only the mock simulation ([ui/viewer/sim.js](../ui/viewer/sim.js), motion maths in [drones.js](../ui/viewer/drones.js)) sends these messages; its other messages (`meas`, `beacon`) do not have the header yet. `truth.json` is the scripted baseline: when a scenario has commands it carries `scripted_baseline_only: true`, and scoring must use the truth recorded by the run (`frames[].truth`), which follows the commanded motion. The run result lists every command as `commands`: `{command_id, drone_id, command, t_issued, attempts, t_acked, status (accepted, rejected, lost), reports}`.
+Today the mock simulation ([ui/viewer/sim.js](../ui/viewer/sim.js), header in [messages.js](../ui/viewer/messages.js), motion maths in [drones.js](../ui/viewer/drones.js)) sends all four message types. `truth.json` is the scripted baseline: when a scenario has commands it carries `scripted_baseline_only: true`, and scoring must use the truth recorded by the run (`frames[].truth`), which follows the commanded motion. The run result lists every command as `commands`: `{command_id, drone_id, command, t_issued, attempts, t_acked, status (accepted, rejected, lost), reports}`.
 
 ## Saved simulation run (`simulations` table, `export-run.js` output)
 

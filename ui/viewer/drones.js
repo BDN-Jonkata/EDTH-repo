@@ -7,17 +7,10 @@
 // lim is the platform's flight limits: { max_speed_mps, max_accel_mps2, max_turn_dps } (assumed values in the catalog).
 (function (global) {
   const D2R = Math.PI / 180;
-  const SCHEMA_VERSION = 1;
   const APPROACH_GAIN = 1.5; // 1/s: close to the point smoothly instead of circling it
   const COMMANDS = ['goto', 'hold', 'return_to_patrol'];
   const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
   const wrapPi = (a) => Math.atan2(Math.sin(a), Math.cos(a));
-
-  // every message carries the same header; seq counts per source so msg_id is unique
-  function makeHeader(seqs, source, tSent) {
-    const seq = (seqs[source] = (seqs[source] || 0) + 1);
-    return { msg_id: source + '-' + seq, source_id: source, t_sent: tSent, seq, schema_version: SCHEMA_VERSION };
-  }
 
   // null if the command can be carried out, otherwise the reason it is rejected
   function invalid(cmd, size) {
@@ -83,7 +76,7 @@
     return dist < 4;
   }
 
-  const api = { makeHeader, invalid, faceOf, newDrone, step, arrived, COMMANDS, SCHEMA_VERSION };
+  const api = { invalid, faceOf, newDrone, step, arrived, COMMANDS };
   global.Drones = api;
   if (typeof module !== 'undefined') module.exports = api;
 })(typeof window !== 'undefined' ? window : globalThis);

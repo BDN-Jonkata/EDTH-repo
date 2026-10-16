@@ -7,6 +7,18 @@ Read before working:
 - [docs/data-formats.md](../docs/data-formats.md) for the JSON every module reads and writes. Do not invent other formats; extend that file when a format changes.
 - Each module has its own `<module>.md` describing its job.
 
+## Plan before every task
+
+Before writing code for any task, state a short plan and get it agreed:
+
+1. **Goal:** what changes and why, in one or two sentences.
+2. **Files:** which files change and which existing code is reused (check `common/` and the module first).
+3. **Approach:** the steps, and what is deliberately left out.
+4. **Test:** how it will be checked, including what must stay byte-identical (for example the preset run hashes).
+5. **Risks:** formats that other modules read, assumed numbers, anything that could break a teammate's work.
+
+A small, obvious change (a typo, a one-line fix) needs only a one- or two-line plan in the reply. Anything that changes a file format, a message, the catalog or more than one module needs the full plan, and you wait for a yes before implementing. Seeder work is planned in [docs/seeder-plan.md](../docs/seeder-plan.md): read the task's section first, update it if the plan changes, and mark it done when it is. After the task, report what was verified against the plan.
+
 ## Code readability
 
 1. **A function fits on one screen.** Aim for at most 40 lines, never more than 50. If a function grows past that, split it into named steps, each doing one thing. A reader should see the whole function without scrolling.
@@ -27,6 +39,6 @@ The simulation in `ui/viewer/sim.js` follows this: a run is a context object pas
 ## Working in this repo
 
 - Read the existing code and follow its patterns before adding anything.
-- Run the relevant tests before reporting done: `python -m unittest discover -s seeder/tests`; `python seeder/seed_catalog.py --check`; `node --check` on changed JS files; `node ui/viewer/test-commands.js` for the mock simulation's commanded motion.
+- Run the relevant tests before reporting done: `python -m unittest discover -s seeder/tests`; `python seeder/seed_catalog.py --check`; `node --check` on changed JS files; `node ui/viewer/test-commands.js` for the mock simulation's commanded motion; `node ui/viewer/test-messages.js` for its message format.
 - Generated files (`ui/viewer/catalog.js`, `ui/viewer/scenarios.js`, `seeder/data/db-dump.json.gz`) are made by scripts in `seeder/`. Re-run the script, do not edit by hand.
 - Do not commit or push unless asked.

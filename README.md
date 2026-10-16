@@ -14,6 +14,7 @@ Combine partial, noisy observations from low-cost UAS and ground sensors, fused 
 | [docs/system-design.md](docs/system-design.md) | Architecture, module responsibilities, conventions (time, coordinates, uncertainty), message schemas, module design, repo layout, open decisions |
 | [docs/seeder-config.md](docs/seeder-config.md) | Scenario config (one JSON + seed), degradation switches, presets, open questions for the mentor |
 | [docs/data-formats.md](docs/data-formats.md) | The JSON the seeder produces (scenario, truth, catalog, saved runs) and how to read it; start here if you build another module |
+| [docs/seeder-plan.md](docs/seeder-plan.md) | What is left on the seeder, in order, with the plan, test and risks of each task |
 | [docs/team-plan.md](docs/team-plan.md) | Work split between 3 people, interfaces between them, per-phase tasks, working agreements |
 
 ## Repository layout
