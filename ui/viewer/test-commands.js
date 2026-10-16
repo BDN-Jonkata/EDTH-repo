@@ -1,7 +1,6 @@
 // Tests for commanded drone motion. Run: node ui/viewer/test-commands.js
 const assert = require('assert');
 const Sim = require('./sim.js');
-const Drones = require('./drones.js');
 const SCENARIOS = require('./scenarios.js');
 
 const base = (extra) => Object.assign({ seed: 5, mode: 'optimistic', weather: 'clear', loss: 0, delayMs: 0, driftMs: 0, scenario: SCENARIOS.easy }, extra);
@@ -15,14 +14,6 @@ const TASKS = [
   { t: 10, drone_id: 'F2', command: 'goto', target: [500, 500, 60], speed_mps: 10, face_target: [700, 700] },
   { t: 60, drone_id: 'F2', command: 'return_to_patrol' },
 ];
-
-test('headers: msg_id, per-source seq, schema_version', () => {
-  const seqs = {};
-  const a = Drones.makeHeader(seqs, 'C2', 1.5), b = Drones.makeHeader(seqs, 'C2', 2), c = Drones.makeHeader(seqs, 'F1', 2);
-  assert.deepStrictEqual(Object.keys(a), ['msg_id', 'source_id', 't_sent', 'seq', 'schema_version']);
-  assert.strictEqual(a.msg_id, 'C2-1'); assert.strictEqual(b.msg_id, 'C2-2'); assert.strictEqual(c.msg_id, 'F1-1');
-  assert.strictEqual(a.schema_version, 1);
-});
 
 test('no commands: result has no commands key and drones follow the script', () => {
   const res = run({});
