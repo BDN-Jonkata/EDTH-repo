@@ -12,6 +12,7 @@ request per track at a time, and a cooldown before asking again.
 
 from typing import Dict, Iterable, List, Optional, Sequence
 
+from common.codec import Sequencer
 from friend_foe.estimator import Classification, TrackState
 from sensors.quality import best_standoff, detection_modules, load_modules, standoff_by_module
 from sensors.weather import WeatherProvider
@@ -33,10 +34,9 @@ class InvestigationTrigger:
         self.modules = detection_modules(modules if modules is not None else load_modules().values())
         self.min_suspicious_s = min_suspicious_s
         self.cooldown_s = cooldown_s
-        self.source_id = source_id
+        self._sequencer = Sequencer(source_id)
         self._suspicious_since: Dict[str, float] = {}
         self._blocked_until: Dict[str, float] = {}
-        self._seq = 0
 
     def update(
         self, t: float, classifications: Sequence[Classification], tracks: Sequence[TrackState]
@@ -69,16 +69,9 @@ class InvestigationTrigger:
         by_module = standoff_by_module(self.modules, tr.position, t, self.weather)
         best = best_standoff(by_module)
         var = tr.pos_sigma ** 2
-        self._seq += 1
         return {
             "type": "investigation_request",
-            "header": {
-                "msg_id": f"{self.source_id}-{self._seq}",
-                "source_id": self.source_id,
-                "t_sent": t,
-                "seq": self._seq,
-                "schema_version": 1,
-            },
+            "header": self._sequencer.header(t),
             "track_id": c.track_id,
             "position": list(tr.position),
             "covariance": [[var, 0, 0], [0, var, 0], [0, 0, var]],
