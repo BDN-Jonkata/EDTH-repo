@@ -32,6 +32,7 @@ Top level: `schema`, `id` (for example `hard-s3`), `name`, `seed`, `preset`, `de
 |-----|---------|
 | `friendlies[]` | `id`, `platform` (catalog id), `altitude_m`, `loop` = circular patrol `{cx, cy, R, v, dir (+1/-1), th0}`, `sensors[]` = `{module, kind}` resolved from the catalog |
 | `ground[]` | `id`, `platform`, `position` `[x, y]`, `heading_deg`, `sensors[]` |
+| `commands[]` | tasking sent from C2 to friendly drones during the run, sorted by `t`: `{t, drone_id, command, target?, speed_mps?, heading_deg?, face_target?, track_id?}`. Empty by default. See "Drone commands" below |
 | `targets[]` | hostiles: `id`, `motion`, `speed_mps`, `altitude_m`, `waypoints` = `[[t, x, y], ...]` (straight lines between them), `wobble_m`, `phase`, `signature` (how well each sensor type sees it: `eo`, `thermal`, `acoustic`, `rf`, `radar`), `emits` (false = silent, invisible to RF) |
 | `beacon` | friendly position beacons: `enabled`, `rate_hz`, `pos_sigma_m` |
 | `sensor_set.enabled_kinds` | which sensor kinds exist in this run |
@@ -77,6 +78,41 @@ Positions are rounded to 0.1 m, velocities to 0.01 m/s. A hostile has samples on
 A camera never gives range, a single microphone never gives a bearing. The tracker must work from these native fields, not from positions.
 
 `platform_models.json`: each platform has `id`, `name`, `platform` (`uas` or `ground`), `cost_tier`, `spec`, and `modules[]` = `{module_id, mount, count}`.
+
+Every UAS has `spec.flight` = `{max_speed_mps, max_accel_mps2, max_turn_dps, assumed: true}`: the limits for commanded motion. `max_accel_mps2` limits the change of speed, `max_turn_dps` the change of course. These numbers are **assumed**, not from datasheets.
+
+## Drone commands
+
+Friendly drones fly their scripted patrol loop until commanded. Commands and acks are ordinary messages over the lossy channel, so they carry the standard header (`msg_id`, `source_id`, `t_sent`, `seq`, `schema_version`) and a top-level `type`, as in [common/codec.py](../common/codec.py).
+
+`drone_command` (C2 to a drone):
+
+| Field | Meaning |
+|-------|---------|
+| `command_id` | Unique per command. The sender repeats a command with the same id until it is acknowledged; the drone answers a repeat without carrying the command out twice |
+| `drone_id` | `F1`..`F5` |
+| `command` | `goto` (fly to `target` and then hold), `hold` (stop where it is), `return_to_patrol` (rejoin the scripted loop where it is now) |
+| `target` | `[x, y, z]` for `goto`. Inside the 1000 m area; `z` is ignored (the drone keeps its altitude) |
+| `speed_mps` | optional cap, never above the platform's `max_speed_mps` |
+| `heading_deg` or `face_target` | optional camera direction for `goto` and `hold`: a compass heading (0 = north, clockwise) or an `[x, y]` point to keep facing, also while flying. `face_target` wins. Without either the heading follows the direction of travel, and a stopped drone keeps its last heading |
+| `track_id` | optional, the track being investigated; echoed in `drone_state` |
+
+`drone_state` (drone to C2): the ack of a command and later progress.
+
+| Field | Meaning |
+|-------|---------|
+| `drone_id`, `command_id` | which drone, answering which command |
+| `state` | `accepted` or `rejected` (the ack, with `reason`), then `on_station` (reached the `goto` point, or stopped on `hold`) and `patrolling` (back on the loop) |
+| `mode` | what the drone is doing now: `patrol`, `goto`, `hold` or `return` |
+| `position` | `[x, y, z]` |
+| `heading_deg` | where the camera points (compass degrees) |
+| `track_id`, `reason` | optional |
+
+Retries: the sender repeats an unacknowledged command every 1.5 s, at most 5 times in all (assumed values), then reports it lost. `on_station` and `patrolling` are sent once and repeated twice, 2 s apart, because a state message has no ack of its own.
+
+`drone_state` can serve as `investigation_status`: `accepted` = `assigned`; `mode` `goto` or `return` = `en_route`; `on_station` = `on_station`; `patrolling` after the investigation = `done`; `rejected` or a command reported lost = `aborted`.
+
+Today only the mock simulation ([ui/viewer/sim.js](../ui/viewer/sim.js), motion maths in [drones.js](../ui/viewer/drones.js)) sends these messages; its other messages (`meas`, `beacon`) do not have the header yet. `truth.json` is the scripted baseline: when a scenario has commands it carries `scripted_baseline_only: true`, and scoring must use the truth recorded by the run (`frames[].truth`), which follows the commanded motion. The run result lists every command as `commands`: `{command_id, drone_id, command, t_issued, attempts, t_acked, status (accepted, rejected, lost), reports}`.
 
 ## Saved simulation run (`simulations` table, `export-run.js` output)
 

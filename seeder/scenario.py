@@ -30,6 +30,7 @@ DEFAULT_CONFIG = {
     "description": "",
     "duration_s": 120,
     "c2": [470, 350],
+    "commands": [],  # tasking sent from C2 to friendly drones during the run (goto, hold, return_to_patrol)
     "targets": {
         "count": 2,
         "speed_mps": [8, 16],
@@ -103,7 +104,8 @@ def validate_config(cfg, catalog=None):
     t = cfg["targets"]
     return (_check_seed(cfg) + _check_area(cfg)
             + (_check_target_rules(cfg, t) if isinstance(t, dict) else _check_target_paths(t))
-            + _check_friendlies(cfg, platforms) + _check_ground(cfg, platforms) + _check_environment(cfg))
+            + _check_friendlies(cfg, platforms) + _check_ground(cfg, platforms) + _check_environment(cfg)
+            + _check_commands(cfg))
 
 
 def _check_seed(cfg):
@@ -153,6 +155,38 @@ def _check_target_rules(cfg, t):
 def _check_target_paths(targets):
     return ["targets[%d] needs at least 2 waypoints [t, x, y]" % i
             for i, tg in enumerate(targets) if not tg.get("waypoints") or len(tg["waypoints"]) < 2]
+
+
+COMMANDS = ("goto", "hold", "return_to_patrol")
+
+
+def _check_commands(cfg):
+    drones = {"F%d" % (i + 1) for i in range(len(cfg["friendlies"]["platforms"]))}
+    errors = []
+    for i, c in enumerate(cfg["commands"]):
+        where = "commands[%d]" % i
+        if not 0 <= c.get("t", -1) <= cfg["duration_s"]:
+            errors.append(where + ".t must be within the run")
+        if c.get("drone_id") not in drones:
+            errors.append("%s.drone_id must be one of %s" % (where, sorted(drones)))
+        if c.get("command") not in COMMANDS:
+            errors.append("%s.command must be one of %s" % (where, COMMANDS))
+        errors += _check_command_args(c, where)
+    return errors
+
+
+def _check_command_args(c, where):
+    errors = []
+    in_area = lambda p: isinstance(p, list) and len(p) >= 2 and all(0 <= v <= AREA for v in p[:2])  # noqa: E731
+    if c.get("command") == "goto" and not in_area(c.get("target")):
+        errors.append(where + ".target must be [x, y] inside the area")
+    if "face_target" in c and not in_area(c["face_target"]):
+        errors.append(where + ".face_target must be [x, y] inside the area")
+    if "heading_deg" in c and not 0 <= c["heading_deg"] < 360:
+        errors.append(where + ".heading_deg must be 0 <= deg < 360 (0 = north, clockwise)")
+    if "speed_mps" in c and not c["speed_mps"] > 0:
+        errors.append(where + ".speed_mps must be positive")
+    return errors
 
 
 def _is_platform(platforms, pid, kind):
@@ -454,13 +488,15 @@ def generate(config, catalog=None, truth_dt=0.1):
     scenario = {
         "schema": SCHEMA, "id": scenario_id, "name": cfg["name"], "seed": cfg["seed"], "seed_set": cfg["seed_set"],
         "preset": cfg["preset"], "description": cfg["description"], "duration_s": cfg["duration_s"],
-        "area": {"size_m": AREA}, "c2": cfg["c2"],
+        "area": {"size_m": AREA}, "c2": cfg["c2"], "commands": sorted(cfg["commands"], key=lambda c: c["t"]),
         "friendlies": friendlies, "ground": ground, "targets": targets,
         "beacon": cfg["friendlies"]["beacon"], "sensor_set": cfg["sensor_set"],
         "environment": cfg["environment"], "degradations": cfg["degradations"],
         "config": cfg,
     }
     truth = build_truth(scenario, truth_dt)
+    if cfg["commands"]:
+        truth["scripted_baseline_only"] = True  # commanded motion is simulated in the run, not here: take its truth from the run
     return scenario, truth
 
 

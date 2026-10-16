@@ -27,6 +27,6 @@ The simulation in `ui/viewer/sim.js` follows this: a run is a context object pas
 ## Working in this repo
 
 - Read the existing code and follow its patterns before adding anything.
-- Run the relevant tests before reporting done: `python -m unittest discover -s seeder/tests`; `python seeder/seed_catalog.py --check`; `node --check` on changed JS files.
+- Run the relevant tests before reporting done: `python -m unittest discover -s seeder/tests`; `python seeder/seed_catalog.py --check`; `node --check` on changed JS files; `node ui/viewer/test-commands.js` for the mock simulation's commanded motion.
 - Generated files (`ui/viewer/catalog.js`, `ui/viewer/scenarios.js`, `seeder/data/db-dump.json.gz`) are made by scripts in `seeder/`. Re-run the script, do not edit by hand.
 - Do not commit or push unless asked.

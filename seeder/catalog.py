@@ -52,7 +52,7 @@ def validate(catalog):
         if p["id"] in seen:
             errors.append("duplicate platform id: " + p["id"])
         seen.add(p["id"])
-        errors += _check_platform(p, modules_by_id)
+        errors += _check_flight(p) + _check_platform(p, modules_by_id)
     return errors
 
 
@@ -90,6 +90,18 @@ def _check_native(m):
     if not native.get("fields"):
         errors.append("module %s: native.fields missing" % m["id"])
     return errors
+
+
+FLIGHT_LIMITS = ("max_speed_mps", "max_accel_mps2", "max_turn_dps")
+
+
+def _check_flight(p):
+    """A UAS must say how fast, how hard and how sharply it can fly (commanded motion uses these)."""
+    if p["platform"] != "uas":
+        return []
+    flight = p["spec"].get("flight") or {}
+    return ["platform %s: spec.flight.%s must be a positive number" % (p["id"], k)
+            for k in FLIGHT_LIMITS if not isinstance(flight.get(k), (int, float)) or flight[k] <= 0]
 
 
 def _check_platform(p, modules_by_id):

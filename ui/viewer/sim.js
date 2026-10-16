@@ -16,6 +16,7 @@
 (function (global) {
   'use strict';
 
+  const Drones = typeof window !== 'undefined' ? window.Drones : require('./drones.js');
   const CAT = typeof CATALOG !== 'undefined' ? CATALOG : require('./catalog.js'); // eslint-disable-line no-undef
   const DT = 0.1;
   const T_END = 120;
@@ -44,7 +45,7 @@
       ground: sc.ground.map((g) => ({ id: g.id, platform: g.platform, x: g.position[0], y: g.position[1], heading: (90 - g.heading_deg) * D2R })),
       friendlies: sc.friendlies.map((f) => Object.assign({ id: f.id, platform: f.platform, alt: f.altitude_m }, f.loop)),
       hostiles: sc.targets.map((t) => ({ id: t.id, wps: t.waypoints, wob: t.wobble_m, ph: t.phase, alt: t.altitude_m, sig: t.signature || {}, emits: t.emits !== false })),
-      beacon: sc.beacon, env: sc.environment, deg: sc.degradations, sensorKinds: sc.sensor_set.enabled_kinds, assign: {},
+      commands: sc.commands || [], beacon: sc.beacon, env: sc.environment, deg: sc.degradations, sensorKinds: sc.sensor_set.enabled_kinds, assign: {},
     };
     sc.friendlies.concat(sc.ground).forEach((n) => { world.assign[n.id] = n.platform; });
     const cr = sc.config && sc.config.targets && sc.config.targets.crossing;
@@ -288,6 +289,7 @@
       sensors: buildSensors(assign, P.weather, world.sensorKinds),
       nodes: world.ground.map((g) => g.id).concat(world.friendlies.map((f) => f.id)),
       hostileById: {}, dropT: {}, driftScale: {}, linkQ: {}, queue: [],
+      drones: {}, seqs: {}, cmd: { script: scriptedCommands(P, world), open: {}, records: {}, seen: {}, count: 0 },
       beaconEvery: Math.max(1, Math.round(10 / (world.beacon.rate_hz || 2))), beaconSigma: world.beacon.pos_sigma_m || 3,
       tracks: [], pending: [], friends: {}, alerts: [], frames: [], timeline: [], lastMatch: {}, sqHist: [], crossAlerted: {},
       n: { hostile: 0, unk: 0, swaps: 0, ffa: 0, evalSq: 0, evalN: 0, evalCnt: 0, evalCntN: 0 },
@@ -297,6 +299,10 @@
     c.nodes.forEach((n) => { c.driftScale[n] = c.rn() * 2 - 1; c.linkQ[n] = 1; });
     shareFalseAlarmsAcrossRadars(c);
     return c;
+  }
+  // commands to send, in time order: from the run parameters if given, otherwise from the scenario
+  function scriptedCommands(P, world) {
+    return (P.commands || world.commands).slice().sort((a, b) => a.t - b.t);
   }
   function shareFalseAlarmsAcrossRadars(c) {
     const clutter = c.world.env.clutter;
@@ -316,9 +322,11 @@
 
   function stepFrame(c, k) {
     const t = k * DT;
+    stepDrones(c, t);
+    issueCommands(c, t);
     const truth = truthAt(c, t);
     sendAll(c, k, t, sense(c, k, t, truth));
-    const frameMeas = trackFrame(c, t, deliver(c, t));
+    const frameMeas = trackFrame(c, t, handleControl(c, t, deliver(c, t)));
     updateLifecycle(c, t);
     pruneTracks(c, t);
     const { snap, hostileTracks } = snapshot(c, t);
@@ -333,11 +341,12 @@
     const summary = { rmse: n.evalN ? Math.sqrt(n.evalSq / n.evalN) : null, countErr: n.evalCntN ? n.evalCnt / n.evalCntN : 0, swaps: n.swaps, ffa: n.ffa };
     // entry markers from scenario script
     c.world.hostiles.forEach((h) => c.timeline.push({ t: h.wps[0][0], label: h.id + ' in', color: 'red' }));
-    return {
+    const commands = Object.keys(c.cmd.records).map((id) => c.cmd.records[id]);
+    return Object.assign(commands.length ? { commands } : {}, {
       frames: c.frames, alerts: c.alerts, timeline: c.timeline, summary, scen: c.world,
       params: Object.assign({}, c.P, { assign: c.assign, scenario: undefined, scenario_id: c.world.id }),
       T_END: c.T_END, DT, NF: c.NF, EVAL: c.EVAL, sensors: c.sensors.map(sensorInfo),
-    };
+    });
   }
   function sensorInfo(s) {
     return {
@@ -363,11 +372,11 @@
     const g = c.world.ground.find((x) => x.id === id);
     if (g) return { x: g.x, y: g.y, vx: 0, vy: 0, heading: g.heading };
     const f = c.world.friendlies.find((x) => x.id === id);
-    return Object.assign({ alt: f.alt }, frState(f, t));
+    return Object.assign({ alt: f.alt }, friendlyState(c, f, t));
   }
   function truthAt(c, t) {
     const truth = [];
-    c.world.friendlies.forEach((f) => truth.push(Object.assign({ id: f.id, kind: 'friendly' }, frState(f, t))));
+    c.world.friendlies.forEach((f) => truth.push(Object.assign({ id: f.id, kind: 'friendly' }, friendlyState(c, f, t))));
     c.world.hostiles.forEach((h) => {
       const st = hoState(h, t);
       if (st) truth.push(Object.assign({ id: h.id, kind: 'hostile' }, st));
@@ -375,7 +384,7 @@
     return truth;
   }
   function targetAt(c, obj, t) {
-    if (obj.kind === 'friendly') return frState(c.world.friendlies.find((f) => f.id === obj.id), t);
+    if (obj.kind === 'friendly') return friendlyState(c, c.world.friendlies.find((f) => f.id === obj.id), t);
     return hoState(c.hostileById[obj.id], t);
   }
 
@@ -450,7 +459,7 @@
     if (c.world.beacon.enabled !== false) {
       c.world.friendlies.forEach((f) => {
         if (!alive(c, f.id, t)) return;
-        const st = frState(f, Math.max(0, t - clockOffset(c, f.id, t)));
+        const st = friendlyState(c, f, Math.max(0, t - clockOffset(c, f.id, t)));
         sendMessage(c, f.id, { type: 'beacon', id: f.id, x: st.x + gauss(c.rn) * c.beaconSigma, y: st.y + gauss(c.rn) * c.beaconSigma, t }, t);
       });
     }
@@ -715,6 +724,132 @@
     c.crossAlerted[key] = t;
     c.alerts.push({ t, sev: 'warn', text: 'Crossing predicted ' + cross.a + ' × ' + cross.b + ' in ' + cross.tca.toFixed(1) + ' s: identity risk' });
     c.timeline.push({ t: t + cross.tca, label: 'crossing?', color: 'amber', dashed: true });
+  }
+
+  // ------------------------------------------------------- drones and commands
+  // A friendly flies its scripted patrol loop until it is commanded. C2 sends a drone_command over the lossy channel
+  // and repeats it until the drone's drone_state ack arrives; the drone ignores repeats of a command_id it has seen.
+  const ACK_TIMEOUT_S = 1.5, MAX_ATTEMPTS = 5; // assumed
+  const AREA_M = 1000;
+  const flightOf = (c, f) => PLATFORMS[c.assign[f.id]].spec.flight;
+  function friendlyState(c, f, t) {
+    const d = c.drones[f.id];
+    if (!d || d.mode === 'patrol') return frState(f, t);
+    return { x: d.x, y: d.y, vx: d.vx, vy: d.vy, heading: d.heading }; // a commanded drone has no clock offset: it is where it is
+  }
+  function stepDrones(c, t) {
+    c.world.friendlies.forEach((f) => {
+      const d = c.drones[f.id];
+      if (!d || !alive(c, f.id, t)) return;
+      repeatMilestone(c, f, d, t);
+      if (d.mode === 'patrol') return;
+      const goal = d.mode === 'return' ? frState(f, t) : d.mode === 'goto' ? { x: d.target[0], y: d.target[1] } : d;
+      Drones.step(d, goal, flightOf(c, f), DT, f.v);
+      if (Drones.arrived(d, goal)) reachGoal(c, f, d, goal, t);
+    });
+  }
+  function reachGoal(c, f, d, goal, t) {
+    if (d.mode === 'goto') { d.x = goal.x; d.y = goal.y; d.vx = 0; d.vy = 0; d.mode = 'hold'; d.reported = false; }
+    if (d.mode === 'hold' && !d.reported) { d.reported = true; sendMilestone(c, f, d, 'on_station', t); }
+    if (d.mode === 'return') { d.mode = 'patrol'; sendMilestone(c, f, d, 'patrolling', t); }
+  }
+  // arriving or rejoining is sent once and repeated twice more, 2 s apart, because a state message has no ack of its own
+  function sendMilestone(c, f, d, state, t) {
+    d.milestone = { state, repeats: 2, next: t + 2 };
+    sendState(c, f, d, state, t);
+  }
+  function repeatMilestone(c, f, d, t) {
+    const m = d.milestone;
+    if (!m || m.repeats <= 0 || t < m.next - 1e-9) return;
+    m.repeats--; m.next += 2;
+    sendState(c, f, d, m.state, t);
+  }
+
+  // ---- the drone side
+  const patrolling = { mode: 'patrol' };
+  function onCommand(c, m, t) {
+    const f = c.world.friendlies.find((x) => x.id === m.drone_id);
+    if (!f || !alive(c, f.id, t)) return; // no such drone, or it is dead: silence
+    const known = c.cmd.seen[m.command_id] || judge(c, f, m, t);
+    sendState(c, f, c.drones[f.id] || patrolling, known.state, t, { command_id: m.command_id, reason: known.reason });
+  }
+  // the first time a command_id arrives it is accepted or rejected; a repeat only gets the same answer again
+  function judge(c, f, m, t) {
+    const reason = Drones.invalid(m, AREA_M);
+    if (!reason) applyCommand(c, f, m, t);
+    return (c.cmd.seen[m.command_id] = reason ? { state: 'rejected', reason } : { state: 'accepted' });
+  }
+  function applyCommand(c, f, m, t) {
+    const prev = c.drones[f.id];
+    const d = prev && prev.mode !== 'patrol' ? prev : (c.drones[f.id] = Drones.newDrone(frState(f, t)));
+    d.mode = { goto: 'goto', hold: 'hold', return_to_patrol: 'return' }[m.command];
+    d.target = m.command === 'goto' ? m.target : null;
+    d.cap = m.speed_mps || null;
+    d.face = Drones.faceOf(m);
+    d.cmdId = m.command_id; d.trackId = m.track_id; d.reported = false; d.milestone = null;
+  }
+  function sendState(c, f, d, state, t, extra) {
+    const p = friendlyState(c, f, t);
+    const body = Object.assign({
+      drone_id: f.id, command_id: d.cmdId, state, mode: d.mode || 'patrol', position: [p.x, p.y, f.alt],
+      heading_deg: compass(d.heading !== undefined ? d.heading : Math.atan2(p.vy, p.vx)), track_id: d.trackId,
+    }, extra);
+    sendMessage(c, f.id, stamped(c, f.id, 'drone_state', body, t), t);
+  }
+  function stamped(c, source, type, body, t) {
+    const local = source === 'C2' ? t : t - clockOffset(c, source, t);
+    return Object.assign({ type, header: Drones.makeHeader(c.seqs, source, local) }, body);
+  }
+
+  // ---- the C2 side
+  function issueCommands(c, t) {
+    const todo = c.cmd.script;
+    while (todo.length && todo[0].t <= t + 1e-9) startCommand(c, todo.shift(), t);
+    Object.keys(c.cmd.open).forEach((id) => {
+      const o = c.cmd.open[id];
+      if (t < o.next - 1e-9) return;
+      if (o.rec.attempts < MAX_ATTEMPTS) transmit(c, o, t);
+      else giveUp(c, o, t);
+    });
+  }
+  function startCommand(c, cmd, t) {
+    const id = cmd.command_id || 'cmd-' + (++c.cmd.count);
+    const body = Object.assign({}, cmd, { command_id: id });
+    delete body.t;
+    const rec = { command_id: id, drone_id: cmd.drone_id, command: cmd.command, t_issued: t, attempts: 0, t_acked: null, status: 'sent', reports: [] };
+    c.cmd.records[id] = rec;
+    const o = c.cmd.open[id] = { body, rec, next: t };
+    transmit(c, o, t);
+  }
+  function transmit(c, o, t) {
+    o.rec.attempts++;
+    o.next = t + ACK_TIMEOUT_S;
+    sendMessage(c, o.body.drone_id, stamped(c, 'C2', 'drone_command', o.body, t), t);
+  }
+  function giveUp(c, o, t) {
+    o.rec.status = 'lost';
+    delete c.cmd.open[o.rec.command_id];
+    c.alerts.push({ t, sev: 'warn', text: 'No ack from ' + o.rec.drone_id + ' for ' + o.rec.command + ' after ' + o.rec.attempts + ' tries' });
+  }
+  function onState(c, m, t) {
+    const rec = c.cmd.records[m.command_id];
+    if (!rec) return;
+    const last = rec.reports[rec.reports.length - 1];
+    if (!last || last.state !== m.state) rec.reports.push({ t, state: m.state, mode: m.mode }); // repeats of a state are not new news
+    if (m.state !== 'accepted' && m.state !== 'rejected') return;
+    if (rec.t_acked === null) {
+      rec.t_acked = t; rec.status = m.state;
+      c.alerts.push({ t, sev: 'info', text: rec.drone_id + ' ' + m.state + ' ' + rec.command });
+    }
+    delete c.cmd.open[m.command_id];
+  }
+  // control messages are handled here; the rest go on to the tracker
+  function handleControl(c, t, arrived) {
+    arrived.forEach((m) => {
+      if (m.type === 'drone_command') onCommand(c, m, t);
+      else if (m.type === 'drone_state') onState(c, m, t);
+    });
+    return arrived.filter((m) => m.type !== 'drone_command' && m.type !== 'drone_state');
   }
 
   // ------------------------------------------------------------ native records
