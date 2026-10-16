@@ -1,0 +1,6 @@
+{
+  "name": "challenge",
+  "preset": "challenge",
+  "seed": 4127,
+  "description": "The task scenario: five drones, two ground sensors, two hostiles crossing at close range, about 1 km2."
+}

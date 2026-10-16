@@ -1,0 +1,41 @@
+{
+  "name": "medium",
+  "preset": "medium",
+  "seed": 2,
+  "seed_set": "tuning",
+  "description": "Three hostiles with one close crossing, moderate noise and loss.",
+  "targets": {
+    "count": 3,
+    "motion": "mixed",
+    "sudden_turn_prob": 0.1
+  },
+  "environment": {
+    "weather": "clear",
+    "clutter": {
+      "false_alarms_per_min": 4
+    }
+  },
+  "degradations": {
+    "network": {
+      "enabled": true,
+      "loss": 0.15,
+      "latency_ms": [
+        50,
+        200
+      ]
+    },
+    "clock": {
+      "enabled": true,
+      "offset_ms": [
+        0,
+        100
+      ],
+      "drift_ppm": 20
+    },
+    "pose": {
+      "enabled": true,
+      "position_err_m": 3,
+      "heading_err_deg": 2
+    }
+  }
+}
