@@ -37,6 +37,9 @@ These must be agreed first because they are what lets all three work at once.
 | `LocalTrack` | B (tracker) → B (fusion), C (friend_foe) | `common/` |
 | `Track` (COP) | B (fusion) → C (scoring, ui) | `common/` |
 | Channel API (send/receive with link params) | A → everyone | `simulation/` |
+| `InvestigationRequest` (suspicious track + weather-based standoff) | estimator/weather owner → drone-behaviour owner | `common/` |
+| `InvestigationStatus` (assigned / en route / on station / done) | drone-behaviour owner → estimator/weather owner | `common/` |
+| Drone motion commands (go to point, hold, return) | drone-behaviour owner → simulation (A) | `simulation/` |
 
 A owns `common/`, but **schema changes need a quick OK from B and C**.
 
@@ -78,6 +81,9 @@ A owns `common/`, but **schema changes need a quick OK from B and C**.
 | A | Multiple nodes in the simulation, per-node clocks and poses (still ideal), channel API supports per-link config |
 | B | Per-node trackers sharing compact tracks; merge with covariance intersection; global ID management |
 | C | Drone Behaviour module (friendly pattern, alarm, presumption); weather effects in sensor models; basic COP view in `ui` |
+| Weather / estimator owner | `required_standoff` from weather per sensor; suspicious-track trigger that raises `InvestigationRequest`; use new observations from the investigating drone to update the class |
+| Drone-behaviour owner | Pick the closest suitable drone for each request, fly to the standoff distance, hold, report status, return to patrol; enforce the minimum safe distance |
+| A | Accept commanded drone motion in the simulation (not only scripted paths) |
 
 ### Phase 3 - Prediction
 
