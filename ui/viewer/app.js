@@ -19,6 +19,8 @@
     ['pred', 'Predictions', true, '<path d="M1 7h12" stroke="#C9D1DB" stroke-width="1.4" stroke-dasharray="1.5 2"/>'],
     ['raw', 'Raw observations', false, '<path d="M1 13L13 3M1 13L13 8" stroke="#C9D1DB" stroke-width="1"/>'],
     ['cover', 'Sensor coverage', true, '<path d="M2 12L7 2l5 10z" fill="none" stroke="#9AA4B2" stroke-width="1.2" stroke-dasharray="2 1.5"/>'],
+    ['coverageAge', 'Coverage age', false, '<rect x="2" y="2" width="10" height="10" fill="#3FC1D9" opacity="0.5"/>'],
+    ['missions', 'Mission destinations', true, '<path d="M1 12L12 2M7 2h5v5" fill="none" stroke="#5B9BFF"/>'],
     ['net', 'Network links', true, '<circle cx="2.5" cy="11.5" r="1.8" fill="#9AA4B2"/><circle cx="11.5" cy="2.5" r="1.8" fill="#9AA4B2"/><path d="M3.5 10.5l7-7" stroke="#9AA4B2" stroke-width="1.2"/>'],
   ];
   const WX_NOTE = {
@@ -77,7 +79,7 @@
   function runSim(p) {
     S.applied = clone(p);
     S.res = Sim.run({ seed: p.seed, mode: p.mode, weather: p.weather, loss: p.loss, delayMs: p.delayMs, driftMs: p.driftMs, assign: p.assign });
-    S.deg = null; S.idx = 0; S.acc = 0; S.playing = true; S.sel = null; S.userSel = false;
+    S.deg = null; S.idx = 0; S.acc = 0; S.last = 0; S.playing = true; S.sel = null; S.userSel = false;
     $('runTitle').textContent = SCEN.id + ' · ' + p.name + ' · seed ' + p.seed;
     $('modeChip').textContent = p.mode.toUpperCase();
     $('modeChip').className = 'chip ' + (p.mode === 'optimistic' ? 'cyan' : 'amber');
@@ -183,12 +185,12 @@
   // --------------------------------------------------------------- map layers
   const KCOL = { EO: '#C9D1DB', IR: '#E58C5B', MIC: '#F5B13D', RAD: '#3FC1D9', RF: '#B58CFF' };
   const KDASH = { EO: '5 4', IR: '4 3', MIC: '1 4', RAD: '8 3', RF: '2 5' };
-  // where a node is and which way it faces (drones face along their flight path, ground sensors along their mast)
+  // Patrol drones face their motion; followers and searchers can yaw to observe.
   function nodeState(f, id) {
     const g = SCEN.ground.find((q) => q.id === id);
     if (g) return { x: g.x, y: g.y, heading: g.heading };
     const o = f.truth.find((q) => q.id === id);
-    return o ? { x: o.x, y: o.y, heading: Math.atan2(o.vy, o.vx) } : null;
+    return o ? { x: o.x, y: o.y, heading: o.heading === undefined ? Math.atan2(o.vy, o.vx) : o.heading } : null;
   }
   // each sensor's real coverage: a wedge for pointed sensors, a ring for 360-degree ones
   function coverageSvg(f) {
@@ -283,6 +285,23 @@
     $('terrain').innerHTML = S.layers.terrain ? TERRAIN : '';
     $('terrain').style.display = '';
     $('cover').innerHTML = S.layers.cover ? coverageSvg(f) : '';
+    $('coverageAge').innerHTML = S.layers.coverageAge && f.coverage ? f.coverage.map((last, i) => {
+      const age = last < 0 ? 1 : Math.min(1, (f.t - last) / 60);
+      const color = last < 0 ? '#FF5A5F' : age > 0.5 ? '#F5B13D' : '#3FC1D9';
+      return '<rect x="' + (i % 40 * 25) + '" y="' + (975 - Math.floor(i / 40) * 25) + '" width="25" height="25" fill="' + color + '" opacity="' + (0.08 + age * 0.22) + '"/>';
+    }).join('') : '';
+    $('missions').innerHTML = S.layers.missions ? (f.missions || []).map((m) => {
+      const d = f.truth.find((q) => q.id === m.id);
+      if (!d || !m.destination) return '';
+      const g = m.destination, color = m.mode === 'follow' ? '#F5B13D' : m.mode === 'search' ? '#B58CFF' : '#5B9BFF';
+      return '<path d="M' + d.x + ' ' + Y(d.y) + 'L' + g.x + ' ' + Y(g.y) + '" fill="none" stroke="' + color + '" stroke-dasharray="3 5" stroke-opacity="0.6"/><circle cx="' + g.x + '" cy="' + Y(g.y) + '" r="4" fill="none" stroke="' + color + '"/><text class="t" x="' + (d.x + 12) + '" y="' + (Y(d.y) + 18) + '" style="fill:' + color + '">' + m.id + ' ' + m.mode.toUpperCase() + (m.target ? ' → ' + m.target : '') + '</text>';
+    }).join('') : '';
+    $('missionStatus').innerHTML = (f.missions || []).map((m) => '<div><b>' + m.id + '</b> · ' + m.mode.toUpperCase() +
+      (m.target ? ' → ' + m.target : '') + (m.destination ? ' · E' + pad4(m.destination.x) + ' N' + pad4(m.destination.y) : '') +
+      (m.blocked ? ' · yielding' : '') + '</div>').join('');
+    const observed = f.coverage ? f.coverage.filter((last) => last >= 0).length : 0;
+    $('coverageStatus').textContent = (observed / 16).toFixed(1) + '% observed · ' + S.res.missionConfig.separation + ' m minimum separation' +
+      (S.layers.coverageAge ? ' · red: unvisited · amber: older · cyan: recent (60 s scale)' : '');
     const links = [];
     if (S.layers.net) drawLinks(f, links);
     $('links').innerHTML = links.join('');
@@ -444,10 +463,14 @@
     const marks = r.timeline.filter((m, i, a) => a.findIndex((q) => q.label === m.label && Math.abs(q.t - m.t) < 1) === i);
     S.marks = marks;
     const col = { red: '#FF5A5F', amber: '#F5B13D' };
+    const labels = [];
+    marks.slice().sort((a, b) => a.t - b.t).forEach((m) => {
+      if (!/^H\d seen$/.test(m.label) && labels.every((q) => Math.abs(q.t - m.t) >= 15)) labels.push(m);
+    });
     $('tlSvg').innerHTML = '<rect x="0" y="22" width="1000" height="6" rx="3" fill="#1B222C"/><rect id="tlFill" x="0" y="22" width="0" height="6" rx="3" fill="#1D6A79"/>' +
-      marks.map((m) => '<path d="M' + x(m.t) + ' 14V28" stroke="' + col[m.color] + '" stroke-width="2"' + (m.dashed ? ' stroke-dasharray="2 2"' : '') + '/>').join('') +
+      marks.map((m) => '<path d="M' + x(m.t) + ' 14V28" stroke="' + col[m.color] + '" stroke-width="2"' + (m.dashed ? ' stroke-dasharray="2 2"' : '') + '><title>' + m.label + '</title></path>').join('') +
       '<path id="tlHead" d="M0 6V36" stroke="#E6EAF0" stroke-width="2"/>';
-    $('tlLabels').innerHTML = marks.filter((m) => !/^H\d seen$/.test(m.label)).slice(0, 8).map((m) => '<span style="position:absolute;left:' + (m.t / r.T_END * 100) + '%;transform:translateX(-50%);color:' + (m.color === 'amber' ? '#F5B13D' : '#8B96A5') + '">' + m.label + '</span>').join('');
+    $('tlLabels').innerHTML = labels.map((m) => '<span style="position:absolute;left:' + (m.t / r.T_END * 100) + '%;transform:translateX(-50%);color:' + (m.color === 'amber' ? '#F5B13D' : '#8B96A5') + '">' + m.label + '</span>').join('');
   }
   function renderFooter(f) {
     const r = S.res;
@@ -574,6 +597,9 @@
       else if (e.key === 'ArrowRight') { S.playing = false; setIdx(S.idx + (e.shiftKey ? 10 : 1)); }
     });
     function tick(ts) {
+      // A queued animation-frame timestamp can predate synchronous simulation
+      // computation. Start timing after that work so reset does not skip ahead.
+      ts = performance.now();
       if (S.playing && S.res) {
         if (S.last) {
           S.acc += ((ts - S.last) / 1000) * S.speed * 10;

@@ -15,5 +15,5 @@ const params = {
   assign: Object.fromEntries((opt('assign', '') || '').split(',').filter(Boolean).map((kv) => kv.split('='))),
 };
 const run = Sim.run(params);
-const { frames, alerts, timeline, summary, sensors } = run;
-process.stdout.write(JSON.stringify({ params: run.params, scenario: Sim.SCEN, result: { frames, alerts, timeline, summary, sensors } }));
+const { frames, alerts, timeline, summary, sensors, missionConfig } = run;
+process.stdout.write(JSON.stringify({ params: run.params, scenario: Sim.SCEN, result: { frames, alerts, timeline, summary, sensors, missionConfig } }));

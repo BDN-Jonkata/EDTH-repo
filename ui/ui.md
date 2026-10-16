@@ -24,7 +24,8 @@ What the mock does:
 
 | Part | Mock behaviour |
 |------|----------------|
-| Scenario | 5 friendly drones on circular patrols, 2 ground sensors, C2 node, 2 hostiles that cross at about 13 m separation at t = 51 s |
+| Scenario | 5 friendly drones coordinating sensor coverage, 2 ground sensors, C2 node, 2 hostiles that cross at about 13 m separation at t = 51 s |
+| Friendly missions | Patrol unvisited cells first, then oldest-observed cells, with shared destination reservations. Follow persistent unfamiliar contacts using tracker estimates, one follower per target. Search for 10 s after lost contact, then return to patrol; hand off when another detecting drone can take over |
 | Models per node | Each of the 7 nodes gets a platform from the catalog, chosen in the left panel ("Models per node"). Its sensor modules, ranges, noise and weather effects come from `catalog.js`. Press Apply & restart to run the seed with your choice |
 | Sensors | Each module enforces its catalog limits (range window, field of view, pointing, detection probability that falls with distance, rate, latency) and reports only its native data: cameras give bearing + elevation (no range), a microphone array bearing + level, a single microphone only loudness, RF bearing + signal strength, radar range + azimuth + radial speed. Weather (clear, fog, rain, wind, night) scales range, noise and detection probability per module. Radar merges targets inside its 15 m x 3 deg resolution cell |
 | Network | Per-message loss, delay and per-node clock drift in Realistic mode. Fusion is centralised at C2 (the hybrid design is not modelled yet) |
@@ -38,5 +39,21 @@ Catalog data: `catalog.js` is generated, do not edit it. After changing `seeder/
 Panels: **Sensor feed** shows the latest records the sensors reported (only their native fields), **Sensor limits** lists every sensor's range window, field of view, pointing, rate and output, and the map draws each sensor's real coverage (wedges for forward-pointing sensors, rings for 360-degree ones). Raw observations are drawn as sensors report them: a ray for bearing-only, a ring for range-only, a point for radar.
 
 Map: it fills its whole panel; the dashed square is the 1 km x 1 km area of operations, and you can pan and zoom past its edge.
+
+### Coordinated movement
+
+The patrol controller (`missions.js`) tracks observation opportunities on a 25 m grid. A cell is observed when its center falls inside an active drone-mounted sensor's range window and field of view at that sensor's sampling time. Weather-adjusted geometry applies; a successful detection is not required. Ground sensors contribute to tracking, but do not update patrol coverage history. Destinations stay at least 160 m from other drones and their goals. Patrols commit to useful legs for six seconds before replacing a covered destination, with reassessment at 1 Hz. This prevents sensor samples from continually reversing the flight direction.
+
+Every mode maintains at least 100 m horizontal separation between friendly drones and aims for 160 m clearance. Motion uses five-second proximity predictions plus reservations for complete braking trajectories, with continuous separation checks over each 0.1 s step. Drones may cross the same location at different times. Speeds remain bounded by the scenario's per-drone speed and acceleration by 2 m/s²; slowing and hovering are allowed. Sensor yaw changes by at most 20°/s in every mode, holds steady while hovering on patrol, and interpolates across the angle boundary by the short arc. Patrol heading follows motion, while follow/search drones may yaw independently to aim sensors. Terrain avoidance and energy limits are not modeled.
+
+Following requires the tracker's existing confirmation criteria plus an associated observation from that drone within the last second. The earliest eligible detecting drone takes the assignment; tracker renaming and merges preserve ownership. The follower aims for half the contributing sensor's weather-adjusted range, outside its minimum range, using a smoothed estimate and one-second velocity anticipation. Its reference sensor remains stable while supported, avoiding changes in standoff distance as different modules report. A slower drone may lose a faster target. One second without fresh own-sensor contact starts a 10 s search near the last estimate, with a gradual sensor sweep. Fresh observations permit reacquisition or handoff; unsuccessful search returns the drone to patrol. Delayed observations retain their measurement times for mission freshness checks.
+
+The **Drone missions** panel and **Mission destinations** map layer show each drone's mode and goal. Enable **Coverage age** to see red unvisited cells, cyan recent observations, and amber older observations on a 60 s scale. Mission state and coverage history follow the playback cursor, including when scrubbing backwards. Frames include additive `missions` and `coverage` fields; `missionConfig` describes the grid and separation settings in simulation results and JSON exports. A coverage value of `-1` means unvisited; other values are the last observed simulation time in seconds, in rows from the southwest corner.
+
+Run headless movement and integration checks from the repository root:
+
+```
+node ui/viewer/missions.test.js
+```
 
 Not implemented from the design: the measure-distance tool, true line-of-sight terrain occlusion, separate raw bearing rays for acoustic, topology comparison.

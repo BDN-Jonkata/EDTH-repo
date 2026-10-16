@@ -17,6 +17,7 @@
   'use strict';
 
   const CAT = typeof CATALOG !== 'undefined' ? CATALOG : require('./catalog.js'); // eslint-disable-line no-undef
+  const Mission = typeof Missions !== 'undefined' ? Missions : require('./missions.js');
   const DT = 0.1;
   const T_END = 120;
   const NF = Math.round(T_END / DT);
@@ -57,22 +58,6 @@
     GS1: 'gs_eo_acoustic', GS2: 'gs_radar_rf',
   };
 
-  // Friendlies fly circular patrols that start at their design positions.
-  SCEN.friendlies.forEach((f, i) => {
-    f.R = 100 + 10 * i;
-    const dx = 500 - f.x, dy = 500 - f.y, d = Math.hypot(dx, dy);
-    f.cx = f.x + (f.R * dx) / d;
-    f.cy = f.y + (f.R * dy) / d;
-    f.th0 = Math.atan2(f.y - f.cy, f.x - f.cx);
-  });
-
-  function frState(f, t) {
-    const a = f.th0 + f.dir * (f.v / f.R) * t;
-    return {
-      x: f.cx + f.R * Math.cos(a), y: f.cy + f.R * Math.sin(a),
-      vx: -f.dir * f.v * Math.sin(a), vy: f.dir * f.v * Math.cos(a),
-    };
-  }
   function hoPos(h, t) {
     const s = (t - h.t0) / (h.tc - h.t0);
     const dx = h.pc[0] - h.p0[0], dy = h.pc[1] - h.p0[1], L = Math.hypot(dx, dy);
@@ -275,6 +260,9 @@
     const drift = real ? P.driftMs / 1000 : 0;
     const assign = Object.assign({}, DEFAULT_ASSIGN, P.assign || {});
     const sensors = buildSensors(assign, P.weather);
+    const missionEvents = [];
+    const missions = new Mission.Controller(SCEN.friendlies, sensors, DT, (t, text) => missionEvents.push({ t, text }));
+    const frState = (f, t) => missions.state(f.id, t);
     const nodes = SCEN.ground.map((g) => g.id).concat(SCEN.friendlies.map((f) => f.id));
     const driftScale = {};
     nodes.forEach((n) => { driftScale[n] = rn() * 2 - 1; });
@@ -307,6 +295,12 @@
     const crossAlerted = {};
     let evalSq = 0, evalN = 0, evalCnt = 0, evalCntN = 0;
     const timeline = [];
+    function source(tr, rec) {
+      const key = rec.node + ' ' + rec.k;
+      tr.srcs[key] = Math.max(tr.srcs[key] === undefined ? -Infinity : tr.srcs[key], rec.t);
+      if (!tr.firstSources) tr.firstSources = {};
+      tr.firstSources[rec.node] = Math.min(tr.firstSources[rec.node] === undefined ? Infinity : tr.firstSources[rec.node], rec.t);
+    }
 
     // friendly roster is synced before the mission: tracks start at the true state
     SCEN.friendlies.forEach((f) => {
@@ -319,6 +313,8 @@
     for (let k = 0; k <= NF; k++) {
       const t = k * DT;
       const off = (n) => drift * driftScale[n] * (t / T_END);
+      missions.record(t);
+      missions.observe(t, k);
 
       // ---- truth
       const truth = [];
@@ -390,7 +386,7 @@
             tr.cls = 'friendly';
             tracks.push(tr);
           } else update(tr, z, innov(tr, z));
-          tr.lastUpd = t; tr.srcs.self = t;
+          tr.lastUpd = t; tr.srcs.self = t; tr.beaconT = m.t;
           return;
         }
         const rec = m.z;
@@ -405,14 +401,14 @@
           applyRecord(best, rec);
           if (rec.m !== 'bearing') best.rangeT = t;
           best.updated = true; best.lastUpd = t;
-          best.srcs[rec.node + ' ' + rec.k] = t;
+          source(best, rec);
         } else if (rec.m === 'rangeaz') {
           // radar gives range and bearing: enough to start a track by itself
           const fix = fixFromRangeAz(rec);
           if (!tracks.some((tr) => tr.kind !== 'frd' && Math.hypot(tr.s[0] - fix.x, tr.s[1] - fix.y) < 60)) {
             const tr = newTrack('U' + (++unkCount), 'trk', fix, 3, 225);
             tr.rangeT = t;
-            tr.updated = true; tr.srcs[rec.node + ' ' + rec.k] = t;
+            tr.updated = true; source(tr, rec);
             tracks.push(tr);
           }
         } else if (rec.m === 'bearing') {
@@ -423,7 +419,7 @@
             pending.splice(pending.indexOf(mate), 1);
             if (!tracks.some((tr) => tr.kind !== 'frd' && Math.hypot(tr.s[0] - fix.x, tr.s[1] - fix.y) < 60)) {
               const tr = newTrack('U' + (++unkCount), 'trk', fix, 3, 225);
-              tr.updated = true; tr.srcs[mate.node + ' ' + mate.k] = t; tr.srcs[rec.node + ' ' + rec.k] = t;
+              tr.updated = true; source(tr, mate); source(tr, rec);
               tracks.push(tr);
             }
           } else pending.push(rec);
@@ -473,9 +469,12 @@
         const onFriend = Object.keys(friends).some((id) => {
           const f = friends[id];
           const n = innov(f, { x: tr.s[0], y: tr.s[1], R: [tr.P[0], tr.P[1], tr.P[5]] });
-          return n.d2 < GATE && Math.hypot(f.s[2] - tr.s[2], f.s[3] - tr.s[3]) < 5;
+          // A noisy velocity estimate must not promote a duplicate of a freshly
+          // beacon-identified friendly into an unfamiliar target/follow mission.
+          const onFreshBeacon = t - (f.beaconT || 0) <= 2 && Math.hypot(f.s[0] - tr.s[0], f.s[1] - tr.s[1]) < 20;
+          return n.d2 < GATE && (onFreshBeacon || (tr.status !== 'confirmed' && Math.hypot(f.s[2] - tr.s[2], f.s[3] - tr.s[3]) < 5));
         });
-        if (onFriend && tr.status !== 'confirmed') tracks.splice(i, 1);
+        if (onFriend) { tr.cls = 'friendly'; tracks.splice(i, 1); }
       }
       // drop duplicates: two confirmed tracks on top of each other moving alike
       for (let i = 0; i < tracks.length; i++) {
@@ -487,10 +486,23 @@
           const close = Math.hypot(a.s[0] - b.s[0], a.s[1] - b.s[1]) < 30;
           if ((n.d2 < 6 || close) && Math.hypot(a.s[2] - b.s[2], a.s[3] - b.s[3]) < 6) {
             const drop = a.hitFrames >= b.hitFrames ? b : a;
+            const keep = drop === a ? b : a;
+            drop.replacement = keep;
+            Object.entries(drop.srcs).forEach(([key, time]) => { keep.srcs[key] = Math.max(keep.srcs[key] === undefined ? -Infinity : keep.srcs[key], time); });
+            Object.entries(drop.firstSources || {}).forEach(([key, time]) => {
+              if (!keep.firstSources) keep.firstSources = {};
+              keep.firstSources[key] = Math.min(keep.firstSources[key] === undefined ? Infinity : keep.firstSources[key], time);
+            });
             tracks.splice(tracks.indexOf(drop), 1); i = -1; break;
           }
         }
       }
+
+      missions.update(t, tracks);
+      missionEvents.splice(0).forEach((event) => {
+        alerts.push({ ...event, sev: 'info' });
+        timeline.push({ t: event.t, label: event.text, color: 'amber' });
+      });
 
       // ---- snapshot
       const snap = [];
@@ -582,14 +594,15 @@
         }
       }
 
-      if (lite) continue;
-      frames.push({
+      if (!lite) frames.push({
         t, k, truth, tracks: snap, match: match.map((m) => [m[0], m[1]]),
+        missions: missions.snapshot(), coverage: missions.cells.map((c) => c.last),
         meas: frameMeas.map((z) => ({ k: z.k, node: z.node, module: z.module, t: z.t, m: z.m, sx: z.sx, sy: z.sy, b: z.b, r: z.r, rmax: z.rmax, fields: z.fields, merged: !!z.merged, clutter: !!z.clutter })),
         links: Object.assign({}, linkQ),
         cross,
         m: { est: hostileTracks.length, tru: trueHost.length, countErr, rmse10, swaps, ffa: ffaCount },
       });
+      if (k < NF) missions.move(t);
     }
 
     const summary = {
@@ -602,6 +615,8 @@
     return {
       frames, alerts, timeline, summary, scen: SCEN, params: Object.assign({}, P, { assign }), T_END, DT, NF, EVAL,
       sensors: sensors.map((s) => ({ node: s.node, module: s.module, kind: s.kind, range: s.range, minRange: s.minRange, fovDeg: s.pointing === 'omni' ? 360 : Math.round(s.fov * RAD2DEG), pointing: s.pointing, native: s.native, fields: s.fields, rateHz: Math.round(10 / s.every * 10) / 10 })),
+      missionConfig: { cellSize: Mission.CELL, areaSize: Mission.SIZE, separation: Mission.SEP,
+        patrolSpacing: Mission.COMFORT, maxAcceleration: Mission.ACCEL, maxYawDegSec: Mission.YAW_RATE * RAD2DEG },
     };
   }
 
