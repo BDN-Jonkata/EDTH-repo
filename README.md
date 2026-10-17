@@ -81,8 +81,8 @@ Phased, starting from the optimistic case. Status legend: ⬜ not started · �
 
 | Status | Task |
 |--------|------|
-| ⬜ | Per-node local trackers sharing compact tracks |
-| ⬜ | Track merge with covariance intersection |
+| ✅ | Per-node local trackers sharing compact tracks: `python -m pipeline.sweep --distributed` runs a tracker per node on its own readings and sends `local_track` messages through the lossy channel (`pipeline/nodes.py`). Not the default |
+| ✅ | Track merge with covariance intersection and global IDs (`fusion/`): tested. Nodes forward their bearings in compact reports to a bearing hub at the merger. Against the central tracker (5 tuning seeds, 0 % loss) hostiles are tracked 7 points less, with fewer ghost tracks (-0.29 per step) and the same position error; at 50 % loss 4 points less and more ID swaps; see [fusion.md](fusion/fusion.md) |
 | ✅ | Drone Behaviour module (`drone_behavior/`, Emkata): automatic five-class assessment from observed history, separate verified identity, uncertainty gates, safe transit/orbit and responsive pursuit with intercept risk. No protected-zone rule; GUI identity/risk percentages, Python/JS parity and mixed-traffic tests. Also runs on the Python pipeline's tracks; see [pipeline.md](pipeline/pipeline.md) for integration and tracker limitations |
 | ✅ | Weather model (`sensors/`): several anomalies at once, anomalies that start, end and cover a zone, seasonal sun for day and night, per-module quality and sensor hierarchy from the catalog's `weather_effects`, shared golden cases for the JS port; tested |
 | ✅ | Weather applied to simulated observations: the Python observation models and the viewer's mock simulation both look up sensor quality per detection from the weather at the sensor and at the target (combinations, events and sky are accepted by the seeder and the viewer); standoff uses the catalog's `sim.ident_range_m` |
@@ -94,7 +94,7 @@ Phased, starting from the optimistic case. Status legend: ⬜ not started · �
 
 | Status | Task |
 |--------|------|
-| ⬜ | Predictor: short-horizon prediction (seconds to minutes) |
+| 🟡 | Predictor: a constant-velocity identity keeper (`predictor/identity.py`) is built and tested but did not change ID swaps (the lost track is far from its extrapolation after a 10 to 20 s gap), so it is off by default; see [predictor.md](predictor/predictor.md). Not done: a learned predictor |
 | ⬜ | Use prediction to hold identity through the close-range crossing |
 
 ### Phase 4 - Realism
@@ -154,6 +154,7 @@ Detailed split and per-phase tasks: [docs/team-plan.md](docs/team-plan.md).
 | 2026-10-17 | Viewer runs the seed with a platform chosen per node from the catalog; weather now includes night; map fills its panel |
 | 2026-10-17 | Sensor limits enforced (range window, field of view, pointing, falling detection probability, rate, latency); sensors report native data only (cameras bearing+elevation, no range) and the tracker consumes it with EKF updates |
 | 2026-10-17 | Scenario generator in the seeder: one config + seed gives a scenario and a separate ground-truth file; four presets (easy, medium, hard, challenge); tuning and test seed sets; viewer runs generated scenarios through serve.py |
+| 2026-10-18 | Fusion and predictor built by C (they have no owner). Fusion: a tracker per node, `local_track` messages over the lossy channel, covariance-intersection merge with global IDs; kept optional (`--distributed`) because hostiles are tracked 16 points less than by the central tracker, though with fewer ghost tracks and a better position. Predictor: constant-velocity identity keeper, no measurable gain, off by default |
 | 2026-10-17 | Tracks get a `suspicious` class. Suspicious tracks are investigated by sending the closest suitable drone. The drone-behaviour owner picks and flies the drone; the weather/estimator owner provides the trigger and the weather-based standoff distance (`required_standoff`). Messages `InvestigationRequest` and `InvestigationStatus` added to the draft schemas |
 | 2026-10-17 | First standalone code: `sensors/weather.py` and `sensors/quality.py`, `friend_foe/estimator.py` and `friend_foe/investigation.py`, `common/codec.py` (`encode`/`decode` plus message size log). Placeholder numbers throughout, to be tuned |
 | 2026-10-17 | Weather standoff now built on the seeder catalog (`sim.range_m`, `sim.min_range_m`, `weather_effects`) instead of a separate table; the request lists a standoff per catalog module (`standoff_by_module`) so the drone-behaviour side picks the modules of the drone it chooses. The one missing number, how much of a module's range is good enough to identify, is a placeholder (`IDENT_FRACTION`) until the catalog gets a field for it. Track and investigation message formats added to `docs/data-formats.md` |

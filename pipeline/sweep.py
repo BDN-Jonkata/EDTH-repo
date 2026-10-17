@@ -27,22 +27,23 @@ from scoring.sweep import COLUMNS, average_with_error, fmt_error, paired_differe
 from scoring.truth import with_recorded_samples
 
 WARMUP_S = 10.0
+OPTIONS = {"investigate": "investigate", "identity": "keep_identity", "distributed": "distributed"}   # --paired name -> option
 
 
-def run_once(setup: Setup, index: int, weather: str, loss: float, behaviour: bool = False,
-             investigate: bool = False) -> RunScore:
-    """`behaviour` puts the automatic drone-behaviour module (`drone_behavior/`) behind the estimator's threat hook;
-    `investigate` sends drones at suspicious tracks, and scores against the trajectories they really flew."""
+def run_once(setup: Setup, index: int, weather: str, loss: float, behaviour: bool = False, **options) -> RunScore:
+    """`behaviour` puts the automatic drone-behaviour module (`drone_behavior/`) behind the estimator's threat hook.
+    `options` go to `scored_frames`: `investigate` sends drones at suspicious tracks and scores against the
+    trajectories they really flew; `keep_identity` runs the predictor's identity keeper; `distributed` runs a
+    tracker per node and the merger instead of one central tracker."""
     scenario, truth = make_scenario_and_truth(setup, index, weather, loss, False)
     estimator = AutomaticEstimator.for_scenario(scenario) if behaviour else None
     recorded: dict = {}
-    frames = list(scored_frames(scenario, scenario["seed"], estimator=estimator, investigate=investigate, recorded=recorded))
+    frames = list(scored_frames(scenario, scenario["seed"], estimator=estimator, recorded=recorded, **options))
     return score(with_recorded_samples(truth, recorded), frames, ScoreConfig(warmup_s=WARMUP_S))
 
 
-def run_cell(setup: Setup, weather: str, loss: float, behaviour: bool = False, investigate: bool = False) -> List[RunScore]:
-    return [run_once(setup, i, weather, loss, behaviour, investigate) for i in range(setup.seeds)]
-
+def run_cell(setup: Setup, weather: str, loss: float, behaviour: bool = False, **options) -> List[RunScore]:
+    return [run_once(setup, i, weather, loss, behaviour, **options) for i in range(setup.seeds)]
 
 def print_table(title: str, rows) -> None:
     print(title)
@@ -69,7 +70,9 @@ def main() -> None:
     ap.add_argument("--vehicles", type=int, default=0)
     ap.add_argument("--behaviour", action="store_true", help="use the automatic drone-behaviour module")
     ap.add_argument("--investigate", action="store_true", help="send drones at suspicious tracks (pipeline/dispatch.py)")
-    ap.add_argument("--paired", choices=["investigate"], help="compare with and without this on the same seeds")
+    ap.add_argument("--keep-identity", action="store_true", help="run the predictor's identity keeper on the tracks")
+    ap.add_argument("--distributed", action="store_true", help="a tracker per node and a merger (pipeline/nodes.py)")
+    ap.add_argument("--paired", choices=sorted(OPTIONS), help="compare with and without this on the same seeds")
     ap.add_argument("--losses", default=",".join(str(x) for x in LOSSES), help="comma-separated message-loss levels")
     ap.add_argument("--csv")
     args = ap.parse_args()
@@ -77,17 +80,16 @@ def main() -> None:
     setup = Setup(load_preset(args.preset), args.seed_set, args.seeds, None, args.birds, args.vehicles)
     header = (f"preset={args.preset} seed set={args.seed_set} seeds={args.seeds} weather={args.weather} "
               f"birds={args.birds} vehicles={args.vehicles} behaviour={args.behaviour}")
+    base = {"investigate": args.investigate, "keep_identity": args.keep_identity, "distributed": args.distributed}
     if args.paired:
-        rows = []
-        for loss in losses:
-            off = run_cell(setup, args.weather, loss, args.behaviour, False)
-            on = run_cell(setup, args.weather, loss, args.behaviour, True)
-            rows.append((loss, paired_difference(off, on)))
-        print_table(f"{header}\nmean difference, investigation on minus off (±standard error)", rows)
-    else:
-        rows = [(loss, average_with_error(run_cell(setup, args.weather, loss, args.behaviour, args.investigate)))
+        flag = OPTIONS[args.paired]
+        rows = [(loss, paired_difference(run_cell(setup, args.weather, loss, args.behaviour, **{**base, flag: False}),
+                                         run_cell(setup, args.weather, loss, args.behaviour, **{**base, flag: True})))
                 for loss in losses]
-        print_table(f"{header} investigate={args.investigate}", rows)
+        print_table(f"{header}\nmean difference, {args.paired} on minus off (±standard error)", rows)
+    else:
+        rows = [(loss, average_with_error(run_cell(setup, args.weather, loss, args.behaviour, **base))) for loss in losses]
+        print_table(f"{header} {base}", rows)
     if args.csv:
         write_csv(args.csv, rows)
 
