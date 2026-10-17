@@ -8,7 +8,7 @@
     beacon_rate_hz: 2, delivery_prior: 0.8, delivery_prior_n: 10, delivery_tau_s: 30, delivery_min: 0.05,
     max_dt_s: 2, llr_limit: 4, friendly_enter: 0.9, friendly_exit: 0.7, suspicious_enter: 0.3, suspicious_exit: 0.4,
     suspicious_requires_behavior: false, suspicious_threat_enter: 0.65, suspicious_threat_exit: 0.55,
-    hostile_enter: 0.9, hostile_exit: 0.7, peaceful_enter: 0.1, peaceful_exit: 0.3, threat_tau_s: 20, memory_ttl_s: 30 };
+    hostile_enter: 0.9, hostile_exit: 0.7, peaceful_min_updates: 0, peaceful_enter: 0.1, peaceful_exit: 0.3, threat_tau_s: 20, memory_ttl_s: 30 };
   const sigmoid = (x) => 1 / (1 + Math.exp(-x));
   class AutomaticEstimator {
     constructor(behaviorConfig, config, verifiedIds = []) {
@@ -40,7 +40,7 @@
         m.cls = m.n < c.min_updates ? 'unknown' :
           p >= (prev === 'friendly' ? c.friendly_exit : c.friendly_enter) ? 'friendly' :
             q >= (prev === 'hostile' ? c.hostile_exit : c.hostile_enter) ? 'hostile' :
-              q <= (prev === 'peaceful' ? c.peaceful_exit : c.peaceful_enter) ? 'peaceful' :
+              m.n >= c.peaceful_min_updates && q <= (prev === 'peaceful' ? c.peaceful_exit : c.peaceful_enter) ? 'peaceful' :
                 riskSupported && p <= (prev === 'suspicious' ? c.suspicious_exit : c.suspicious_enter) ? 'suspicious' : 'unknown';
         const prob = m.cls === 'friendly' ? p : m.cls === 'hostile' ? q : m.cls === 'peaceful' ? 1 - q : m.cls === 'suspicious' ? (c.suspicious_requires_behavior ? q : 1 - p) : Math.max(p, 1 - p);
         return { track_id: tr.track_id, t, cls: m.cls, class_prob: prob, p_friendly: p, matched_beacon: match?.id ?? null, p_hostile: q };

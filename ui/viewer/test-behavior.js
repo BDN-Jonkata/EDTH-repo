@@ -6,7 +6,8 @@ const path = require('node:path');
 const { AutomaticEstimator, DEFAULTS } = require('./friend-foe.js');
 const Sim = require('./sim.js');
 const root = path.resolve(__dirname, '../..');
-const reference = JSON.parse(execFileSync('python3', ['-m', 'drone_behavior.golden'], { cwd: root, maxBuffer: 8 * 1024 * 1024 }));
+const python = process.env.PYTHON || (process.platform === 'win32' ? 'python' : 'python3');
+const reference = JSON.parse(execFileSync(python, ['-m', 'drone_behavior.golden'], { cwd: root, maxBuffer: 8 * 1024 * 1024 }));
 
 function same(a, b, what) {
   if (typeof b === 'number') assert.ok(Math.abs(a - b) <= 1e-9 * Math.max(1, Math.abs(b)), what + ': ' + a + ' vs ' + b);
@@ -18,7 +19,7 @@ function same(a, b, what) {
 
 test('agreed estimator configuration matches Python exactly', () => assert.deepEqual(DEFAULTS, reference.estimator_config));
 reference.cases.forEach((c) => test('Python/JS flags, scores and explanations: ' + c.name, () => {
-  const est = new AutomaticEstimator(c.policy, {}, c.verified_ids);
+  const est = new AutomaticEstimator(c.policy, c.config || {}, c.verified_ids);
   c.frames.forEach((f) => {
     same(est.update(f.t, f.tracks, f.beacons), f.expected, c.name + ' t=' + f.t);
     f.tracks.forEach((tr) => same(est.explain(tr.track_id), f.evidence[tr.track_id], c.name + ' ' + tr.track_id + ' t=' + f.t));

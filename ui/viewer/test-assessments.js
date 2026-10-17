@@ -78,3 +78,20 @@ test('safe traffic remains distinguishable across independent sensor-noise seeds
     assert.ok(benignPeaceful >= 100, 'sustained benign peaceful observations, seed ' + seed);
   }
 });
+
+test('a friendly dropout coasts and fades to unknown without suspicion or dispatch', () => {
+  const scenario = require('./scenarios.js').hard;
+  const r = Sim.run({ scenario, seed: scenario.seed, mode: 'realistic', weather: 'fog', loss: 40, delayMs: 225, driftMs: 200 });
+  const before = r.frames[590].tracks.find((tr) => tr.id === 'F3');
+  assert.equal(before.cls, 'friendly');
+  const after = r.frames.filter((f) => f.t >= 64).map((f) => f.tracks.find((tr) => tr.id === 'F3'));
+  assert.ok(after.every(Boolean), 'retain the known-fleet track with its stale observation age');
+  after.forEach((tr) => {
+    assert.equal(tr.st, 'coasting', 'loss of contact is a tracking status, not hostile evidence');
+    assert.ok(['friendly', 'unknown', 'peaceful'].includes(tr.cls), 'silence alone must not accuse F3');
+    assert.equal(tr.behavior.increment, 0, 'prediction cannot add observed behavior evidence');
+  });
+  assert.equal(after.at(-1).cls, 'unknown');
+  assert.ok(after.at(-1).age > 50);
+  assert.ok(!r.investigations.requests.some((q) => q.track_id === 'F3'));
+});

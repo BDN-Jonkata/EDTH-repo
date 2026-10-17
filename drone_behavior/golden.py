@@ -53,13 +53,15 @@ def build_cases():
         cases.append({"name": name, "policy": asdict(policy), "verified_ids": ["track-a"] if name == "verified" else [], "frames": frames})
     # Exercise the default policy with no authorized corridor, including noisy
     # derivative estimates and circles whose tangent sometimes points at C2.
-    for name in ("default_transit", "neutral_silence", "noisy_transit", "safe_orbit", "noisy_orbit", "protected_orbit", "repeated_entry", "association_jump"):
+    for name in ("default_transit", "neutral_silence", "noisy_transit", "safe_orbit", "noisy_orbit", "protected_orbit", "repeated_entry", "association_jump", "friendly_dropout", "delayed_peaceful"):
         default_policy = BehaviorConfig.for_area([500, 500])
-        est, frames = AutomaticEstimator(default_policy), []
-        for k in range(101):
+        verified_ids = ["opaque"] if name == "friendly_dropout" else []
+        overrides = {"peaceful_min_updates": 60} if name == "delayed_peaceful" else {}
+        est, frames = AutomaticEstimator(default_policy, EstimatorConfig(**overrides), verified_ids=verified_ids), []
+        for k in range(241 if name == "friendly_dropout" else 101):
             t = k / 2
             x, y, vx, vy = 100 + 10 * t, 100, 10, 0
-            if name == "neutral_silence":
+            if name in ("neutral_silence", "friendly_dropout"):
                 x, vx = 100, 0
             elif name == "noisy_transit":
                 x += math.sin(7 * t)
@@ -75,11 +77,13 @@ def build_cases():
                 x, y, vx = 650 + 35 * math.cos(t / 2), 500, -17.5 * math.sin(t / 2)
             elif name == "association_jump" and t >= 25.5:
                 x, y, vx = 500, 500, 0
-            tracks = [TrackState("opaque", t, (x, y, 60), (vx, vy, 0), 2)]
-            result = est.update(t, tracks, [])
-            frames.append({"t": t, "tracks": [asdict(tr) for tr in tracks], "beacons": [],
+            tracks = [TrackState("opaque", t, (x, y, 60), (vx, vy, 0), 2,
+                                 observed_t=min(t, 20) if name == "friendly_dropout" else t)]
+            beacons = [Beacon("trusted", t, tracks[0].position)] if name == "friendly_dropout" and t <= 20 else []
+            result = est.update(t, tracks, beacons)
+            frames.append({"t": t, "tracks": [asdict(tr) for tr in tracks], "beacons": [asdict(b) for b in beacons],
                            "expected": [asdict(c) for c in result], "evidence": {"opaque": est.explain("opaque")}})
-        cases.append({"name": name, "policy": asdict(default_policy), "verified_ids": [], "frames": frames})
+        cases.append({"name": name, "policy": asdict(default_policy), "config": overrides, "verified_ids": verified_ids, "frames": frames})
     return {"estimator_config": asdict(EstimatorConfig()), "cases": cases}
 
 
