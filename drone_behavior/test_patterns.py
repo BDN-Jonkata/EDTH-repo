@@ -73,6 +73,29 @@ def test_known_preflight_roster_is_identity_evidence():
     assert est.update(0, [tr], [])[0].cls == "friendly"
 
 
+@pytest.mark.parametrize('roster', [False, True])
+def test_friendly_losing_its_beacon_fades_to_unknown_and_recovers_without_suspicion(roster):
+    est = AutomaticEstimator(BehaviorConfig(protected_zones=[ZONE]), verified_ids=['opaque-track'] if roster else [])
+    lost = []
+    for k in range(241):
+        t = k / 2
+        tr = state(t, 100, 100, observed_t=min(t, 20))
+        beacons = [Beacon('trusted', t, tr.position)] if t <= 20 else []
+        found = est.update(t, [tr], beacons)[0]
+        if t == 20:
+            assert found.cls == 'friendly'
+        if t > 20:
+            lost.append(found)
+    assert {c.cls for c in lost} == {'friendly', 'unknown'}
+    assert lost[-1].cls == 'unknown'
+    assert all(c.p_hostile == 0.5 for c in lost)
+    for k in range(1, 7):
+        t = 120 + k / 2
+        tr = state(t, 100, 100)
+        found = est.update(t, [tr], [Beacon('trusted', t, tr.position)])[0]
+    assert found.cls == 'friendly'
+
+
 def test_erratic_turns_outside_protected_area_are_not_enemy_evidence():
     _, found = run(lambda t: state(t, 100 + 20 * math.cos(t), 100 + 20 * math.sin(t),
                                   -20 * math.sin(t), 20 * math.cos(t)))

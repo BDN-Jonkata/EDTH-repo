@@ -6,7 +6,8 @@ const path = require('node:path');
 const { AutomaticEstimator, DEFAULTS } = require('./friend-foe.js');
 const Sim = require('./sim.js');
 const root = path.resolve(__dirname, '../..');
-const reference = JSON.parse(execFileSync('python3', ['-m', 'drone_behavior.golden'], { cwd: root, maxBuffer: 8 * 1024 * 1024 }));
+const python = process.env.PYTHON || (process.platform === 'win32' ? 'python' : 'python3');
+const reference = JSON.parse(execFileSync(python, ['-m', 'drone_behavior.golden'], { cwd: root, maxBuffer: 8 * 1024 * 1024 }));
 
 function same(a, b, what) {
   if (typeof b === 'number') assert.ok(Math.abs(a - b) <= 1e-9 * Math.max(1, Math.abs(b)), what + ': ' + a + ' vs ' + b);

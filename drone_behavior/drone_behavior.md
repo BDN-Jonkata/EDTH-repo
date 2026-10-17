@@ -79,6 +79,16 @@ least 0.9 (exit 0.7). The raw beacon-only estimator retains its older silence ru
 for baseline comparisons. Neither smooth flight nor a peaceful assessment can
 establish `friendly` identity.
 
+A missing beacon does not establish that a drone died or changed allegiance.
+The viewer marks a known-fleet track `coasting` after 1 s without an update and
+retains its last observation age. Fresh beacons restore `confirmed` tracking.
+Identity evidence fades according to link quality; when it no longer supports
+friendly and no behavior evidence supports another class, the flag is `unknown`.
+Coasting predictions and silence add no behavior evidence; without independent
+risk evidence they cannot create suspicion, hostility or an investigation request.
+Tracking status and the five assessment flags remain
+separate; a simulator dropout is not supplied to the classifier as evidence.
+
 `p_friendly` and `p_hostile` are **independent simulation scores**, not a five-way
 distribution and not calibrated probabilities of real intent. A benign aircraft,
 bird or vehicle entering the protected area can trigger a threat assessment.
@@ -124,11 +134,15 @@ node ui/viewer/test-jamming.js
 python3 -m drone_behavior.evaluate --preset medium --seeds 1 7 83 --birds 2 --vehicles 2
 ```
 
-The behavior parity test launches Python to produce reference sequences. Tests
-cover all five simultaneous labels in mixed sensor traffic, benign false flags,
+The behavior parity test launches Python to produce reference sequences, using
+`python` on Windows and `python3` elsewhere. Set the `PYTHON` environment
+variable to a Python executable path to use a specific installation or virtual
+environment (the test invokes it directly, without a shell).
+Tests cover all five simultaneous labels in mixed sensor traffic, benign false flags,
 truth-role independence, history warmup, noisy transit/orbits, single versus repeated
 intrusions, noisy boundaries, erratic non-threat motion, rate dependence,
-coasting, replay, identity priority, one-to-one matching, behavior changes, TTL,
+coasting, friendly dropout/recovery without suspicion or dispatch, replay,
+identity priority, one-to-one matching, behavior changes, TTL,
 weather feasibility, dispatch/release/cooldown, and motion limits. Existing seeder
 seed separation remains unchanged: tune on 1–99; reserve 1000–1099 for final tests.
 

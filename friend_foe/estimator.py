@@ -6,8 +6,9 @@ docs/data-formats.md). Two separate kinds of evidence, both log-likelihood ratio
 Beacon axis, "friendly" vs "not friendly", p_friendly = sigmoid(llr):
 * A fresh friendly beacon consistent with the track pushes llr up (strongly).
 * No matching beacon pushes llr down slowly, but only to a floor, and less on a
-  lossy link. Beacons can be lost to jamming, so silence alone makes a track
-  suspicious, never hostile and never peaceful.
+  lossy link. The raw beacon-only baseline treats silence as suspicious. The
+  automatic behavior pipeline enables `suspicious_requires_behavior`: silence
+  alone can fade friendly identity to unknown, never establish suspicion.
 
 Behaviour axis, "hostile" vs "peaceful", p_hostile = sigmoid(threat):
 * Only the `threat_llr` hook moves it (the drone-behaviour module): positive =
@@ -16,8 +17,9 @@ Behaviour axis, "hostile" vs "peaceful", p_hostile = sigmoid(threat):
   this positive evidence; without a hook neither ever appears.
 
 A beacon match is primary: a friendly stays friendly whatever its behaviour looks
-like. Otherwise hostile or peaceful (from behaviour) wins over suspicious (from
-silence). Thresholds have hysteresis so classes do not flicker. The class is a
+like. Otherwise hostile or peaceful (from behaviour) wins over suspicious (which
+also requires observed risk in automatic mode). Thresholds have hysteresis so
+classes do not flicker. The class is a
 presumption with a probability, never a hard delete.
 
 Inputs are plain dataclasses that mirror the draft `LocalTrack` and

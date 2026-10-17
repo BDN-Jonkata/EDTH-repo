@@ -24,6 +24,11 @@ Scenarios: the **Preset** picker (easy, medium, hard, challenge, busy) loads a s
 
 Commanded drones: the mock accepts `commands` from the scenario (or `params.commands`); commands and acks cross the same lossy channel, with retries. `goto` and `hold` override autonomous assignments, and `return_to_patrol` resumes coordinated coverage. The mission controller moves all drones together under the platform flight limits and the shared separation, acceleration and sensor-yaw limits. Command validation and facing helpers live in `drones.js`; test with `node ui/viewer/test-commands.js`. The viewer has no control for sending commands yet.
 
+Lost contact: known friendly tracks also switch to `coasting` after 1 s without
+an update; a fresh beacon restores `confirmed`. Their observation age remains
+visible. Identity can fade to `unknown`, but silence and predicted movement alone
+do not make a friendly suspicious or dispatch an investigation.
+
 Messages: every message the mock sends (`observation`, `friendly_beacon`, `drone_command`, `drone_state`) and local investigation contract event (`investigation_request`, `investigation_status`) has the shared header from `messages.js`, with the fields in [docs/data-formats.md](../docs/data-formats.md#messages); test with `node ui/viewer/test-messages.js`. Investigation events are currently delivered in process, while radio messages use the lossy channel.
 
 Bandwidth: `degradations.network.bandwidth_kbps` (or the "Link cap per node" field in Comms impairments, empty = none) limits each node's link to C2 in Realistic mode. Messages queue in order, take their size divided by the rate, and the oldest are dropped when more than 2 s are waiting. The run result gets a `bandwidth` entry with bytes per message type. The rule is in `linkcap.js`; test with `node ui/viewer/test-bandwidth.js`.

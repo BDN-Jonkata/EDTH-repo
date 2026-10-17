@@ -654,7 +654,7 @@
   // ------------------------------------------------------------------ lifecycle
   function updateLifecycle(c, t) {
     c.tracks.forEach((tr) => {
-      if (tr.kind === 'frd') return;
+      if (tr.kind === 'frd') { setCoasting(tr, t); return; }
       if (tr.updated) tr.hitFrames++;
       confirmTrack(c, tr, t);
       announceTentative(c, tr, t);
