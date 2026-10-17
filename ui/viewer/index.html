@@ -112,10 +112,19 @@
   </div>
   <div class="chip amber" id="crossBanner" role="status" style="position:absolute;top:12px;left:50%;transform:translateX(-50%);height:auto;padding:8px 12px;font-size:12px;white-space:nowrap;display:none"></div>
   <div style="position:absolute;top:96px;right:12px;display:flex;flex-direction:column;gap:6px">
+    <button class="ibtn" id="legendBtn" aria-label="Legend" aria-expanded="false" aria-controls="legend" title="Legend"><svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true"><path d="M2 3.5h2M2 8h2M2 12.5h2M6.5 3.5h7M6.5 8h7M6.5 12.5h7" fill="none" stroke="currentColor" stroke-width="1.5"/></svg></button>
     <button class="ibtn" id="zin" aria-label="Zoom in"><svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true"><path d="M8 3v10M3 8h10" stroke="currentColor" stroke-width="1.5"/></svg></button>
     <button class="ibtn" id="zout" aria-label="Zoom out"><svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true"><path d="M3 8h10" stroke="currentColor" stroke-width="1.5"/></svg></button>
     <button class="ibtn" id="zfit" aria-label="Fit area"><svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true"><path d="M2 6V2h4M10 2h4v4M14 10v4h-4M6 14H2v-4" fill="none" stroke="currentColor" stroke-width="1.5"/></svg></button>
   </div>
+  <section class="hud legend" id="legend" aria-label="Map legend" hidden>
+    <div class="lg-head">
+      <b>Legend</b>
+      <label class="lg-all"><input type="checkbox" id="legendAll"> All symbols</label>
+      <button class="ibtn" id="legendClose" aria-label="Close legend"><svg width="14" height="14" viewBox="0 0 14 14" aria-hidden="true"><path d="M2 2l10 10M12 2L2 12" stroke="currentColor" stroke-width="1.5"/></svg></button>
+    </div>
+    <div id="legendBody"></div>
+  </section>
   <div class="hud mono" id="coord" style="bottom:12px;right:12px;padding:6px 10px;font-size:11px;color:#C9D1DB">E0000 N0000 · elev 000 m</div>
 </main>
 
@@ -230,6 +239,7 @@
 <script src="investigations.js"></script>
 <script src="sim.js"></script>
 <script src="weather-ui.js"></script>
+<script src="legend.js"></script>
 <script src="app.js"></script>
 </body>
 </html>

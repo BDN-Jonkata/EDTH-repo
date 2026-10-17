@@ -271,13 +271,14 @@
     });
     return out.join('');
   }
+  // a link's look from the share of messages that get through (the legend draws the same)
+  const linkStyle = (q) => (q > 0.9 ? { col: '#7D8794', dash: '' } : q > 0.5 ? { col: '#F5B13D', dash: '6 4' } : { col: '#FF5A5F', dash: '2 5' });
   function drawLinks(f, out) {
     const c2 = scen().c2;
     const nodes = scen().ground.map((g) => ({ id: g.id, x: g.x, y: g.y })).concat(f.truth.filter((o) => o.kind === 'friendly').map((o) => ({ id: o.id, x: o.x, y: o.y })));
     nodes.forEach((n) => {
       const q = f.links[n.id] === undefined ? 1 : f.links[n.id];
-      const col = q > 0.9 ? '#7D8794' : q > 0.5 ? '#F5B13D' : '#FF5A5F';
-      const dash = q > 0.9 ? '' : q > 0.5 ? '6 4' : '2 5';
+      const { col, dash } = linkStyle(q);
       out.push('<path d="M' + n.x + ' ' + Y(n.y) + 'L' + c2.x + ' ' + Y(c2.y) + '" stroke="' + col + '" stroke-width="1.2" stroke-opacity="0.8" stroke-dasharray="' + dash + '" fill="none"/>');
       out.push('<text class="t" text-anchor="middle" style="font-size:9px;fill:#8B96A5" x="' + ((n.x + c2.x) / 2) + '" y="' + (Y((n.y + c2.y) / 2) - 4) + '">' + Math.round((1 - q) * 100) + '%</text>');
     });
@@ -380,12 +381,14 @@
     $('trk').innerHTML = S.layers.tracks ? tracksSvg(f) : '';
   }
   // fixed infrastructure: the C2 node and the ground sensors
+  const C2_MARK = '<path d="M-9 -9H9V9H-9Z" fill="#141A22" stroke="#9AA4B2" stroke-width="1.5"/><path d="M-5 0H5M0 -5V5" stroke="#9AA4B2" stroke-width="1.5"/>';
+  const GROUND_MARK = '<rect x="-8" y="-8" width="16" height="16" fill="#141A22" stroke="#C9D1DB" stroke-width="1.6"/><circle r="3" fill="#C9D1DB"/>';
   function fixedSvg() {
     const c2 = scen().c2;
-    const fx = ['<g transform="translate(' + c2.x + ' ' + Y(c2.y) + ')"><path d="M-9 -9H9V9H-9Z" fill="#141A22" stroke="#9AA4B2" stroke-width="1.5"/><path d="M-5 0H5M0 -5V5" stroke="#9AA4B2" stroke-width="1.5"/></g><text class="t" x="' + (c2.x + 14) + '" y="' + (Y(c2.y) + 18) + '">C2</text>'];
+    const fx = ['<g transform="translate(' + c2.x + ' ' + Y(c2.y) + ')">' + C2_MARK + '</g><text class="t" x="' + (c2.x + 14) + '" y="' + (Y(c2.y) + 18) + '">C2</text>'];
     scen().ground.forEach((g) => {
       const kinds = S.res.sensors.filter((q) => q.node === g.id).map((q) => q.kind).join('·');
-      fx.push('<g transform="translate(' + g.x + ' ' + Y(g.y) + ')"><rect x="-8" y="-8" width="16" height="16" fill="#141A22" stroke="#C9D1DB" stroke-width="1.6"/><circle r="3" fill="#C9D1DB"/></g><text class="t" x="' + (g.x + 12) + '" y="' + (Y(g.y) + 22) + '" style="fill:#C9D1DB">' + g.id + ' ' + kinds + '</text>');
+      fx.push('<g transform="translate(' + g.x + ' ' + Y(g.y) + ')">' + GROUND_MARK + '</g><text class="t" x="' + (g.x + 12) + '" y="' + (Y(g.y) + 22) + '" style="fill:#C9D1DB">' + g.id + ' ' + kinds + '</text>');
     });
     return fx.join('');
   }
@@ -647,6 +650,7 @@
     renderFooter(f);
     buildLimits(f);
     buildHealth(f);
+    Legend.render(f);
     applyView();
   }
 
@@ -734,6 +738,14 @@
   syncStaged();
   wireMap();
   wirePlayback();
+  Legend.init({
+    state: S, layers: LAYERS, className: CLASS_NAME, classColor, kcol: KCOL, kdash: KDASH, linkStyle,
+    glyph: (cls) => glyphSvg({ cls, x: 0, y: 1000 }, classColor(cls)), // the map's own symbol, drawn at the origin
+    marks: { c2: C2_MARK, ground: GROUND_MARK },
+    rangeNow: (s, f) => rangeNow(s, f), nominalRange: (s) => Sim.MODULES[s.module].sim.range_m,
+    shortField: (n) => (SHORT[n] === undefined ? n : (SHORT[n] || 'class')),
+    redraw: () => { if (S.res) render(); },
+  });
   const q = new URLSearchParams(location.search); // ?weather=night&seed=7&t=49.5&tab=deg
   setWeatherFromUrl(q.get('weather'));
   if (q.get('seed')) S.staged.seed = parseInt(q.get('seed'), 10) || S.staged.seed;
