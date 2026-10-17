@@ -2,7 +2,7 @@
 
 Per-node link health and per-message trust (seeder task 10, phase 2). See [seeder-plan.md](../docs/seeder-plan.md) section 10 for the plan and the viewer's version of the states in [storefwd.js](../ui/viewer/storefwd.js).
 
-Status: **done**: the Python reference, tested and wired into the pipeline (`--trust`, off by default), the JavaScript port [ui/viewer/health.js](../ui/viewer/health.js) (not wired into the viewer's simulation, which keeps its own health table), and a calibration of the link model against the Python channel. The JS port was checked against the shared cases by running [test-health.js](../ui/viewer/test-health.js)'s checks in headless Edge, since Node is not installed on this machine: all 7 pass; run `node ui/viewer/test-health.js` where Node exists.
+Status: **done**: the Python reference, tested and wired into the pipeline (`--trust`, off by default), the JavaScript port [ui/viewer/health.js](../ui/viewer/health.js) (not wired into the viewer's simulation, which keeps its own health table), and a calibration of the link model against the Python channel. The JS port is checked against the shared cases by [test-health.js](../ui/viewer/test-health.js): all 7 pass (`node ui/viewer/test-health.js`).
 
 ## What exists
 
@@ -43,6 +43,8 @@ F2's link cut 30 to 60 s, GS2 delayed 4 s from 70 to 85 s, F4 dead from 100 s. T
 Reading it: the **silence part** is what removes the flagged friendlies (1.62 to 0.24 of 5) and costs no hostiles; the **reading weight and late rule** is what removes the ghost tracks and ID swaps, but costs 5 points of hostiles, because a delayed reading is dropped instead of being used at its own time (the tracker uses readings at their arrival time, so it cannot use a late one). The **two layers give the same result** here: during these faults the states come from silence, which both share, so the ablation cannot tell them apart; it would take a scenario with steady partial loss. **With no faults** (`medium` preset, 10 tuning seeds, trust on minus off): hostile tracked -0.01±0.00 at 0 % and 30 % loss, -0.00±0.00 at 50 %, -0.02±0.01 at 70 %; false tracks -0.07±0.05, -0.07±0.04, -0.09±0.03, -0.03±0.01; ID swaps -0.6, -0.6, -1.0, -0.3; friendlies flagged 0 (-0.10±0.10 at 70 %). So switching it on costs almost nothing when nothing is wrong and helps a little. Not measured: the test seeds, other presets.
 
 ## Honest gaps
+
+- **`--trust` does not help at very high loss.** At 90 and 95 % loss (`challenge` preset, 6 tuning seeds) friendlies flagged are 4.0 and 5.0 of 5 with or without trust (difference 0.00±0.00): the links are degraded, not silent, so the silence rule does not apply, and a friendly's beacon track is lost between the rare beacons. Not solved.
 
 - **The layers are not separated by any of these runs.** The Bayesian and frequentist layers give the same results: in the outage faults the state comes from silence, which they share. A scenario with steady partial loss, where `degraded` matters, would show a difference; not built.
 - **Calibration is to our own channel** (see above), not to a real link.
