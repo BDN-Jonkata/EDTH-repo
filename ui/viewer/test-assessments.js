@@ -5,7 +5,9 @@ const assert = require('node:assert/strict');
 const Sim = require('./sim.js');
 const { busy } = require('./scenarios.js');
 const labels = ['friendly', 'hostile', 'peaceful', 'suspicious', 'unknown'];
-const params = { seed: busy.seed, mode: 'optimistic', weather: 'clear', scenario: busy };
+// motionPeaceful: these tests show the behaviour module's own labels, including peaceful from steady benign motion;
+// the simulation's default is the safe mode (see the test at the end of this file)
+const params = { seed: busy.seed, mode: 'optimistic', weather: 'clear', scenario: busy, motionPeaceful: true };
 const demo = Sim.run(params);
 
 // Evaluation only: unique nearest truth within the scorer's 40 m false-alarm
@@ -110,4 +112,13 @@ test('a friendly dropout coasts and fades to unknown without suspicion or dispat
   assert.equal(after.at(-1).cls, 'unknown');
   assert.ok(after.at(-1).age > 50);
   assert.ok(!r.investigations.requests.some((q) => q.track_id === 'F3'));
+});
+
+test('by default a track on a real hostile is never called peaceful from steady motion alone', () => {
+  const { challenge } = require('./scenarios.js');
+  const run = (extra) => Sim.run({ seed: challenge.seed, mode: 'optimistic', weather: 'clear', scenario: challenge, ...extra });
+  const peacefulOnHostile = (res) => res.frames.reduce((n, f) => n + f.truth.filter((q) => q.id.startsWith('H')).reduce((m, h) =>
+    m + f.tracks.filter((t) => !t.id.startsWith('F') && Math.hypot(t.x - h.x, t.y - h.y) < 40 && t.cls === 'peaceful').length, 0), 0);
+  assert.equal(peacefulOnHostile(run({})), 0);
+  assert.ok(peacefulOnHostile(run({ motionPeaceful: true })) > 100, 'the module on its own does call them peaceful');
 });

@@ -35,6 +35,7 @@
     ['terrain', 'Terrain / height', true, '<path d="M1 11c3-6 5-8 6-8s3 2 6 8" fill="none" stroke="#9AA4B2" stroke-width="1.4"/>'],
     ['truth', 'Ground truth', true, '<circle cx="7" cy="7" r="4" fill="none" stroke="#E6EAF0" stroke-width="1.4"/>'],
     ['tracks', 'Fused tracks', true, '<path d="M7 1l6 6-6 6-6-6z" fill="none" stroke="#FF5A5F" stroke-width="1.4"/>'],
+    ['tentative', 'Unconfirmed tracks', false, '<path d="M7 1l6 6-6 6-6-6z" fill="none" stroke="#9AA4B2" stroke-width="1.2" stroke-dasharray="2 2"/>'],
     ['unc', 'Uncertainty', true, '<ellipse cx="7" cy="7" rx="6" ry="3.5" fill="none" stroke="#C9D1DB" stroke-width="1.2"/>'],
     ['pred', 'Predictions', true, '<path d="M1 7h12" stroke="#C9D1DB" stroke-width="1.4" stroke-dasharray="1.5 2"/>'],
     ['raw', 'Raw observations', false, '<path d="M1 13L13 3M1 13L13 8" stroke="#C9D1DB" stroke-width="1"/>'],
@@ -443,7 +444,9 @@
   }
   function tracksSvg(f) {
     const order = { friendly: 0, peaceful: 1, unknown: 2, suspicious: 3, hostile: 4 };
-    return f.tracks.slice().sort((a, b) => order[a.cls] - order[b.cls]).map((t) => trackSvg(t, f, t.id === S.sel)).join('');
+    // a track that is not confirmed yet is often a radar false alarm that is gone a second later: hidden unless asked for
+    const shown = f.tracks.filter((t) => t.st !== 'tentative' || S.layers.tentative || t.id === S.sel);
+    return shown.sort((a, b) => order[a.cls] - order[b.cls]).map((t) => trackSvg(t, f, t.id === S.sel)).join('');
   }
 
   // -------------------------------------------------------------- right panel

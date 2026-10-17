@@ -343,7 +343,9 @@
     const policy = c.P.behavior || (c.P.scenario?.config?.drone_behavior) || {};
     c.traffic = new Traffic(c.P.traffic || c.P.scenario?.config?.traffic_behaviors, world.targets, world.friendlies, DT);
     c.classifier = new FriendFoe.AutomaticEstimator(Behavior.configFor([world.c2.x, world.c2.y], policy),
-      { beacon_rate_hz: world.beacon.rate_hz || 2 }, fleet.map((f) => f.id));
+      // safe mode (as pipeline/behaviour.py): steady transit alone never makes a track peaceful, because a hostile that
+      // flies straight looks the same; on the scenarios 62 to 70 % of the tracks on real hostiles were called peaceful
+      { beacon_rate_hz: world.beacon.rate_hz || 2, peaceful_min_updates: c.P.motionPeaceful ? 0 : 1e9 }, fleet.map((f) => f.id));
   }
   // commands to send, in time order: from the run parameters if given, otherwise from the scenario
   function scriptedCommands(P, world) {
