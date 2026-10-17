@@ -106,6 +106,8 @@ def main() -> None:
     ap.add_argument("--trust", action="store_true", help="weight readings by link health and discount explained silence (health/)")
     ap.add_argument("--oosm", action="store_true", help="apply a late reading at the time it was taken (tracker/oosm.py)")
     ap.add_argument("--sectors", action="store_true", help="planned patrol sectors and a neighbour covering a busy drone's sector (pipeline/sectors.py)")
+    ap.add_argument("--place-ground", action="store_true", help="with --sectors: also plan where the ground sensors stand")
+    ap.add_argument("--cluster", type=float, metavar="W", help="with --sectors: a cell seen twice counts W times a cell seen once (default 1; larger pulls the drones together)")
     ap.add_argument("--ground-first", action="store_true", help="no drone for a track a ground sensor can identify (with --investigate)")
     ap.add_argument("--distributed", action="store_true", help="a tracker per node and a merger (pipeline/nodes.py)")
     ap.add_argument("--paired", choices=sorted(OPTIONS), help="compare with and without this on the same seeds")
@@ -118,7 +120,8 @@ def main() -> None:
     header = (f"preset={args.preset} seed set={args.seed_set} seeds={args.seeds} weather={args.weather} "
               f"birds={args.birds} vehicles={args.vehicles} behaviour={args.behaviour}")
     base = {"investigate": args.investigate, "keep_identity": args.keep_identity, "distributed": args.distributed,
-            "cue": args.cue, "trust": args.trust, "oosm": args.oosm, "sectors": args.sectors,
+            "cue": args.cue, "trust": args.trust, "oosm": args.oosm,
+            "sectors": {"place_ground": args.place_ground, "overlap": args.cluster or 1.0} if args.sectors else False,
             "ground_first": args.ground_first}
     if args.swaps:
         for loss in losses:

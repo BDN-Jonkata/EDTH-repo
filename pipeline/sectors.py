@@ -16,7 +16,7 @@ import math
 import random
 from typing import Dict, List, Optional
 
-from pipeline.coverage import Grid, drone_mask, ground_masks
+from pipeline.coverage import Grid, drone_mask, ground_mask, ground_masks
 from pipeline.fleet import Fleet, PATROL
 
 MIN_RADIUS_M, MAX_RADIUS_M = 60.0, 220.0
@@ -25,36 +25,50 @@ BACKFILL_MAX_RADIUS_M = 260.0
 _cache: Dict[tuple, dict] = {}
 
 
-def plan_sectors(scenario: dict) -> dict:
-    """A copy of the scenario whose drones fly better loops. Deterministic: the scenario's seed drives the search."""
-    key = (scenario["id"], scenario["seed"], scenario["preset"])
+def plan_sectors(scenario: dict, place_ground: bool = False, overlap: float = 1.0) -> dict:
+    """A copy of the scenario whose drones fly better loops. Deterministic: the scenario's seed drives the search.
+    `place_ground` also moves the ground sensors (a deployment choice made before the mission); `overlap` is how much
+    a cell seen from two viewpoints counts against one (1 = twice as much; larger pulls the drones together)."""
+    key = (scenario["id"], scenario["seed"], scenario["preset"], place_ground, overlap)
     if key not in _cache:
-        _cache[key] = _plan(scenario)
+        _cache[key] = _plan(scenario, place_ground, overlap)
     return copy.deepcopy(_cache[key])
 
 
-def _plan(scenario: dict) -> dict:
+def _plan(scenario: dict, place_ground: bool, overlap: float) -> dict:
     out = copy.deepcopy(scenario)
-    grid, rng, size = Grid(scenario), random.Random(scenario["seed"]), scenario["area"]["size_m"]
-    fixed = ground_masks(grid, scenario)
-    drones = out["friendlies"]
-    masks = [drone_mask(grid, f) for f in drones]          # per drone: its two mask series
+    grid, rng, size = Grid(scenario, overlap=overlap), random.Random(scenario["seed"]), scenario["area"]["size_m"]
+    movable = out["friendlies"] + (out["ground"] if place_ground else [])
+    fixed = [] if place_ground else ground_masks(grid, scenario)
+    masks = [_masks(grid, n) for n in movable]              # per node: its two mask series
     best = grid.score(fixed + [s for m in masks for s in m])
     for _ in range(ROUNDS):
-        for i, drone in enumerate(drones):
+        for i, node in enumerate(movable):
             for _ in range(TRIES):
-                trial = _moved(drone, rng, size)
-                m = drone_mask(grid, trial)
+                trial = _moved(node, rng, size)
+                m = _masks(grid, trial)
                 others = [s for j, mj in enumerate(masks) if j != i for s in mj]
                 score = grid.score(fixed + others + m)
                 if score > best:
-                    best, drone, masks[i], drones[i] = score, trial, m, trial
+                    best, masks[i] = score, m
+                    node.clear()
+                    node.update(trial)
     return out
 
 
-def _moved(drone: dict, rng: random.Random, size: float) -> dict:
-    """The drone with its loop shifted by up to 150 m and its radius changed by up to 40 m."""
-    trial = copy.deepcopy(drone)
+def _masks(grid: Grid, node: dict) -> List[List[int]]:
+    return drone_mask(grid, node) if "loop" in node else ground_mask(grid, node)
+
+
+def _moved(node: dict, rng: random.Random, size: float) -> dict:
+    """A drone with its loop shifted by up to 150 m and its radius changed by up to 40 m; a ground sensor moved by up
+    to 150 m and turned by up to 60 degrees."""
+    trial = copy.deepcopy(node)
+    if "loop" not in node:
+        x, y = node["position"]
+        trial["position"] = [min(size, max(0.0, x + rng.uniform(-150, 150))), min(size, max(0.0, y + rng.uniform(-150, 150)))]
+        trial["heading_deg"] = (node["heading_deg"] + rng.uniform(-60, 60)) % 360.0
+        return trial
     loop = trial["loop"]
     loop["cx"] = min(size, max(0.0, loop["cx"] + rng.uniform(-150, 150)))
     loop["cy"] = min(size, max(0.0, loop["cy"] + rng.uniform(-150, 150)))

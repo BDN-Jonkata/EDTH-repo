@@ -24,7 +24,8 @@ Pose = Tuple[float, float, float]      # x, y, heading (maths radians)
 
 
 class Grid:
-    def __init__(self, scenario: dict, cell_m: float = CELL_M, steps: int = TIME_STEPS):
+    def __init__(self, scenario: dict, cell_m: float = CELL_M, steps: int = TIME_STEPS, overlap: float = 1.0):
+        self.overlap = overlap          # how much a cell seen from two viewpoints counts against one
         size = scenario["area"]["size_m"]
         n = max(2, int(size / cell_m))
         self.cells = [((i + 0.5) * size / n, (j + 0.5) * size / n) for j in range(n) for i in range(n)]
@@ -75,7 +76,7 @@ class Grid:
             for m in masks:
                 twice |= once & m[k]
                 once |= m[k]
-            got += (self._weighted(once) + self._weighted(twice)) / 2
+            got += (self._weighted(once) + self.overlap * self._weighted(twice)) / (1 + self.overlap)
         return got / (total * len(self.times))
 
     def _weighted(self, cells: int) -> int:
@@ -94,12 +95,13 @@ def loop_pose(loop: Dict[str, float]) -> Callable[[float], Pose]:
     return at
 
 
+def ground_mask(grid: Grid, g: dict) -> List[List[int]]:
+    pose = (g["position"][0], g["position"][1], math.radians(90.0 - g["heading_deg"]))
+    return grid.mask(g["sensors"], lambda t: pose)
+
+
 def ground_masks(grid: Grid, scenario: dict) -> List[List[int]]:
-    out = []
-    for g in scenario["ground"]:
-        heading = math.radians(90.0 - g["heading_deg"])
-        out += grid.mask(g["sensors"], lambda t, p=(g["position"][0], g["position"][1], heading): p)
-    return out
+    return [series for g in scenario["ground"] for series in ground_mask(grid, g)]
 
 
 def drone_mask(grid: Grid, drone: dict) -> List[List[int]]:
