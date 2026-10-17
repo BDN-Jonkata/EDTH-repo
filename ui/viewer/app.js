@@ -67,7 +67,8 @@
     const tr = (pxx + pyy) / 2, d = Math.sqrt(Math.max(0, ((pxx - pyy) / 2) ** 2 + pxy * pxy));
     return { a: Math.sqrt(Math.max(0.01, tr + d)), b: Math.sqrt(Math.max(0.01, tr - d)), th: 0.5 * Math.atan2(2 * pxy, pxx - pyy) };
   }
-  const frame = () => S.res.frames[S.idx];
+  const frameAt = (k) => LateUI.frameAt(S.res.frames[k]); // the frame as shown: late data loaded or not
+  const frame = () => frameAt(S.idx);
   const el = (tag, attrs) => { const e = document.createElementNS(NS, tag); for (const k in attrs) e.setAttribute(k, attrs[k]); return e; };
 
   // ---------------------------------------------------------- static map
@@ -102,6 +103,7 @@
     $('scrub').max = S.res.NF;
     $('modeChip').textContent = p.mode.toUpperCase();
     $('modeChip').className = 'chip ' + (p.mode === 'optimistic' ? 'cyan' : 'amber');
+    LateUI.reset();
     buildTimeline();
     render();
   }
@@ -317,7 +319,7 @@
   function trailSvg(t, f, col) {
     let px = t.x, py = t.y, out = '';
     for (let j = 1; j <= 4; j++) {
-      const pf = S.res.frames[Math.max(0, f.k - j * 10)];
+      const pf = frameAt(Math.max(0, f.k - j * 10));
       const pt = pf && pf.tracks.find((q) => q.id === t.id);
       if (!pt) break;
       out += '<path d="M' + px + ' ' + Y(py) + 'L' + pt.x + ' ' + Y(pt.y) + '" stroke="' + col + '" stroke-width="2" stroke-linecap="round" stroke-opacity="' + (0.65 - j * 0.14).toFixed(2) + '" fill="none"/>';
@@ -376,6 +378,7 @@
     $('fixed').innerHTML = fixedSvg();
     $('furniture').innerHTML = FURNITURE;
     $('raw').innerHTML = S.layers.raw ? f.meas.map(measSvg).join('') : '';
+    $('late').innerHTML = LateUI.mapSvg(f);
     $('truth').innerHTML = S.layers.truth ? truthSvg(f) : '';
     $('cross').innerHTML = f.cross ? crossSvg(f.cross) : '';
     $('trk').innerHTML = S.layers.tracks ? tracksSvg(f) : '';
@@ -383,6 +386,11 @@
   // fixed infrastructure: the C2 node and the ground sensors
   const C2_MARK = '<path d="M-9 -9H9V9H-9Z" fill="#141A22" stroke="#9AA4B2" stroke-width="1.5"/><path d="M-5 0H5M0 -5V5" stroke="#9AA4B2" stroke-width="1.5"/>';
   const GROUND_MARK = '<rect x="-8" y="-8" width="16" height="16" fill="#141A22" stroke="#C9D1DB" stroke-width="1.6"/><circle r="3" fill="#C9D1DB"/>';
+  // where a node is: a ground sensor at its site, a drone where it flies
+  function nodeXY(f, id) {
+    const g = scen().ground.find((q) => q.id === id), d = g || f.truth.find((q) => q.id === id);
+    return d ? { x: d.x, y: d.y } : null;
+  }
   function fixedSvg() {
     const c2 = scen().c2;
     const fx = ['<g transform="translate(' + c2.x + ' ' + Y(c2.y) + ')">' + C2_MARK + '</g><text class="t" x="' + (c2.x + 14) + '" y="' + (Y(c2.y) + 18) + '">C2</text>'];
@@ -507,14 +515,14 @@
     }).join('');
     if (html !== S.limitsHtml) $('limits').innerHTML = S.limitsHtml = html; // rows change only when the weather does
   }
-  const HEALTH_COL = { ok: '#C9D1DB', degraded: '#F5B13D', offline: '#FF5A5F', presumed_dead: '#FF5A5F' };
+  const HEALTH_COL = { ok: '#C9D1DB', degraded: '#F5B13D', offline: '#FF5A5F', presumed_dead: '#FF5A5F', isolated: '#9B7BFF' };
   // store-and-forward runs only: each node's link as C2 sees it, and what the node itself still holds
   function buildHealth(f) {
     $('healthSec').style.display = f.health ? '' : 'none';
     if (!f.health) return;
     $('health').innerHTML = Object.keys(f.health).map((n) => {
       const h = f.health[n];
-      return '<tr><td>' + n + '</td><td style="color:' + HEALTH_COL[h.state] + '">' + h.state.replace('_', ' ') + '</td><td>' + Math.round(h.loss * 100) + '%</td><td>' + h.silent_s.toFixed(1) + '</td><td' + (h.offline ? ' style="color:#FF5A5F">yes' : '>no') + '</td><td>' + h.buffered_s.toFixed(1) + '</td></tr>';
+      return '<tr data-node="' + n + '" class="pick" title="Show what this node saw"><td>' + n + '</td><td style="color:' + HEALTH_COL[h.state] + '">' + h.state.replace('_', ' ') + '</td><td>' + Math.round(h.loss * 100) + '%</td><td>' + h.silent_s.toFixed(1) + '</td><td' + (h.offline ? ' style="color:#FF5A5F">yes' : '>no') + '</td><td>' + h.buffered_s.toFixed(1) + '</td></tr>';
     }).join('');
   }
   function renderDetail(f) {
@@ -580,7 +588,7 @@
     });
     $('tlSvg').innerHTML = '<rect x="0" y="22" width="1000" height="6" rx="3" fill="#1B222C"/><rect id="tlFill" x="0" y="22" width="0" height="6" rx="3" fill="#1D6A79"/>' +
       marks.map((m) => '<path d="M' + x(m.t) + ' 14V28" stroke="' + col[m.color] + '" stroke-width="2"' + (m.dashed ? ' stroke-dasharray="2 2"' : '') + '><title>' + m.label + '</title></path>').join('') +
-      '<path id="tlHead" d="M0 6V36" stroke="#E6EAF0" stroke-width="2"/>';
+      LateUI.timelineSvg(x) + '<path id="tlHead" d="M0 6V36" stroke="#E6EAF0" stroke-width="2"/>';
     $('tlLabels').innerHTML = labels.map((m) => '<span style="position:absolute;left:' + (m.t / r.T_END * 100) + '%;transform:translateX(-50%);color:' + (m.color === 'amber' ? '#F5B13D' : '#8B96A5') + '">' + m.label + '</span>').join('');
   }
   function renderFooter(f) {
@@ -650,6 +658,7 @@
     renderFooter(f);
     buildLimits(f);
     buildHealth(f);
+    LateUI.render(f);
     Legend.render(f);
     applyView();
   }
@@ -738,6 +747,10 @@
   syncStaged();
   wireMap();
   wirePlayback();
+  LateUI.init({
+    state: S, kcol: KCOL, Y, nodeXY, redraw: () => { if (S.res) render(); },
+    jump: (t) => { S.playing = false; setIdx(Math.round(t / S.res.DT)); },
+  });
   Legend.init({
     state: S, layers: LAYERS, className: CLASS_NAME, classColor, kcol: KCOL, kdash: KDASH, linkStyle,
     glyph: (cls) => glyphSvg({ cls, x: 0, y: 1000 }, classColor(cls)), // the map's own symbol, drawn at the origin

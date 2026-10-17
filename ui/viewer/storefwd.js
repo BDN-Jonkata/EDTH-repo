@@ -19,6 +19,7 @@
   const LATE_S = 3;            // older than this on arrival: history, not a live reading
   const OFFLINE_S = 4;         // ASSUMED: C2 heard nothing from a node for this long
   const DEAD_S = 15;           // ASSUMED: ... and for this long: presumed dead (or jammed: C2 cannot tell)
+  const ISOLATED_S = 30;       // ASSUMED: silent this long, yet the node itself is alive and holding data: isolated, not dead
   const DEGRADED_LOSS = 0.3;   // ASSUMED: share of recent messages missing that makes a link degraded
   const RECOVERED_LOSS = 0.2;  // ... and below this it is ok again (hysteresis, so the state does not flap)
   const LOSS_WINDOW = 50;      // recent seq numbers the loss share is measured over
@@ -100,16 +101,17 @@
     for (let s = Math.max(from, r.upto + 1); s <= to; s++) if (!r.got.has(s)) gone++;
     return gone / (to - from + 1);
   }
-  // `before`: the previous state, so a degraded link must recover clearly before it counts as ok
-  function health(r, t, before) {
+  // `before`: the previous state, so a degraded link must recover clearly before it counts as ok.
+  // `holding`: the node itself is alive and cut off (its own store says so); C2 could only learn that afterwards.
+  function health(r, t, before, holding) {
     const silent = r.lastT === null ? t : t - r.lastT, loss = lossShare(r);
     const lossy = loss >= (before === 'degraded' ? RECOVERED_LOSS : DEGRADED_LOSS);
-    const state = silent >= DEAD_S ? 'presumed_dead' : silent >= OFFLINE_S ? 'offline' : lossy ? 'degraded' : 'ok';
+    const state = holding && silent >= ISOLATED_S ? 'isolated' : silent >= DEAD_S ? 'presumed_dead' : silent >= OFFLINE_S ? 'offline' : lossy ? 'degraded' : 'ok';
     return { state, silent_s: Math.round(silent * 10) / 10, loss: Math.round(loss * 100) / 100 };
   }
 
   const api = {
-    ACK_EVERY_S, OFFLINE_ACKS, BUFFER_S, RESEND_SHARE, LATE_S, OFFLINE_S, DEAD_S, DEGRADED_LOSS,
+    ACK_EVERY_S, OFFLINE_ACKS, BUFFER_S, RESEND_SHARE, LATE_S, OFFLINE_S, DEAD_S, ISOLATED_S, DEGRADED_LOSS,
     createNode, remember, onAck, isOffline, bufferedS, status, createReceiver, receive, skipBelow, ackEntry, health,
   };
   global.StoreFwd = api;
