@@ -214,7 +214,8 @@ Every message has the top-level `type` and the `header` described in [Messages](
 
 | `type` | Sent by | Fields besides `header` |
 |--------|---------|-------------------------|
-| `local_track` | tracker | `local_track_id`, `t_state`, `state` = `[x, y, z, vx, vy, vz]`, `covariance` (6x6), `existence_prob`; optional `class`, `class_prob` |
+| `local_track` | tracker | `local_track_id`, `t_state`, `state` = `[x, y, z, vx, vy, vz]`, `covariance` (6x6), `existence_prob`; optional `class`, `class_prob`, `friend_id` (set when the track was started by that friendly's beacon, so the merger can keep the identity). The 2D tracker sends z and vz as 0 with a large variance |
+| `bearing_report` | node (distributed mode) | `t_obs`, `sensor_id`, `pose` = `[x, y, vx, vy, sigma]` of the sensor's node, `max_range_m`, `bearing` (maths radians), `sigma_bearing`; a compact bearing shared so the merger can cross it with another node's |
 | `friendly_beacon` | friendly drone | see [Messages](#messages). Rate and noise come from `scenario.json` `beacon` (`rate_hz`, `pos_sigma_m`) |
 | `investigation_request` | `friend_foe/` | `track_id`, `position`, `covariance` (3x3), `class_prob`, `priority`, `t_requested`, `standoff_m`, `standoff_by_module`, `weather_confidence`, `feasible` |
 | `investigation_status` | drone behaviour | `track_id`, `drone_id`, `state` = `assigned`, `en_route`, `on_station`, `done` or `aborted` |

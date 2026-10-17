@@ -18,7 +18,11 @@ from common.channel import Channel
 from common.codec import Sequencer
 from friend_foe.estimator import Beacon, FriendFoeEstimator, TrackState, for_scenario
 from pipeline.dispatch import Investigator
+from fusion.hub import BearingHub
+from fusion.merger import Merger
 from pipeline.fleet import Fleet
+from pipeline.nodes import NodeTrackers
+from predictor.identity import IdentityKeeper
 from scoring.metrics import Estimate
 from sensors.beacons import BeaconSource
 from sensors.observe import ObservationSource
@@ -42,9 +46,10 @@ class Frame:
 
 class Pipeline:
     def __init__(self, scenario: dict, seed: int = 0, tracker_config: Optional[TrackerConfig] = None,
-                 investigate: bool = False):
+                 investigate: bool = False, distributed: bool = False):
         """`investigate` lets the drones be commanded (`pipeline/fleet.py`) and adds the investigator that
-        commands them (`pipeline/dispatch.py`); without it every drone flies its patrol loop."""
+        commands them (`pipeline/dispatch.py`); without it every drone flies its patrol loop. `distributed`
+        replaces the one central tracker by a tracker per node and a merger (`pipeline/nodes.py`)."""
         sequencers: Dict[str, Sequencer] = {}
         self.modules = load_modules()
         self.fleet = Fleet(scenario) if investigate else None
@@ -54,22 +59,37 @@ class Pipeline:
         self.channel = Channel(scenario, seed + 2)
         self.poses, self.tracker = PoseBook(scenario), Tracker(tracker_config)
         self.investigator = Investigator(scenario, self.fleet, sequencers) if investigate else None
+        self.nodes = NodeTrackers(tracker_config, sequencers) if distributed else None
+        self.merger = Merger() if distributed else None
+        self.hub = BearingHub(tracker_config) if distributed else None
 
     def step(self, t: float) -> Frame:
         if self.fleet is not None:
             self.fleet.step(t)
-        for obs in self.observations.at(t):
-            latency_s = self.modules[obs["sensor_id"]]["sim"]["latency_ms"] / 1000.0
-            self.channel.send(obs, t, latency_s)
+        observations = self.observations.at(t)
+        if self.nodes is None:
+            for obs in observations:
+                latency_s = self.modules[obs["sensor_id"]]["sim"]["latency_ms"] / 1000.0
+                self.channel.send(obs, t, latency_s)
         for beacon in self.beacons.at(t):
             self.channel.send(beacon, t)
         delivered = self.channel.deliver(t)
         beacons = [m for m in delivered if m["type"] == "friendly_beacon"]
         for b in beacons:
             self.poses.note_beacon(b)
+        if self.nodes is not None:
+            return self._distributed_step(t, observations, beacons, delivered)
         readings = self._readings([m for m in delivered if m["type"] == "observation"])
         tracks = self.tracker.step(t, readings, beacons)
         return Frame(t, tracks, beacons, len(readings))
+
+    def _distributed_step(self, t: float, observations: List[dict], beacons: List[dict], delivered: List[dict]) -> Frame:
+        """Each node tracks its own readings; only the tracks it shares cross the lossy channel to the merger."""
+        readings = self._readings(observations)
+        for message in self.nodes.step(t, readings, beacons):
+            self.channel.send(message, t)
+        self.merger.ingest(delivered + self.hub.step(t, delivered))
+        return Frame(t, self.merger.step(t), beacons, len(readings))
 
     def _readings(self, observations: List[dict]) -> list:
         out = []
@@ -107,19 +127,24 @@ def _beacon(m: dict) -> Beacon:
 
 def scored_frames(scenario: dict, seed: int = 0, tracker_config: Optional[TrackerConfig] = None,
                   estimator: Optional[FriendFoeEstimator] = None, investigate: bool = False,
-                  stats: Optional[dict] = None, recorded: Optional[dict] = None) -> Iterator[tuple]:
+                  stats: Optional[dict] = None, recorded: Optional[dict] = None,
+                  keep_identity: bool = False, distributed: bool = False) -> Iterator[tuple]:
     """(t, [Estimate]) for the scoring module: the tracker's confirmed tracks with the estimator's class.
 
     With `investigate`, suspicious tracks send drones out; when the run ends `stats` (if given) is filled with
     the dispatcher's counts (requests, dispatched, on_station, done, aborted), and `recorded` (if given) with
     each drone's real trajectory as `[t, x, y, vx, vy]` rows, which scoring needs because the drones left
-    the scripted patrol in `truth.json` (see `scoring.truth.with_recorded_samples`)."""
+    the scripted patrol in `truth.json` (see `scoring.truth.with_recorded_samples`). `keep_identity` runs the
+    predictor's identity keeper (`predictor/identity.py`) on the tracks, so a re-acquired target keeps its ID."""
     estimator = estimator or FriendFoeEstimator(for_scenario(scenario))
-    pipeline = Pipeline(scenario, seed, tracker_config, investigate)
+    pipeline = Pipeline(scenario, seed, tracker_config, investigate, distributed)
+    keeper = IdentityKeeper() if keep_identity else None
     pending: List[Beacon] = []
     classes: Dict[str, str] = {}
     for k in range(int(scenario["duration_s"] / STEP_S) + 1):
         frame = pipeline.step(round(k * STEP_S, 6))
+        if keeper is not None:
+            frame.tracks = keeper.step(frame.t, frame.tracks)
         if recorded is not None and pipeline.fleet is not None:
             for d in pipeline.fleet.drones.values():
                 recorded.setdefault(d.id, []).append([frame.t, d.x, d.y, d.vx, d.vy])
