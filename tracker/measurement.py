@@ -20,6 +20,7 @@ class Pose2D:
     y: float
     vx: float = 0.0
     vy: float = 0.0
+    sigma: float = 0.0       # 1-sigma position uncertainty of the sensor's own position, metres
 
 
 @dataclass(frozen=True)
@@ -54,20 +55,27 @@ def _range_from_level(obs: dict, source_level_db: float):
     return range_m, range_m * math.log(10.0) / 20.0 * _sigma(obs, "level_db")
 
 
+def _with_pose_error(sigma_angle: float, pose: Pose2D, max_range_m: float) -> float:
+    """The sensor's own position error moves a bearing by about sigma / range; the range is not known to a
+    bearing-only reading, so half the sensor's reach stands in for it."""
+    return math.hypot(sigma_angle, pose.sigma / (0.5 * max_range_m)) if pose.sigma > 0 else sigma_angle
+
+
 def from_observation(obs: dict, pose: Pose2D, module: dict) -> Optional[Measurement]:
-    """The measurement an observation message gives, or None for a kind the tracker cannot use."""
+    """The measurement an observation message gives, or None for a kind the tracker cannot use. The noise
+    includes the uncertainty of where the sensor was (`pose.sigma`)."""
     value, kind = obs["value"], obs["kind"]
-    base = dict(t=obs["t_obs"], node=obs["header"]["source_id"], sensor_id=obs["sensor_id"], pose=pose,
-                max_range_m=module["sim"]["range_m"])
+    reach = module["sim"]["range_m"]
+    base = dict(t=obs["t_obs"], node=obs["header"]["source_id"], sensor_id=obs["sensor_id"], pose=pose, max_range_m=reach)
     if kind == "bearing":
-        return Measurement(BEARING, bearing=math_rad(value["bearing_deg"]),
-                           sigma_bearing=math.radians(_sigma(obs, "bearing_deg")), **base)
+        sigma = _with_pose_error(math.radians(_sigma(obs, "bearing_deg")), pose, reach)
+        return Measurement(BEARING, bearing=math_rad(value["bearing_deg"]), sigma_bearing=sigma, **base)
     if kind == "range_bearing":
-        return Measurement(RANGE_BEARING, bearing=math_rad(value["azimuth_deg"]),
-                           sigma_bearing=math.radians(_sigma(obs, "azimuth_deg")), range_m=value["range_m"],
-                           sigma_range=_sigma(obs, "range_m"), radial_mps=value["radial_mps"],
-                           sigma_radial=_sigma(obs, "radial_mps"), **base)
+        sigma = _with_pose_error(math.radians(_sigma(obs, "azimuth_deg")), pose, reach)
+        return Measurement(RANGE_BEARING, bearing=math_rad(value["azimuth_deg"]), sigma_bearing=sigma,
+                           range_m=value["range_m"], sigma_range=math.hypot(_sigma(obs, "range_m"), pose.sigma),
+                           radial_mps=value["radial_mps"], sigma_radial=_sigma(obs, "radial_mps"), **base)
     if kind == "detection" and "source_level_db" in module["sim"]["noise"]:
         range_m, sigma = _range_from_level(obs, module["sim"]["noise"]["source_level_db"])
-        return Measurement(RANGE, range_m=range_m, sigma_range=sigma, **base)
+        return Measurement(RANGE, range_m=range_m, sigma_range=math.hypot(sigma, pose.sigma), **base)
     return None

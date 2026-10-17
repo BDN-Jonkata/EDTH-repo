@@ -89,6 +89,7 @@ class EstimatorConfig:
     suspicious_threat_exit: float = 0.55
     hostile_enter: float = 0.9          # on p_hostile (behaviour axis)
     hostile_exit: float = 0.7
+    peaceful_min_updates: int = 0       # a peaceful call needs this many updates of the track (a hostile called peaceful is the worst error)
     peaceful_enter: float = 0.1         # on p_hostile: low means peaceful-like
     peaceful_exit: float = 0.3
     threat_tau_s: float = 20.0          # behaviour evidence forgets over this time, so a change shows
@@ -253,7 +254,8 @@ class FriendFoeEstimator:
             return "friendly"
         if q >= (cfg.hostile_exit if prev == "hostile" else cfg.hostile_enter):
             return "hostile"
-        if q <= (cfg.peaceful_exit if prev == "peaceful" else cfg.peaceful_enter):
+        if (mem.n_updates >= cfg.peaceful_min_updates and
+                q <= (cfg.peaceful_exit if prev == "peaceful" else cfg.peaceful_enter)):
             return "peaceful"
         risk_supported = (not cfg.suspicious_requires_behavior or
                           q >= (cfg.suspicious_threat_exit if prev == "suspicious" else cfg.suspicious_threat_enter))
