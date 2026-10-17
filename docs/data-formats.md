@@ -96,10 +96,10 @@ out/<preset>-sweep-<set>/
   <seed>/
     scenario.json     what the system may read (the same file a single run makes)
     truth.json        for scoring only
-    run.json          { "scenario_id", "seed", "seed_set", "index", "hostiles", "crossings" }
+    run.json          { "scenario_id", "seed", "seed_set", "index", "hostiles", "benign", "crossings" }
 ```
 
-A run is scored from its `truth.json` and the track messages the system produced for that scenario, for example `python -m scoring.run out/<preset>-sweep-tuning/1/truth.json tracks.jsonl`. The simulation and scoring are not run by the sweep. About 0.3 s and 0.3 MB per seed at the default 0.1 s truth step, so a full set is about 30 MB (the `out/` folder is git-ignored). The test set is run once, at the end: never tune on it.
+A run is scored from its `truth.json` and the track messages the system produced for that scenario, for example `python -m scoring.run out/<preset>-sweep-tuning/1/truth.json tracks.jsonl`. `truth.json` holds the scripted patrol of the friendly drones: when a run commands them off it, score against the trajectories the run recorded (`scoring.truth.with_recorded_samples`). The simulation and scoring are not run by the sweep. About 0.3 s and 0.3 MB per seed at the default 0.1 s truth step, so a full set is about 30 MB (the `out/` folder is git-ignored). The test set is run once, at the end: never tune on it.
 
 ## Catalog
 

@@ -22,8 +22,9 @@ def write_run(folder, scenario, truth):
 
 def run_summary(scenario, truth, seed_set, index):
     crossings = [e for e in truth["events"] if e["type"] == "crossing"]
+    benign = [t for t in scenario["targets"] if t.get("role") == "benign"]
     return {"scenario_id": scenario["id"], "seed": scenario["seed"], "seed_set": seed_set, "index": index,
-            "hostiles": len(scenario["targets"]), "crossings": len(crossings)}
+            "hostiles": len(scenario["targets"]) - len(benign), "benign": len(benign), "crossings": len(crossings)}
 
 
 def sweep(config, seed_set, out, truth_dt=0.1, count=None, progress=None):

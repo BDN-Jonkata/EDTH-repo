@@ -51,6 +51,12 @@ class Sweep(unittest.TestCase):
         run = read(self.out / "1" / "run.json")
         self.assertEqual((run["seed"], run["seed_set"], run["index"]), (1, "tuning", 0))
         self.assertEqual(run["hostiles"], len(read(self.out / "1" / "scenario.json")["targets"]))
+        self.assertEqual(run["benign"], 0)
+
+    def test_benign_drones_are_counted_apart_from_hostiles(self):
+        busy = json.loads((ROOT / "scenarios" / "busy.json").read_text(encoding="utf-8"))
+        run = sw.sweep(busy, "tuning", self.out, truth_dt=5.0, count=1)["runs"][0]
+        self.assertEqual((run["hostiles"], run["benign"]), (4, 4))
 
     def test_the_whole_tuning_set_is_99_seeds_and_the_test_set_100(self):
         self.assertEqual(len(sw.sweep(CONFIG, "tuning", self.out, truth_dt=5.0)["runs"]), 99)
