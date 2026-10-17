@@ -80,6 +80,20 @@ Clutter objects (`CLUTTER_KINDS` in [seeder/scenario.py](../seeder/scenario.py),
 
 Neither emits RF, so RF never sees them. The system must not call them hostile; the mock baseline does, and its summary counts that as `cfa`.
 
+Generated drone traffic uses `targets.count` for the total and `targets.benign_count`
+(default 0, integer from 0 to count) for non-allied benign drones. The remainder
+have a hostile scoring role. Benign traffic uses an independent random stream,
+with safe transits, off-site survey orbits and ambiguous off-site hover. Adding it
+does not move existing hostile paths or friendly starting positions. It emits no
+friendly identity beacon. Explicit `targets[]` may set `role: "benign"` or
+`role: "hostile"` (the default).
+
+`targets.behavior_demo: true` gives non-crossing threat scenarios observable
+protected-area hover/loiter, with staggered entry times. These demonstration paths
+choose their own entry schedule rather than `enter_t`; normal generation defaults
+to `false`. Both roles use the same sensor physics. Roles and future waypoints
+are excluded from the estimator, and flipping roles cannot change its decisions.
+
 Per-sensor behaviour (field of view, max range, detection probability that falls with range, noise that grows with range, false-alarm rate, missed detections, sample rate, processing delay) comes from the catalog `sim` block, not the scenario config. The radar module carries a **resolution cell** (about 15 m in range by 3 degrees); two targets inside one cell merge into a single measurement, which is what makes the crossing hard.
 
 ## 3. Presets
@@ -90,6 +104,7 @@ Per-sensor behaviour (field of view, max range, detection probability that falls
 | medium | 2-3 hostiles, one close crossing | full set | moderate noise, 10-20 % loss |
 | hard | up to 5 hostiles, close crossings, hover | full set | 40 % bursty loss, clock drift, pose error, one node dropout |
 | challenge | the task scenario: 5 drones, 2 ground sensors, 2 hostiles crossing, about 1 km² | full set | tuned for the graded loss sweep |
+| busy | 4 threat scenarios and 4 non-allied benign drones, varied observed motion | full set | none; clear conditions |
 
 ## 4. Open questions for the mentor
 

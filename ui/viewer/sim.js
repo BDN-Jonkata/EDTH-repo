@@ -45,13 +45,14 @@
   const SIG_KEY = { EO: 'eo', IR: 'thermal', MIC: 'acoustic', RF: 'rf', RAD: 'radar' };
 
   function prepare(sc) {
+    const targets = sc.targets.map(pathObject);
     const world = {
       id: sc.id, name: sc.name, duration: sc.duration_s, c2: { x: sc.c2[0], y: sc.c2[1] },
       ground: sc.ground.map((g) => ({ id: g.id, platform: g.platform, x: g.position[0], y: g.position[1], heading: (90 - g.heading_deg) * D2R })),
       friendlies: sc.friendlies.map((f) => Object.assign({ id: f.id, platform: f.platform, alt: f.altitude_m }, f.loop, {
         x: f.loop.cx + f.loop.R * Math.cos(f.loop.th0), y: f.loop.cy + f.loop.R * Math.sin(f.loop.th0),
       })),
-      hostiles: sc.targets.map(pathObject),
+      targets, hostiles: targets.filter((t) => t.role !== 'benign'), benigns: targets.filter((t) => t.role === 'benign'),
       clutter: (sc.clutter || []).map((o) => Object.assign(pathObject(o), { type: o.type })), // birds, vehicles: seen, not threats
       commands: sc.commands || [], beacon: sc.beacon, env: sc.environment, deg: sc.degradations, sensorKinds: sc.sensor_set.enabled_kinds, assign: {},
     };
@@ -62,7 +63,7 @@
     return world;
   }
   // an object on a waypoint path (a hostile or clutter); moved by hoState
-  const pathObject = (t) => ({ id: t.id, wps: t.waypoints, wob: t.wobble_m, ph: t.phase, alt: t.altitude_m, sig: t.signature || {}, emits: t.emits !== false });
+  const pathObject = (t) => ({ id: t.id, role: t.role || 'hostile', wps: t.waypoints, wob: t.wobble_m, ph: t.phase, alt: t.altitude_m, sig: t.signature || {}, emits: t.emits !== false });
 
   // piecewise-linear path with a sideways wobble (same maths as seeder/scenario.py)
   function hoPos(h, t) {
@@ -305,9 +306,9 @@
       beaconEvery: Math.max(1, Math.round(10 / (world.beacon.rate_hz || 2))), beaconSigma: world.beacon.pos_sigma_m || 3,
       tracks: [], pending: [], friends: {}, alerts: [], frames: [], timeline: [], lastMatch: {}, sqHist: [], crossAlerted: {},
       beacons: {},
-      n: { hostile: 0, unk: 0, swaps: 0, ffa: 0, cfa: 0, evalSq: 0, evalN: 0, evalCnt: 0, evalCntN: 0 },
+      n: { hostile: 0, unk: 0, swaps: 0, ffa: 0, cfa: 0, bfa: 0, evalSq: 0, evalN: 0, evalCnt: 0, evalCntN: 0 },
     };
-    world.hostiles.concat(world.clutter).forEach((h) => { c.pathById[h.id] = h; });
+    world.targets.concat(world.clutter).forEach((h) => { c.pathById[h.id] = h; });
     if (real) (world.deg.dropout || []).forEach((d) => { c.dropT[d.node] = d.t; }); // nodes that die mid-run
     c.nodes.forEach((n) => { c.driftScale[n] = c.rn() * 2 - 1; c.linkQ[n] = 1; });
     const fleet = world.friendlies.map((f) => {
@@ -374,8 +375,9 @@
     const n = c.n;
     const summary = { rmse: n.evalN ? Math.sqrt(n.evalSq / n.evalN) : null, countErr: n.evalCntN ? n.evalCnt / n.evalCntN : 0, swaps: n.swaps, ffa: n.ffa };
     if (c.world.clutter.length) summary.cfa = n.cfa; // clutter objects tracked as hostile; only scenarios with clutter report it
+    if (c.world.benigns.length) summary.bfa = n.bfa;
     // entry markers from scenario script
-    c.world.hostiles.forEach((h) => c.timeline.push({ t: h.wps[0][0], label: h.id + ' in', color: 'red' }));
+    c.world.targets.forEach((h) => c.timeline.push({ t: h.wps[0][0], label: h.id + ' in', color: h.role === 'benign' ? 'amber' : 'red' }));
     const commands = Object.keys(c.cmd.records).map((id) => c.cmd.records[id]);
     return Object.assign(commands.length ? { commands } : {}, {
       frames: c.frames, alerts: c.alerts, timeline: c.timeline, summary, scen: c.world,
@@ -417,9 +419,9 @@
   function truthAt(c, t) {
     const truth = [];
     c.world.friendlies.forEach((f) => truth.push(Object.assign({ id: f.id, kind: 'friendly' }, friendlyState(c, f, t))));
-    c.world.hostiles.forEach((h) => {
+    c.world.targets.forEach((h) => {
       const st = hoState(h, t);
-      if (st) truth.push(Object.assign({ id: h.id, kind: 'hostile' }, st));
+      if (st) truth.push(Object.assign({ id: h.id, kind: h.role === 'benign' ? 'benign' : 'hostile' }, st));
     });
     c.world.clutter.forEach((o) => {
       const st = hoState(o, t);
@@ -770,6 +772,10 @@
     const rmse10 = rollingRmse(c, match.length ? [sqSum / match.length, 1] : [0, 0]);
     flagFriendlies(c, t, truth, hostileTracks, usedA);
     flagClutter(c, t, truth, hostileTracks, usedA);
+    falseHostiles(c, truth, hostileTracks, usedA, 'benign', 'bfa').forEach(([a, o]) => {
+      c.n.bfa++;
+      c.alerts.push({ t, sev: 'warn', text: 'Benign drone ' + o.id + ' assessed hostile (' + a.id + ')' });
+    });
     const countErr = hostileTracks.length - trueHost.length;
     if (t >= c.EVAL[0] && t <= c.EVAL[1]) addToSummary(c.n, sqSum, match.length, countErr);
     return { trueHost, match, rmse10, countErr };

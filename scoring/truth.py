@@ -10,7 +10,7 @@ State = Tuple[float, float, float, float]   # x, y, vx, vy
 @dataclass(frozen=True)
 class TruthObject:
     id: str
-    kind: str                     # hostile | friendly | clutter
+    kind: str                     # hostile | friendly | benign | clutter
     times: Tuple[float, ...]
     rows: Tuple[Tuple[float, ...], ...]   # (t, x, y, vx, vy) per sample, in time order
 

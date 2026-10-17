@@ -8,7 +8,7 @@ from friend_foe.estimator import EstimatorConfig, FriendFoeEstimator, for_scenar
 
 class AutomaticEstimator:
     def __init__(self, behavior_config=None, config=None, verified_ids=()):
-        config = config or EstimatorConfig()
+        config = replace(config or EstimatorConfig(), suspicious_requires_behavior=True)
         policy = replace(behavior_config or BehaviorConfig(), memory_ttl_s=config.memory_ttl_s)
         self.behavior = BehaviorModel(policy, config.threat_tau_s, config.max_dt_s, config.llr_limit)
         self.estimator = FriendFoeEstimator(config, threat_llr=self.behavior)

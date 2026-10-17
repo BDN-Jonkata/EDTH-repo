@@ -25,7 +25,58 @@ class Generator(unittest.TestCase):
             self.assertEqual(scenario["schema"], sc.SCHEMA)
             self.assertEqual(len(scenario["friendlies"]), 5)
             self.assertEqual(len(scenario["ground"]), 2)
-            self.assertEqual(sum(o["kind"] == "hostile" for o in truth["objects"]), len(scenario["targets"]))
+            for role in ("hostile", "benign"):
+                self.assertEqual(sum(o["kind"] == role for o in truth["objects"]),
+                                 sum(t.get("role", "hostile") == role for t in scenario["targets"]))
+
+    def test_busy_has_genuinely_mixed_traffic_and_only_the_fleet_has_beacons(self):
+        scene, truth = sc.generate(load("busy"))
+        self.assertEqual(len(scene["targets"]), 8)
+        self.assertEqual(sum(t["role"] == "benign" for t in scene["targets"]), 4)
+        self.assertEqual(sum(t["role"] == "hostile" for t in scene["targets"]), 4)
+        self.assertEqual(sum(o["kind"] == "hostile" for o in truth["objects"]), 4)
+        self.assertEqual(sum(o["kind"] == "benign" for o in truth["objects"]), 4)
+        self.assertEqual({e['id'] for e in truth['events'] if e['type'] == 'enter'},
+                         {t['id'] for t in scene['targets']})
+        self.assertTrue(all(e['a'].startswith('H') and e['b'].startswith('H')
+                            for e in truth['events'] if e['type'] == 'crossing'))
+        from friend_foe.scenario_adapter import frames_from_scenario
+        fleet = {f["id"] for f in scene["friendlies"]}
+        for _, _, beacons in frames_from_scenario(scene):
+            self.assertTrue(all(b.friend_id in fleet for b in beacons))
+
+    def test_mixed_traffic_is_reproducible_and_keeps_existing_streams(self):
+        config = load("medium")
+        original, _ = sc.generate(config)
+        config["targets"]["count"] = 5
+        config["targets"]["benign_count"] = 2
+        mixed, _ = sc.generate(config)
+        self.assertEqual(original["targets"], mixed["targets"][:3])
+        self.assertEqual(original["friendlies"], mixed["friendlies"])
+        self.assertEqual(sc.generate(config), sc.generate(config))
+
+    def test_benign_count_is_validated(self):
+        for value in (-1, 1.5, True, 9, None, '4'):
+            config = load("busy")
+            config["targets"]["benign_count"] = value
+            with self.assertRaisesRegex(ValueError, 'benign_count'):
+                sc.generate(config)
+
+    def test_behavior_demo_is_a_boolean_switch(self):
+        config = load("busy")
+        config["targets"]["behavior_demo"] = "false"
+        with self.assertRaisesRegex(ValueError, 'behavior_demo'):
+            sc.generate(config)
+
+    def test_explicit_benign_role_reaches_scoring_truth(self):
+        config = load("easy")
+        config["targets"] = [{"id": "opaque", "role": "benign", "waypoints": [[0, 100, 100], [120, 900, 100]]}]
+        scene, truth = sc.generate(config)
+        self.assertEqual(scene["targets"][0]["role"], 'benign')
+        self.assertEqual(next(o for o in truth["objects"] if o["id"] == 'opaque')["kind"], 'benign')
+        config["targets"][0]["role"] = 'peaceful'  # an estimated flag is not a scoring role
+        with self.assertRaisesRegex(ValueError, 'role'):
+            sc.generate(config)
 
     def test_same_seed_is_identical(self):
         a = sc.generate(load("hard"))
