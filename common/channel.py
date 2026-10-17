@@ -63,6 +63,15 @@ class Clock:
         return t * (1.0 + self.drift) + self.offset_s
 
 
+def node_clocks(scenario: dict, seed: int, friendly_clocks: Dict[str, "Clock"]) -> Dict[str, "Clock"]:
+    """A clock for every node: the friendlies' (the ones their beacons use) and a new one per ground sensor."""
+    rng = random.Random(seed)
+    clocks = dict(friendly_clocks)
+    for g in scenario["ground"]:
+        clocks[g["id"]] = Clock(rng, scenario["degradations"]["clock"])
+    return clocks
+
+
 def network_settings(scenario: dict) -> Tuple[float, bool, Tuple[float, float]]:
     """(loss, bursty, (min, max) delay in ms) of the scenario's network, zero when it is switched off."""
     net = scenario["degradations"]["network"]

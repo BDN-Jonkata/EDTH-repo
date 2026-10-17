@@ -14,7 +14,7 @@ import math
 from dataclasses import dataclass, field, replace
 from typing import Dict, Iterator, List, Optional
 
-from common.channel import Channel
+from common.channel import Channel, node_clocks
 from common.codec import Sequencer
 from health.monitor import HealthMonitor
 from health.trust import weighted
@@ -34,6 +34,7 @@ from sensors.quality import load_modules
 from sensors.world import World
 from tracker.measurement import from_observation
 from tracker.poses import PoseBook
+from tracker.timesync import TimeSync, clock_floor_s, known_delay_of
 from tracker.tracker import Track, Tracker, TrackerConfig
 
 STEP_S = 0.1          # the simulation clock; sensors fire at their own rates inside it
@@ -52,12 +53,16 @@ class Frame:
 class Pipeline:
     def __init__(self, scenario: dict, seed: int = 0, tracker_config: Optional[TrackerConfig] = None,
                  investigate: bool = False, distributed: bool = False, cue: bool = False, trust: bool = False,
-                 oosm: bool = False):
+                 oosm: bool = False, clocks: bool = False, timesync: bool = False, oosm_age_s: Optional[float] = None):
         """`investigate` lets the drones be commanded (`pipeline/fleet.py`) and adds the investigator that
         commands them (`pipeline/dispatch.py`); without it every drone flies its patrol loop. `trust` weights each
         reading by how healthy its node's link is and leaves out late ones (`health/`; central tracker only). `oosm` applies
         a late reading at the time it was taken instead (`tracker/oosm.py`; central tracker only; with `trust` the late
-        ones are weighted by their age, not left out). `distributed`
+        ones are weighted by their age, not left out). `clocks` stamps
+        every reading with its node's own clock, offset and drift included, as a beacon already is (without it a reading
+        carries the true time); `timesync` also estimates each node's clock from what arrives and puts the stamps back
+        on the C2 clock (`tracker/timesync.py`); `oosm_age_s` sets how old a reading must be to be replayed at its own
+        time (`TrackerConfig.oosm_min_age_s`). None of the three applies to `distributed`. `distributed`
         replaces the one central tracker by a tracker per node and a merger (`pipeline/nodes.py`). `cue` also
         sends the closest other drone at a bearing nothing explains (`pipeline/cueing.py`); it implies the
         commanded drones and the investigator."""
@@ -66,11 +71,17 @@ class Pipeline:
         commanded = investigate or cue
         self.fleet = Fleet(scenario) if commanded else None
         world = World(scenario, self.fleet)
-        self.observations = ObservationSource(scenario, seed, self.modules, sequencers, world)
         self.beacons = BeaconSource(scenario, seed + 1, sequencers, world)
+        self.sync = TimeSync(clock_floor_s(scenario, STEP_S)) if timesync and not distributed else None
+        stamped = (clocks or timesync) and not distributed
+        self.observations = ObservationSource(scenario, seed, self.modules, sequencers, world,
+                                              node_clocks(scenario, seed + 3, self.beacons.clocks) if stamped else None)
         self.channel = Channel(scenario, seed + 2, lambda node, t: _node_xy(world, node, t))   # for jamming zones
         self.use_oosm = oosm and not distributed
-        central = replace(tracker_config or TrackerConfig(), oosm=True) if self.use_oosm else tracker_config
+        central = tracker_config
+        if self.use_oosm:
+            central = replace(tracker_config or TrackerConfig(), oosm=True,
+                              **({} if oosm_age_s is None else {"oosm_min_age_s": oosm_age_s}))
         self.poses, self.tracker = PoseBook(scenario), Tracker(central)
         self.investigator = Investigator(scenario, self.fleet, sequencers, cueing=Cueing() if cue else None) if commanded else None
         self.nodes = NodeTrackers(tracker_config, sequencers) if distributed else None
@@ -91,6 +102,8 @@ class Pipeline:
             self.channel.send(beacon, t)
         delivered = self.channel.deliver(t)
         self.health.observe_all(delivered, t)
+        if self.sync is not None:
+            delivered = self.sync.apply(delivered, t, known_delay_of(self.modules))
         beacons = [m for m in delivered if m["type"] == "friendly_beacon"]
         for b in beacons:
             self.poses.note_beacon(b)
@@ -158,7 +171,8 @@ def scored_frames(scenario: dict, seed: int = 0, tracker_config: Optional[Tracke
                   estimator: Optional[FriendFoeEstimator] = None, investigate: bool = False,
                   stats: Optional[dict] = None, recorded: Optional[dict] = None,
                   keep_identity: bool = False, distributed: bool = False, cue: bool = False,
-                  trust: bool = False, oosm: bool = False) -> Iterator[tuple]:
+                  trust: bool = False, oosm: bool = False, clocks: bool = False, timesync: bool = False,
+                  oosm_age_s: Optional[float] = None) -> Iterator[tuple]:
     """(t, [Estimate]) for the scoring module: the tracker's confirmed tracks with the estimator's class.
 
     With `investigate`, suspicious tracks send drones out; when the run ends `stats` (if given) is filled with
@@ -167,9 +181,10 @@ def scored_frames(scenario: dict, seed: int = 0, tracker_config: Optional[Tracke
     the scripted patrol in `truth.json` (see `scoring.truth.with_recorded_samples`). `keep_identity` runs the
     predictor's identity keeper (`predictor/identity.py`) on the tracks, so a re-acquired target keeps its ID.
     `trust` weights readings by link health and lets a cut-off friendly's silence count for less (`health/`).
-    `oosm` applies a late reading to its track at the time it was taken (`tracker/oosm.py`)."""
+    `oosm` applies a late reading to its track at the time it was taken (`tracker/oosm.py`). `clocks`, `timesync` and
+    `oosm_age_s`: see `Pipeline`."""
     estimator = estimator or FriendFoeEstimator(for_scenario(scenario))
-    pipeline = Pipeline(scenario, seed, tracker_config, investigate, distributed, cue, trust, oosm)
+    pipeline = Pipeline(scenario, seed, tracker_config, investigate, distributed, cue, trust, oosm, clocks, timesync, oosm_age_s)
     if trust:        # a missing beacon of a node whose link is down is not evidence against the drone
         getattr(estimator, "estimator", estimator).silence_explained = pipeline.health.explains_silence
     keeper = IdentityKeeper(IdentityConfig(model=MotionModel.load() if keep_identity == "learned" else None)) if keep_identity else None

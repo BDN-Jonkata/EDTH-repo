@@ -18,6 +18,7 @@ import random
 from dataclasses import dataclass
 from typing import Dict, List, Optional
 
+from common.channel import Clock
 from common.codec import Sequencer
 from sensors.native import OBSERVATION_KIND, Detection, Viewpoint, read
 from sensors.quality import DETECTION_KINDS, load_modules, sensor_quality
@@ -56,13 +57,17 @@ def mounts_of(scenario: dict, modules: Dict[str, dict]) -> List[Mount]:
 
 class ObservationSource:
     def __init__(self, scenario: dict, seed: int = 0, modules: Optional[Dict[str, dict]] = None,
-                 sequencers: Optional[Dict[str, Sequencer]] = None, world: Optional[World] = None):
+                 sequencers: Optional[Dict[str, Sequencer]] = None, world: Optional[World] = None,
+                 clocks: Optional[Dict[str, Clock]] = None):
         """`sequencers` lets the beacon source share one message counter per node, as the header rules say;
-        `world` lets the sources share one world, for example one whose drones can be commanded."""
+        `world` lets the sources share one world, for example one whose drones can be commanded. With `clocks`
+        (one per node, see `common/channel.py`) a reading is stamped by its node's own clock, offset and drift
+        included, as a beacon already is; without them it carries the true time."""
         self.scenario, self.rng = scenario, random.Random(seed)
         self.world, self.weather = world or World(scenario), weather_from_scenario(scenario)
         self.mounts = mounts_of(scenario, modules or load_modules())
         self.seq = sequencers if sequencers is not None else {}
+        self.clocks = clocks or {}
         self.false_alarms_per_s = scenario["environment"].get("clutter", {}).get("false_alarms_per_min", 0.0) / 60.0
         self.radars = max(1, sum(m.module["kind"] == "radar" for m in self.mounts))
 
@@ -123,9 +128,10 @@ class ObservationSource:
         value, sigma = read(mount.module, det, view, self.rng)
         fields = list(sigma)
         sequencer = self.seq.setdefault(mount.node, Sequencer(mount.node))
+        stamp = self.clocks[mount.node].local(t) if mount.node in self.clocks else t
         return {
-            "type": "observation", "header": sequencer.header(t),
-            "sensor_type": mount.module["kind"], "sensor_id": mount.module["id"], "t_obs": t,
+            "type": "observation", "header": sequencer.header(stamp),
+            "sensor_type": mount.module["kind"], "sensor_id": mount.module["id"], "t_obs": stamp,
             "kind": OBSERVATION_KIND[mount.module["native"]["type"]],
             "value": value, "cov_fields": fields,
             "covariance": [[sigma[a] ** 2 if a == b else 0.0 for b in fields] for a in fields],

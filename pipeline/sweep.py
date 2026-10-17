@@ -31,7 +31,7 @@ from scoring.sweep import COLUMNS, average_with_error, fmt_error, paired_differe
 from scoring.truth import with_recorded_samples
 
 WARMUP_S = 10.0
-OPTIONS = {"investigate": "investigate", "identity": "keep_identity", "distributed": "distributed", "cueing": "cue", "trust": "trust", "oosm": "oosm"}   # --paired name -> option
+OPTIONS = {"investigate": "investigate", "identity": "keep_identity", "distributed": "distributed", "cueing": "cue", "trust": "trust", "oosm": "oosm", "clocks": "clocks", "timesync": "timesync"}   # --paired name -> option
 
 
 def run_once(setup: Setup, index: int, weather: str, loss: float, behaviour: str = "", **options) -> RunScore:
@@ -105,6 +105,9 @@ def main() -> None:
     ap.add_argument("--cue", action="store_true", help="send the closest other drone at a bearing no track explains (pipeline/cueing.py)")
     ap.add_argument("--trust", action="store_true", help="weight readings by link health and discount explained silence (health/)")
     ap.add_argument("--oosm", action="store_true", help="apply a late reading at the time it was taken (tracker/oosm.py)")
+    ap.add_argument("--oosm-age", type=float, help="with --oosm: replay readings at least this many seconds old at their own time (default 1)")
+    ap.add_argument("--clocks", action="store_true", help="stamp every reading with its node's own clock, offset and drift included")
+    ap.add_argument("--timesync", action="store_true", help="estimate each node's clock and put the stamps on the C2 clock (tracker/timesync.py; implies --clocks)")
     ap.add_argument("--distributed", action="store_true", help="a tracker per node and a merger (pipeline/nodes.py)")
     ap.add_argument("--paired", choices=sorted(OPTIONS), help="compare with and without this on the same seeds")
     ap.add_argument("--losses", default=",".join(str(x) for x in LOSSES), help="comma-separated message-loss levels")
@@ -116,7 +119,8 @@ def main() -> None:
     header = (f"preset={args.preset} seed set={args.seed_set} seeds={args.seeds} weather={args.weather} "
               f"birds={args.birds} vehicles={args.vehicles} behaviour={args.behaviour}")
     base = {"investigate": args.investigate, "keep_identity": args.keep_identity, "distributed": args.distributed,
-            "cue": args.cue, "trust": args.trust, "oosm": args.oosm}
+            "cue": args.cue, "trust": args.trust, "oosm": args.oosm, "oosm_age_s": args.oosm_age,
+            "clocks": args.clocks or args.timesync or args.paired == "timesync", "timesync": args.timesync}
     if args.swaps:
         for loss in losses:
             print(f"loss {loss}: {swap_causes(setup, args.weather, loss, args.behaviour, **base)}")
