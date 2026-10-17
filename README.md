@@ -4,7 +4,7 @@ Distributed multi-sensor fusion into a single Common Operational Picture (COP) u
 
 Combine partial, noisy observations from low-cost UAS and ground sensors, fused across distributed nodes with imperfect clocks, uncertain positions and lossy communication, into one picture that gives the **number of hostile targets** with a **stable identity, position and velocity** for each, and never flags friendlies as threats.
 
-> Status: **planning phase, first code in.** A first simulation viewer with a built-in mock simulation runs from [ui/viewer](ui/viewer/) (see [ui/ui.md](ui/ui.md)), and the seeder catalog exists in [seeder/](seeder/). Weather and sensor quality (`sensors/`), the friend/foe estimator with investigation trigger and drone-status mapping (`friend_foe/`) and the JSON codec (`common/codec.py`) exist and are tested; the mock simulation accepts drone commands. The real simulation, tracker and fusion are not implemented yet.
+> Status: **working simulation and tested components; challenge success remains unproven.** The JavaScript viewer and Python pipeline both run sensing, tracking, classification and scoring. Python also has optional per-node tracking and covariance-intersection fusion, link-health weighting and late-reading replay. These are distinct implementations: the viewer does not display the Python pipeline's COP. See the [03-Rai challenge audit](docs/challenge-audit.md) for current requirement evidence, failures and priorities.
 
 Run the tests (Python 3.11+): `python -m pip install pytest`, then `python -m pytest` from the repo root.
 
@@ -12,6 +12,7 @@ Run the tests (Python 3.11+): `python -m pip install pytest`, then `python -m py
 
 | Document | Contents |
 |----------|----------|
+| [docs/challenge-audit.md](docs/challenge-audit.md) | Current 03-Rai requirement audit and validation; component completion is separate from operational success |
 | [docs/concept.md](docs/concept.md) | Problem statement, scenario, success criteria, our approach, components, metrics |
 | [docs/system-design.md](docs/system-design.md) | Architecture, module responsibilities, conventions (time, coordinates, uncertainty), message schemas, module design, repo layout, open decisions |
 | [docs/seeder-config.md](docs/seeder-config.md) | Scenario config (one JSON + seed), degradation switches, presets, open questions for the mentor |
@@ -29,7 +30,7 @@ Run the tests (Python 3.11+): `python -m pip install pytest`, then `python -m py
 | [seeder/](seeder/) | Platform/sensor catalog (PostgreSQL) and the scenario generator |
 | [simulation/](simulation/) | 2D world, ground truth, network channel emulator |
 | [sensors/](sensors/) | Camera, acoustic, RF, radar models incl. weather effects |
-| [tracker/](tracker/) | Multi-target tracker (a central baseline now; per-node trackers later) |
+| [tracker/](tracker/) | Multi-target tracker (central default; optional per-node trackers in `pipeline/nodes.py`) |
 | [pipeline/](pipeline/) | The whole chain on one scenario: sensors, lossy network, tracker, friend/foe, scoring |
 | [friend_foe/](friend_foe/) | Friendly beacon matching and drone behaviour pattern |
 | [drone_behavior/](drone_behavior/drone_behavior.md) | Automatic observed-motion evidence, policy configuration and reference tests |
@@ -40,13 +41,15 @@ Run the tests (Python 3.11+): `python -m pip install pytest`, then `python -m py
 
 ## Architecture in one paragraph
 
-Modules in one codebase with a message bus between them. A seeder builds the scenario; the simulation moves everything on a 2D map with terrain/height and produces ground truth plus sensor observations, which pass through a network channel emulator (pass-through at first, lossy and drifting later). Each node runs a local tracker and friend/foe classification, and shares compact tracks with covariances. Any reachable node or C2 merges them into the COP using covariance intersection. An optional predictor helps hold identities through the crossing. A scoring harness compares everything with ground truth. See [system design](docs/system-design.md).
+Modules run in one codebase and exchange timestamped messages through a simulated channel. A seeder builds scenarios; sensor models emit noisy native readings, and the channel applies configured communication impairments. The Python pipeline and JavaScript viewer each use a central tracker by default. Python's optional distributed mode runs local trackers and shares tracks and bearing reports with one covariance-intersection merger; merger failover and peer-link topology are not implemented. Optional identity predictors exist but have not demonstrated a reduction in crossing swaps. Scoring compares estimates with ground truth. See [system design](docs/system-design.md) for the proposed architecture and the [challenge audit](docs/challenge-audit.md) for implementation limits.
 
 ---
 
 ## Project plan
 
 Phased, starting from the optimistic case. Status legend: ⬜ not started · 🟨 in progress · ✅ done.
+
+**A completed component tick means implemented and tested, not that the 03-Rai success criteria are met.** Accurate counts, stable crossing identities and zero friendly threats must be demonstrated together on the challenge scenario and across message-loss levels; see the [current audit](docs/challenge-audit.md).
 
 ### Phase 0 - Foundation
 
@@ -63,10 +66,10 @@ Phased, starting from the optimistic case. Status legend: ⬜ not started · �
 
 | Status | Task |
 |--------|------|
-| ✅ | Seeder: sensor and platform catalog, PostgreSQL storage, scenario generator (friendly patrols, ground sensors, hostile and non-allied benign paths, planned close crossing, seven presets, tuning and test seeds) done; also clutter objects (birds, vehicles), weather combinations, weather events and a seasonal sky, jamming zones and bandwidth limits in the config, and scenario sweeps (`python seeder/generate.py scenarios/hard.json --sweep tuning`, one folder per seed); a worksheet for verifying the catalog numbers (`python seeder/unverified.py`); terrain and moving ground units wait for the mentor and are not part of this row |
+| ✅ | Seeder: sensor and platform catalog, PostgreSQL storage, scenario generator (friendly patrols, ground sensors, hostile and non-allied benign paths, planned close crossing, eight presets including `outage`, tuning and test seeds) done; also clutter objects (birds, vehicles), weather combinations, weather events and a seasonal sky, jamming zones and bandwidth limits in the config, and scenario sweeps (`python seeder/generate.py scenarios/hard.json --sweep tuning`, one folder per seed); a worksheet for verifying the catalog numbers (`python seeder/unverified.py`); terrain and moving ground units wait for the mentor and are not part of this row |
 | ✅ | Mock simulation: the viewer runs a JavaScript simulation (2D map with terrain/height display, crossing, commanded drone motion, clutter objects, per-detection weather with a sky control, jamming zones, per-node link bandwidth caps; the Sensor limits table and coverage follow the weather at the sensor) |
-| ✅ | Real simulation in Python: `pipeline/` runs sensors, the channel emulator, tracker, friend/foe and scoring on a seeder scenario. The channel now also applies jamming zones, per-node link caps and node dropout, ported from the mock (`common/jamming.py`, `common/linkcap.py`) with shared cases that both implementations must answer the same (`python -m common.golden`, `node ui/viewer/test-channel-port.js`). Sensor faults (`dropout`, `link_outage`, `delay_burst`) are applied too. Not in Python yet: RF noise inside a zone, store-and-forward, topology; the viewer's mock has all of them |
-| ✅ | Network channel (`common/channel.py`): loss (independent or bursty, per sender), delay and node clocks from the scenario's `degradations`, plus jamming zones, link caps, node dropout and sensor faults; topology and store-and-forward not modelled |
+| ✅ | Simulation pipeline in Python: `pipeline/` runs sensors, the channel emulator, tracker, friend/foe and scoring on a seeder scenario. The channel now also applies jamming zones, per-node link caps and node dropout, ported from the mock (`common/jamming.py`, `common/linkcap.py`) with shared cases that both implementations must answer the same (`python -m common.golden`, `node ui/viewer/test-channel-port.js`). Sensor faults (`dropout`, `link_outage`, `delay_burst`) are applied too. Not in Python yet: RF noise inside a zone and store-and-forward; the viewer's mock has those. Neither models peer-link topology or merger failover |
+| ✅ | Network channel (`common/channel.py`): loss (independent or bursty, per sender), delay, jamming zones, link caps, node dropout and sensor faults. Its `Clock` helper supplies beacon offset/drift; native Python sensor observations still use ideal timestamps. Topology and store-and-forward are not modelled |
 | ✅ | Sensor observation models (`sensors/observe.py`, `native.py`, `beacons.py`): range window, field of view, detection probability, signatures, weather per detection, native fields with honest noise; the viewer's mock simulation has its own JavaScript version |
 | ✅ | Baseline tracker (`tracker/`): central Kalman tracker on native readings, gated association, radar or two-bearing start, support rules, friendly beacon tracks; tested. The drones' own positions are smoothed from their beacons and their uncertainty goes into the sensor noise; sensor readings of a drone with fresh beacons are absorbed, not applied. Weak spot: a hostile is tracked 58 % of the time at 0 % message loss (limited by what the sensors see), see [tracker.md](tracker/tracker.md) |
 | ✅ | Friend/Foe estimator: beacon matching, delivery-rate-weighted silence, `peaceful` class and behaviour hook (`threat_llr`), tested on synthetic data and seeder scenarios through a test adapter (`friend_foe/`) |
@@ -104,7 +107,7 @@ Phased, starting from the optimistic case. Status legend: ⬜ not started · �
 | Status | Task |
 |--------|------|
 | ✅ | Predictor: a constant-velocity identity keeper (`predictor/identity.py`) and a learned motion model for its gate (`predictor/motion.py`, trained on the tracker's own tracks by `predictor.train`, no truth), built and tested, off by default (`--keep-identity`, `--keep-identity learned`). **Measured on 5 tuning seeds: neither changes ID swaps** (0.00 at 0 % loss, -0.20±0.20 at 50 %), so this is done as a tested option, not as an improvement; see [predictor.md](predictor/predictor.md) |
-| ⬜ | Use prediction to hold identity through the close-range crossing. **Not planned:** the ID-swap log (`--swaps`, 5 tuning seeds) shows crossings are 1 to 2 of the swaps at 0 % and 30 % loss, so even a perfect hold saves at most 0.2 to 0.4 swaps per run; pickups and ghost tracks are the bigger causes |
+| ⬜ | **Required/open: stable identity and count through the close-range crossing.** Improve and validate tracker/fusion association on the challenge scenario; prediction is one possible technique. The later swap log attributes 20 of 65 swaps to hostile crossings (`pipeline/pipeline.md`, 20 tuning seeds), so the earlier small-sample rationale for deferring this work is insufficient. A tested predictor option does not satisfy this criterion |
 
 ### Phase 4 - Realism
 
@@ -123,7 +126,7 @@ Phased, starting from the optimistic case. Status legend: ⬜ not started · �
 |--------|------|
 | 🟨 | Run full scenario sweeps and collect metrics: the seeder generates every seed of a set (`python seeder/generate.py scenarios/hard.json --sweep tuning`); collecting metrics over them is the next step |
 | ⬜ | Compare centralized / decentralized / hybrid if time allows |
-| ⬜ | Operator view / COP visualisation |
+| 🟨 | Operator view / COP visualisation: the JavaScript simulation has a map, track list, uncertainty, headings, assessments and playback. Python can read and score exported viewer JSON (`scoring/viewer_run.py`); that reader does not connect the viewer to the Python tracker/fusion COP |
 | ⬜ | Demo, write-up, final presentation |
 
 ---

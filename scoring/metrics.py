@@ -2,8 +2,9 @@
 
 Per time step, estimated tracks are matched to the true objects present (hostile, friendly, benign and clutter)
 by optimal assignment inside a distance gate, so a track on a friendly or on a bird is never taken for
-a hostile. A track *counts as hostile* unless its class is friendly or peaceful (a hostile presumption:
-a track with no class counts). Every function here reads `truth.json` only through `truth.py`.
+a hostile. Legacy count metrics presume a track hostile unless its class is friendly or peaceful.
+The separate `strict_hostile_*` metrics count only the actual `hostile` label; tracking coverage and
+kinematic errors do not depend on classification. Every function reads truth only through `truth.py`.
 """
 
 import math
@@ -59,6 +60,15 @@ class RunScore:
     benign_flag_frac: float = 0.0           # non-allied benign drone object-steps matched to a counted track
     ident_covered_frac: float = 0.0         # hostile-present steps with a drone in identification range (scoring/identification.py)
     ident_delay_s: float = 0.0              # mean time from a hostile first present to the first drone in range
+    hostile_tracked_frac: float = 0.0       # matched hostile object-steps, regardless of assessed class
+    matched_hostile_samples: int = 0
+    hostile_samples: int = 0
+    count_exact_frac: float = 0.0           # legacy presumed-threat count exactly equals truth count
+    strict_hostile_count_error_mean_abs: float = 0.0
+    strict_hostile_count_error_bias: float = 0.0
+    strict_hostile_count_exact_frac: float = 0.0
+    strict_hostile_detected_frac: float = 0.0
+    strict_friendlies_flagged: int = 0
 
 
 def _dist(est: Estimate, state: State) -> float:
@@ -104,6 +114,11 @@ class _Accum:
         self.seen_tracks = set()                       # every track id scored so far
         self.frames: Dict[Tuple[str, bool], int] = {}  # (kind, matched to a counted track) -> object-steps
         self.flagged_friendlies = set()
+        self.strict_count_err: List[int] = []
+        self.hostile_samples = 0
+        self.matched_hostile_samples = 0
+        self.strict_hostile_samples = 0
+        self.strict_flagged_friendlies = set()
 
     def object_step(self, obj: TruthObject, flagged: bool) -> None:
         self.frames[(obj.kind, flagged)] = self.frames.get((obj.kind, flagged), 0) + 1
@@ -156,6 +171,12 @@ def _score_step(acc: _Accum, ests: Sequence[Estimate], present, config: ScoreCon
     for obj, state in present:
         est = track_on.get(obj.id)
         acc.object_step(obj, est is not None and est.counted)
+        if obj.kind == "hostile":
+            acc.hostile_samples += 1
+            acc.matched_hostile_samples += est is not None
+            acc.strict_hostile_samples += est is not None and est.cls == "hostile"
+        elif obj.kind == "friendly" and est is not None and est.cls == "hostile":
+            acc.strict_flagged_friendlies.add(obj.id)
         if est is not None and obj.kind == "hostile":
             if _track_hostile(acc, est, obj, state):
                 _log_swap(acc, t, obj, state, est, ests, matches, present)
@@ -164,6 +185,7 @@ def _score_step(acc: _Accum, ests: Sequence[Estimate], present, config: ScoreCon
     counted = [e for e in ests if e.counted]
     hostile_xy = [(s[0], s[1]) for o, s in present if o.kind == "hostile"]
     acc.count_err.append(len(counted) - len(hostile_xy))
+    acc.strict_count_err.append(sum(e.cls == "hostile" for e in ests) - len(hostile_xy))
     acc.ospa.append(ospa(hostile_xy, [(e.x, e.y) for e in counted], config.ospa_cutoff_m, config.ospa_order))
     acc.false_tracks.append(sum(e.track_id not in matches for e in counted))
     acc.seen_tracks.update(e.track_id for e in ests)
@@ -194,6 +216,15 @@ def _summary(acc: _Accum) -> RunScore:
         clutter_flagged_frac=acc.share("clutter"),
         false_tracks_mean=_mean(acc.false_tracks),
         benign_flag_frac=acc.share("benign"),
+        hostile_tracked_frac=acc.matched_hostile_samples / acc.hostile_samples if acc.hostile_samples else 0.0,
+        matched_hostile_samples=acc.matched_hostile_samples,
+        hostile_samples=acc.hostile_samples,
+        count_exact_frac=_mean([e == 0 for e in acc.count_err]),
+        strict_hostile_count_error_mean_abs=_mean([abs(e) for e in acc.strict_count_err]),
+        strict_hostile_count_error_bias=_mean(acc.strict_count_err),
+        strict_hostile_count_exact_frac=_mean([e == 0 for e in acc.strict_count_err]),
+        strict_hostile_detected_frac=acc.strict_hostile_samples / acc.hostile_samples if acc.hostile_samples else 0.0,
+        strict_friendlies_flagged=len(acc.strict_flagged_friendlies),
     )
 
 

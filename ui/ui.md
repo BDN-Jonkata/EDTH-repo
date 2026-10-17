@@ -8,7 +8,7 @@ Status: first working version in [viewer/](viewer/). See [system design](../docs
 
 Implements the Claude Design mockup: map with terrain/height, layer toggles, track table, alerts, track detail, playback and metrics.
 
-It is plain HTML/JS/CSS with no install step. It runs a **built-in mock simulation** (`sim.js`) that stands in for the real `seeder`, `simulation`, `sensors`, `tracker`, `fusion` and `friend_foe` modules until those exist. The whole 120 s scenario is computed up front (deterministic for a given seed) and then replayed, so playback can be scrubbed and stepped.
+It is plain HTML/JS/CSS with no install step. It runs a **built-in JavaScript mock simulation** (`sim.js`), separately from the implemented Python sensors, tracker, fusion and pipeline. It does not display the Python COP. See the [03-Rai audit](../docs/challenge-audit.md) for requirement evidence and differences between engines. The whole 120 s scenario is computed up front (deterministic for a given seed) and then replayed, so playback can be scrubbed and stepped.
 
 Run it:
 
@@ -20,7 +20,7 @@ python serve.py
 
 `serve.py` is a static server that turns browser caching off, so a refresh always shows the latest files (plain `python -m http.server` can serve stale files). Opening `index.html` directly also works. Optional URL parameters: `?t=49.5` opens paused at that time, `?tab=deg` opens the degradation chart, `?weather=night` and `?seed=7` preselect those settings.
 
-Scenarios: the **Preset** picker (easy, medium, hard, challenge, busy, dusk, jammed) loads a scenario made by the seeder, and its weather, platforms and degradations become the starting settings. **busy** adds four threat scenarios and four non-allied benign drones with transit, survey orbit and hover; viewer traffic actors add responsive following and interception of moving allies (`?preset=busy`). The track panel shows counts for all five flags and each track's actual identity and behavior-risk percentages. Select a track for score bars, peaceful evidence, observation quality, usable history, matched responses, reasons and entry/retention thresholds. Scores are independent, not a five-way probability distribution. With `python serve.py`, the **Seed** field makes a new scenario for that preset (new drone paths and patrols) when you press Apply & restart, through `/api/scenario?preset=hard&seed=7`. Opened as a file or with plain `http.server`, only the default seed of each preset is available (`scenarios.js`, made by `python seeder/export_scenarios.py`).
+Scenarios: the **Preset** picker (easy, medium, hard, challenge, busy, dusk, jammed, outage) loads a scenario made by the seeder, and its weather, platforms and degradations become the starting settings. **busy** adds four threat scenarios and four non-allied benign drones with transit, survey orbit and hover; viewer traffic actors add responsive following and interception of moving allies (`?preset=busy`). The track panel shows counts for all five flags and each track's actual identity and behavior-risk percentages. Select a track for score bars, peaceful evidence, observation quality, usable history, matched responses, reasons and entry/retention thresholds. Scores are independent, not a five-way probability distribution. With `python serve.py`, the **Seed** field makes a new scenario for that preset (new drone paths and patrols) when you press Apply & restart, through `/api/scenario?preset=hard&seed=7`. Opened as a file or with plain `http.server`, only the default seed of each preset is available (`scenarios.js`, made by `python seeder/export_scenarios.py`).
 
 Commanded drones: the mock accepts `commands` from the scenario (or `params.commands`); commands and acks cross the same lossy channel, with retries. `goto` and `hold` override autonomous assignments, and `return_to_patrol` resumes coordinated coverage. The mission controller moves all drones together under the platform flight limits and the shared separation, acceleration and sensor-yaw limits. Command validation and facing helpers live in `drones.js`; test with `node ui/viewer/test-commands.js`. The viewer has no control for sending commands yet.
 
@@ -40,7 +40,7 @@ Store-and-forward: `degradations.sensor_faults` (link outages, delay bursts, dro
 Late data and cut-off nodes (`latedata.js`, `late-ui.js`; test with `node ui/viewer/test-late.js`):
 - **Isolated:** a node silent for 30 s or more that is alive and holding data gets a violet dashed ring on the map with its silent time and held seconds (a dead node keeps the red "silent" ring). Pick a node in the Node health table, or its card under the table, to see **what it saw**: the readings it holds that C2 does not have yet, drawn in violet on the map where they were taken, and a list with sensor, reading and state.
 - **Late data on the timeline:** a burst of late readings (5 or more from one node) is a bar from when the readings were taken to when they reached C2 (violet while some never arrived). The Late data table lists each burst; "Go to" puts the playhead where it starts. On the map, a late reading is drawn where it was taken, dashed while C2 does not have it yet and solid once it does.
-- **Late data loaded:** on (default), tracks carry the correction the late readings give; off, the picture is exactly what C2 had at that moment. The live tracker never takes late readings in; the correction is made on the recorded history (`docs/data-formats.md`, "Late readings").
+- **Retrospective corrections:** on (default), recorded positions use readings that arrived later, including arrivals after the playhead time; off, the picture is what C2 had at that moment. Covariance, velocity and metrics remain from the live run, so revised positions must not be presented as live tracking accuracy. The live tracker never takes late readings in; the correction is made on the recorded history (`docs/data-formats.md`, "Late readings").
 
 Jamming: `degradations.network.jamming_zones` in the scenario are applied in Realistic mode. A node inside an active zone loses messages at least at the zone's rate, and RF receivers there are noisier. The map shows an active zone as a red dashed circle (with the Network links layer on). The maths is in `jamming.js`; test with `node ui/viewer/test-jamming.js`.
 
@@ -56,17 +56,37 @@ What the mock does:
 | Friendly missions | Patrol unvisited cells first, then oldest-observed cells, with shared destination reservations. After 3 s sustained suspicion, dispatch the closest suitable available drone at a weather-adjusted identification standoff, one follower per target. Search for 10 s after lost contact, then return to patrol; release identification assignments when assessment changes to friendly, peaceful or hostile |
 | Models per node | Each of the 7 nodes gets a platform from the catalog, chosen in the left panel ("Models per node"). Its sensor modules, ranges, noise and weather effects come from `catalog.js`. Press Apply & restart to run the seed with your choice |
 | Sensors | Each module enforces its catalog limits (range window, field of view, pointing, detection probability that falls with distance, rate, latency) and reports only its native data: cameras give bearing + elevation (no range), a microphone array bearing + level, a single microphone only loudness, RF bearing + signal strength, radar range + azimuth + radial speed. Weather (clear, fog, rain, wind, night) scales range, noise and detection probability per module. Radar merges targets inside its 15 m x 3 deg resolution cell |
-| Network | Per-message loss, delay and per-node clock drift in Realistic mode. Fusion is centralised at C2 (the hybrid design is not modelled yet) |
+| Network | Per-message loss and delay in Realistic mode. Packet headers can carry drifted timestamps, but internal observation times remain ideal and no time synchronization is implemented. Sensor poses come from true simulated positions, without pose-error propagation. Fusion is centralized at C2 |
 | Tracker | One extended Kalman filter per track that takes the native data as it comes (bearing, range, radial speed updates), nearest-neighbour gated association, tentative → confirmed → coasting → deleted. Radar starts a track alone; bearing-only sensors need two nodes to cross bearings; a track is confirmed only with range data or three viewpoints. This is a baseline, not the GNN/JPDA from the design |
 | Friend/foe | Verified roster/beacons establish identity. The automatic observed-motion baseline supplies a separate behavior score to the team's five-class estimator, with bounded window evidence and hysteresis. Track confirmation does not establish hostile intent. Details show separate identity/behavior percentages and reasons; see [drone behaviour](../drone_behavior/drone_behavior.md) for policy and limitations |
 | Predictor | Constant-velocity extrapolation only |
-| Metrics | Count error, position RMSE, ID swaps, friendly false alarms, scored against ground truth |
+| Metrics | Strict hostile-label count error and exact-count share; geometric target tracking coverage, position/velocity/heading RMSE and ID swaps, independent of assessed class; friendly false alarms. All use evaluation-only truth. `metrics.js` assigns all confirmed/coasting tracks to all active truth kinds one-to-one (60 m gate, no continuity bonus). Rolling RMSE weights matched samples, not frames; missing targets reduce coverage rather than contributing zero error. Zero swaps is meaningful only beside coverage |
 
 Catalog data: `catalog.js` is generated, do not edit it. After changing `seeder/catalog/*.json` run `python seeder/export_catalog.py`.
 
 Panels: **Sensor feed** shows the latest records the sensors reported (only their native fields), **Sensor limits** lists every sensor's range window, field of view, pointing, rate and output, and the map draws each sensor's real coverage (wedges for forward-pointing sensors, rings for 360-degree ones). Raw observations are drawn as sensors report them: a ray for bearing-only, a ring for range-only, a point for radar.
 
 Map: it fills its whole panel; the dashed square is the 1 km x 1 km area of operations, and you can pan and zoom past its edge.
+
+The fictional village backdrop (`viewer/village.js`) adds connected streets,
+street-facing homes with gardens and driveways, a market square, church, school,
+village green, farm buildings, fields, orchards and a bridge over the brook.
+Plots keep clear of streets, water and the community sites. Scenery is built once
+and stays fixed during playback; the Terrain layer switches it on and off.
+
+Track images use the estimated assessment: blue drone with an identity shield for
+friendly, teal drone with a check for peaceful, amber drone with a caution badge
+for suspicious, red drone with a threat badge for hostile, and a neutral question
+mark for an unknown object. The same SVG assets (`viewer/assets/track-icons/`)
+appear on the map, in the track list, selected-track details and legend. They
+update with classification during playback and scrubbing. Dotted outer rings mark
+tentative tracks; coasting tracks fade. Direction remains a separate velocity
+arrow. Scenario truth roles do not choose track images.
+
+C2 uses a violet command-center image with communications antennas. Ground nodes
+use a cyan sensor station on a tripod, with their node ID and actual sensor kinds
+below it. The same assets (`viewer/assets/infrastructure/`) appear in the legend.
+Silent and isolated-node rings sit outside the images so link status stays visible.
 
 ### Coordinated movement
 

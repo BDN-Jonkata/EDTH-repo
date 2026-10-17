@@ -82,6 +82,15 @@ class TestChannel(unittest.TestCase):
         self.assertEqual(set(ch.links), {"F1", "F2"})
         self.assertIsNot(ch.links["F1"], ch.links["F2"])
 
+    def test_bursty_loss_boundary_delivers_all_or_none(self):
+        for loss in (0.0, 1.0):
+            with self.subTest(loss=loss):
+                ch = Channel(scenario(loss=loss, burst=True), seed=2)
+                for n in range(100):
+                    ch.send(message("F1", n), 0.0)
+                self.assertEqual(ch.lost, int(100 * loss))
+                self.assertEqual(len(ch.deliver(1.0)), int(100 * (1 - loss)))
+
 
 ZONE = {"x": 500, "y": 500, "radius_m": 100, "loss": 0.9, "t_start": 10, "t_end": 20}
 
