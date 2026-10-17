@@ -13,6 +13,7 @@ import math
 from dataclasses import dataclass, replace
 from typing import Dict, List, Optional, Sequence
 
+from predictor.motion import MotionModel
 from tracker.tracker import Track
 
 
@@ -24,6 +25,7 @@ class IdentityConfig:
     min_gate_m: float = 20.0
     max_gate_m: float = 120.0       # a wide gate would hand one target's ID to another
     max_speed_change_mps: float = 10.0
+    model: Optional[MotionModel] = None   # learned (predictor/motion.py): replaces the guessed spread and speed change
 
 
 @dataclass
@@ -79,8 +81,10 @@ class IdentityKeeper:
         """Distance between the new track and where the lost one should be, or None if it cannot be it."""
         cfg, dt = self.config, t - lo.t
         px, py = lo.x + lo.vx * dt, lo.y + lo.vy * dt
-        spread = math.hypot(lo.sigma, 0.5 * cfg.accel_noise_mps2 * dt * dt)
+        learned = cfg.model
+        spread = learned.spread(dt) if learned else math.hypot(lo.sigma, 0.5 * cfg.accel_noise_mps2 * dt * dt)
+        max_dv = learned.speed_change(dt) if learned else cfg.max_speed_change_mps
         gate = min(cfg.max_gate_m, max(cfg.min_gate_m, cfg.gate_sigmas * math.hypot(spread, tr.position_sigma)))
         d = math.hypot(tr.state[0] - px, tr.state[1] - py)
         dv = math.hypot(tr.state[2] - lo.vx, tr.state[3] - lo.vy)
-        return d if d <= gate and dv <= cfg.max_speed_change_mps else None
+        return d if d <= gate and dv <= max_dv else None

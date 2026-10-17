@@ -25,7 +25,8 @@ from fusion.merger import Merger
 from pipeline.cueing import Cueing
 from pipeline.fleet import Fleet
 from pipeline.nodes import NodeTrackers
-from predictor.identity import IdentityKeeper
+from predictor.identity import IdentityConfig, IdentityKeeper
+from predictor.motion import MotionModel
 from scoring.metrics import Estimate
 from sensors.beacons import BeaconSource
 from sensors.observe import ObservationSource
@@ -171,7 +172,7 @@ def scored_frames(scenario: dict, seed: int = 0, tracker_config: Optional[Tracke
     pipeline = Pipeline(scenario, seed, tracker_config, investigate, distributed, cue, trust, oosm)
     if trust:        # a missing beacon of a node whose link is down is not evidence against the drone
         getattr(estimator, "estimator", estimator).silence_explained = pipeline.health.explains_silence
-    keeper = IdentityKeeper() if keep_identity else None
+    keeper = IdentityKeeper(IdentityConfig(model=MotionModel.load() if keep_identity == "learned" else None)) if keep_identity else None
     pending: List[Beacon] = []
     classes: Dict[str, str] = {}
     for k in range(int(scenario["duration_s"] / STEP_S) + 1):

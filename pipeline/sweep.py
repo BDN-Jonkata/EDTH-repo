@@ -99,7 +99,9 @@ def main() -> None:
                     help="use the automatic drone-behaviour module: `safe` (the default when given) never lets motion "
                          "alone call a track peaceful, `raw` is the module's own behaviour (pipeline/behaviour.py)")
     ap.add_argument("--investigate", action="store_true", help="send drones at suspicious tracks (pipeline/dispatch.py)")
-    ap.add_argument("--keep-identity", action="store_true", help="run the predictor's identity keeper on the tracks")
+    ap.add_argument("--keep-identity", nargs="?", const=True, choices=["learned"],
+                    help="run the predictor's identity keeper on the tracks; `learned` sizes its gate with the model "
+                         "from `python -m predictor.train` (predictor/motion.py)")
     ap.add_argument("--cue", action="store_true", help="send the closest other drone at a bearing no track explains (pipeline/cueing.py)")
     ap.add_argument("--trust", action="store_true", help="weight readings by link health and discount explained silence (health/)")
     ap.add_argument("--oosm", action="store_true", help="apply a late reading at the time it was taken (tracker/oosm.py)")
@@ -122,7 +124,7 @@ def main() -> None:
     if args.paired:
         flag = OPTIONS[args.paired]
         rows = [(loss, paired_difference(run_cell(setup, args.weather, loss, args.behaviour, **{**base, flag: False}),
-                                         run_cell(setup, args.weather, loss, args.behaviour, **{**base, flag: True})))
+                                         run_cell(setup, args.weather, loss, args.behaviour, **{**base, flag: base[flag] or True})))
                 for loss in losses]
         print_table(f"{header}\nmean difference, {args.paired} on minus off (±standard error)", rows)
     else:

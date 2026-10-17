@@ -103,7 +103,7 @@ Phased, starting from the optimistic case. Status legend: ⬜ not started · �
 
 | Status | Task |
 |--------|------|
-| ✅ | Predictor: a constant-velocity identity keeper (`predictor/identity.py`), built and tested, off by default (`--keep-identity`). **Measured: it does not change ID swaps** (the lost track is far from its extrapolation after a 10 to 20 s gap), so it is done as a tested option, not as an improvement; see [predictor.md](predictor/predictor.md). A learned predictor is not planned: the data is small and simulated, and the simple one already missed its goal |
+| ✅ | Predictor: a constant-velocity identity keeper (`predictor/identity.py`) and a learned motion model for its gate (`predictor/motion.py`, trained on the tracker's own tracks by `predictor.train`, no truth), built and tested, off by default (`--keep-identity`, `--keep-identity learned`). **Measured on 5 tuning seeds: neither changes ID swaps** (0.00 at 0 % loss, -0.20±0.20 at 50 %), so this is done as a tested option, not as an improvement; see [predictor.md](predictor/predictor.md) |
 | ⬜ | Use prediction to hold identity through the close-range crossing. **Not planned:** the ID-swap log (`--swaps`, 5 tuning seeds) shows crossings are 1 to 2 of the swaps at 0 % and 30 % loss, so even a perfect hold saves at most 0.2 to 0.4 swaps per run; pickups and ghost tracks are the bigger causes |
 
 ### Phase 4 - Realism
