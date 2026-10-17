@@ -9,10 +9,12 @@ Status: codec started; schemas, time/frame helpers and bus not started. See [sys
 | File | Contents |
 |------|----------|
 | [codec.py](codec.py) | `encode(msg, precision=None) -> bytes`, `decode(bytes) -> msg` (JSON for now), `make_header`, `Sequencer`, `CodecError`, `MessageSizeLog` (messages and bytes per type) |
-| [channel.py](channel.py) | `Channel(scenario, seed)`: `send` and `deliver` with loss (independent or bursty, one chain per sender) and delay from `degradations.network`; `Loss`, `Clock` (a node's offset and drift) |
+| [channel.py](channel.py) | `Channel(scenario, seed, position_of)`: `send` and `deliver` with loss (independent or bursty, one chain per sender) and delay from `degradations.network`; also, when the scenario has them, jamming zones (needs `position_of(node, t)`), a link cap and node dropout, as in the viewer's mock simulation; `Loss`, `Clock` (a node's offset and drift) |
+| [jamming.py](jamming.py), [linkcap.py](linkcap.py) | Python ports of `ui/viewer/jamming.js` and `linkcap.js` (the mock is the reference): `loss_at`, `rf_noise_mult`, `LinkCap` (enqueue, drain, summary) |
+| [golden.py](golden.py) | `python -m common.golden` writes `testdata/channel_cases.json`, the cases both implementations must answer the same; `ui/viewer/test-channel-port.js` checks the JavaScript against it |
 | [assignment.py](assignment.py) | `assign(cost, gate)`: optimal one-to-one assignment (Hungarian), pure Python; used by the tracker and by scoring |
 | [seeder_import.py](seeder_import.py) | `ensure_seeder_on_path()`: lets other packages import the seeder's flat `catalog` and `scenario` modules |
-| `test_codec.py`, `test_channel.py` | Tests |
+| `test_codec.py`, `test_channel.py`, `test_golden.py` | Tests |
 
 Every message crossing a link goes through `encode` / `decode`, so a compact binary format can replace JSON later without touching other modules. Decoding rejects corrupted bytes, missing `type` or header fields, and a wrong `schema_version` with `CodecError`. Messages are plain dicts until the schemas are frozen.
 

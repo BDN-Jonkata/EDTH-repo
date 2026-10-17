@@ -76,7 +76,7 @@ friend_foe/                                classification from tracks and delive
 scoring/                                   metrics against truth.json
 ```
 
-Everything before the channel is the simulation side and may use the truth; the tracker and the estimator see only delivered messages. The clock is 0.1 s. Not modelled: jamming zones, node dropout, topology (see [common/channel.py](../common/channel.py)). Weather reaches the sensors per detection through the weather provider; it does not yet change the tracker.
+Everything before the channel is the simulation side and may use the truth; the tracker and the estimator see only delivered messages. The clock is 0.1 s. Jamming zones (from the sender's true position), the link cap and node dropout from the scenario are applied by [common/channel.py](../common/channel.py), as in the viewer's mock; not modelled: topology, RF receivers getting noisier inside a zone, link outages, delay bursts, store-and-forward. A preset with `dropout` (`hard`) now loses that node's messages from the dropout time on in this pipeline, which earlier Python results did not. Weather reaches the sensors per detection through the weather provider; it does not yet change the tracker.
 
 Results: [tracker.md](../tracker/tracker.md#results).
 

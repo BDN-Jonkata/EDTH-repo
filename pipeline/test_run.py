@@ -38,5 +38,29 @@ class TestPipeline(unittest.TestCase):
         self.assertLess(lossy.hostile_detected_frac, clean.hostile_detected_frac)
 
 
+class TestChannelFeatures(unittest.TestCase):
+    """Jamming zones, a link cap and node dropout from the scenario reach the pipeline (they are in `common/channel.py`)."""
+
+    def delivered(self, change):
+        sc, _ = scenario_and_truth("medium")
+        sc["degradations"]["network"]["enabled"] = True
+        change(sc["degradations"])
+        sc["duration_s"] = 40
+        return sum(f.readings_used + len(f.beacons) for f in run(sc, sc["seed"]))
+
+    def test_a_jamming_zone_over_the_whole_area_lowers_what_arrives(self):
+        zone = {"x": 500, "y": 500, "radius_m": 2000, "loss": 0.9}
+        clean = self.delivered(lambda d: None)
+        jammed = self.delivered(lambda d: d["network"].update(jamming_zones=[zone]))
+        self.assertLess(jammed, 0.4 * clean)
+
+    def test_a_low_link_cap_lowers_what_arrives(self):
+        self.assertLess(self.delivered(lambda d: d["network"].update(bandwidth_kbps=2)), self.delivered(lambda d: None))
+
+    def test_a_dropped_node_stops_sending(self):
+        every_node = lambda d: d.update(dropout=[{"node": n, "t": 10.0} for n in ("F1", "F2", "F3", "F4", "F5", "GS1", "GS2")])
+        self.assertLess(self.delivered(every_node), 0.5 * self.delivered(lambda d: None))
+
+
 if __name__ == "__main__":
     unittest.main()

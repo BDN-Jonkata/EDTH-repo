@@ -98,3 +98,31 @@ footer.bar { background: #0F141A; border-top: 1px solid #222A35; padding: 12px 1
 .mods { display: flex; flex-wrap: wrap; gap: 4px; padding-left: 42px; }
 .mod { font-family: 'IBM Plex Mono', monospace; font-size: 10px; padding: 1px 5px; border: 1px solid #3A4553; border-radius: 3px; color: #B7C0CC; }
 .mod.warn { border-color: #F5B13D; color: #FFD58A; }
+
+.hud[hidden] { display: none; }
+.legend { top: 12px; right: 56px; width: min(360px, calc(100% - 68px)); max-height: calc(100% - 24px); overflow: auto; z-index: 5; }
+.lg-head { position: sticky; top: 0; display: flex; align-items: center; gap: 12px; padding: 8px 10px 8px 12px; background: #0F141A; border-bottom: 1px solid #2C3644; }
+.lg-head b { flex: 1 1 auto; font-size: 13px; letter-spacing: .04em; }
+.lg-all { display: flex; align-items: center; gap: 6px; font-size: 12px; color: #C9D1DB; cursor: pointer; }
+.lg-sec { padding: 10px 12px; border-bottom: 1px solid #1B222C; display: flex; flex-direction: column; gap: 8px; }
+.lg-sec:last-child { border-bottom: 0; }
+.lg-row { display: flex; align-items: center; gap: 10px; }
+.lg-ico { flex: none; background: #0D1318; border: 1px solid #1B222C; border-radius: 3px; }
+.lg-nm { font-size: 12px; font-weight: 600; color: #E6EAF0; }
+.lg-tx { font-size: 11px; color: #8B96A5; line-height: 1.4; }
+.lg-n { font-size: 10px; color: #6F7B89; }
+.lg-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.lg-chip { display: inline-flex; align-items: center; gap: 5px; padding: 2px 7px; border: 1px solid #2C3644; border-radius: 3px; font-size: 11px; color: #6F7B89; }
+.lg-chip.on { color: #D5DBE3; border-color: #3A4553; }
+
+/* narrow screens: one column, map first and not pinned, wide tables scroll inside their box */
+@media (max-width: 760px) {
+  header.top { padding: 8px 12px; gap: 8px 12px; }
+  .brand span, .vsep { display: none; }
+  .body { flex-direction: column; flex-wrap: nowrap; }
+  aside.left, aside.right { flex: 0 0 auto; max-width: none; width: 100%; border: 0; border-top: 1px solid #222A35; }
+  main.map { order: -1; flex: 0 0 auto; width: 100%; height: 68vh; min-height: 360px; position: relative; align-self: stretch; }
+  .legend { left: 12px; right: 12px; top: auto; bottom: 48px; width: auto; max-height: 62%; }
+  .wxrow .lyr { flex-basis: 110px; }
+  .row { flex-wrap: wrap; }
+}
