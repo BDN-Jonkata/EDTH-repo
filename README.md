@@ -31,6 +31,7 @@ Run the tests (Python 3.11+): `python -m pip install pytest`, then `python -m py
 | [sensors/](sensors/) | Camera, acoustic, RF, radar models incl. weather effects |
 | [tracker/](tracker/) | Per-node local multi-target tracker |
 | [friend_foe/](friend_foe/) | Friendly beacon matching and drone behaviour pattern |
+| [drone_behavior/](drone_behavior/drone_behavior.md) | Automatic observed-motion evidence, policy configuration and reference tests |
 | [fusion/](fusion/) | Cross-node track merge, global IDs, COP |
 | [predictor/](predictor/) | Optional short-horizon prediction |
 | [scoring/](scoring/) | Metrics harness |

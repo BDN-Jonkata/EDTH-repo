@@ -21,6 +21,9 @@
   const Mission = typeof window !== 'undefined' ? window.Missions : require('./missions.js');
   const Weather = typeof window !== 'undefined' ? window.Weather : require('./weather.js');
   const Jamming = typeof window !== 'undefined' ? window.Jamming : require('./jamming.js');
+  const Behavior = typeof window !== 'undefined' ? window.Behavior : require('./behavior.js');
+  const FriendFoe = typeof window !== 'undefined' ? window.FriendFoe : require('./friend-foe.js');
+  const Investigations = typeof window !== 'undefined' ? window.Investigations : require('./investigations.js');
   const CAT = typeof CATALOG !== 'undefined' ? CATALOG : require('./catalog.js'); // eslint-disable-line no-undef
   const DT = 0.1;
   const T_END = 120;
@@ -275,7 +278,7 @@
   function run(P, opts) {
     const c = newContext(P);
     c.lite = !!(opts && opts.lite);
-    c.tap = (opts && opts.tap) || null; // tests: called with every message sent, lost or not
+    c.tap = (opts && opts.tap) || null; // tests: network sends plus local investigation contract events; arr is set only by the channel
     startFriendTracks(c);
     for (let k = 0; k <= c.NF; k++) stepFrame(c, k);
     return finish(c);
@@ -301,6 +304,7 @@
       drones: {}, seqs: {}, cmd: { script: scriptedCommands(P, world), open: {}, records: {}, seen: {}, count: 0 },
       beaconEvery: Math.max(1, Math.round(10 / (world.beacon.rate_hz || 2))), beaconSigma: world.beacon.pos_sigma_m || 3,
       tracks: [], pending: [], friends: {}, alerts: [], frames: [], timeline: [], lastMatch: {}, sqHist: [], crossAlerted: {},
+      beacons: {},
       n: { hostile: 0, unk: 0, swaps: 0, ffa: 0, cfa: 0, evalSq: 0, evalN: 0, evalCnt: 0, evalCntN: 0 },
     };
     world.hostiles.concat(world.clutter).forEach((h) => { c.pathById[h.id] = h; });
@@ -310,9 +314,15 @@
       const flight = PLATFORMS[assign[f.id]].spec.flight;
       return { ...f, v: Math.min(f.v, flight.max_speed_mps), flight };
     });
+    c.investigations = new Investigations.Controller(c.sensors, fleet.map((f) => f.id), c.wx,
+      (s, sp, tg, t) => sensorAt(c, s, t, sp, tg), (m) => { if (c.tap) c.tap(m); }, c.seqs,
+      (id, t) => id === 'estimator' ? t : localTime(c, id, t));
     c.missions = new Mission.Controller(fleet, c.sensors, DT, (t, text) => {
       c.alerts.push({ t, text, sev: 'info' }); c.timeline.push({ t, label: text, color: 'amber' });
-    });
+    }, { requireInvestigation: true, geometry: (tr, d, t) => c.investigations.geometry(tr, d, t) });
+    const policy = P.behavior || (P.scenario?.config?.drone_behavior) || {};
+    c.classifier = new FriendFoe.AutomaticEstimator(Behavior.configFor([world.c2.x, world.c2.y], policy),
+      { beacon_rate_hz: world.beacon.rate_hz || 2 }, fleet.map((f) => f.id));
     shareFalseAlarmsAcrossRadars(c);
     return c;
   }
@@ -340,7 +350,7 @@
     const t = k * DT;
     c.missions.drones.forEach((d) => { d.disabled = !alive(c, d.id, t); });
     c.missions.record(t);
-    c.missions.observe(t, k, (id) => alive(c, id, t));
+    c.missions.observe(t, k, (id) => alive(c, id, t), (s, sp, tg) => sensorAt(c, s, t, sp, tg));
     stepDrones(c, t);
     issueCommands(c, t);
     const truth = truthAt(c, t);
@@ -348,7 +358,10 @@
     const frameMeas = trackFrame(c, t, handleControl(c, t, deliver(c, t)));
     updateLifecycle(c, t);
     pruneTracks(c, t);
+    classifyFrame(c, t);
+    c.investigations.update(t, c.tracks);
     c.missions.update(t, c.tracks);
+    c.investigations.sync(t, c.missions.drones);
     const { snap, hostileTracks } = snapshot(c, t);
     const score = scoreFrame(c, t, truth, hostileTracks);
     const cross = findCrossing(hostileTracks);
@@ -370,6 +383,8 @@
       T_END: c.T_END, DT, NF: c.NF, EVAL: c.EVAL, sensors: c.sensors.map(sensorInfo),
       missionConfig: { cellSize: Mission.CELL, areaSize: Mission.SIZE, separation: Mission.SEP,
         patrolSpacing: Mission.COMFORT, maxAcceleration: Mission.ACCEL, maxYawDegSec: Mission.YAW_RATE * RAD2DEG },
+      behaviorConfig: c.classifier.behavior.config,
+      investigations: { requests: c.investigations.requests, statuses: c.investigations.statuses },
     });
   }
   function sensorInfo(s) {
@@ -565,6 +580,11 @@
       c.tracks.push(tr);
     } else update(tr, z, innov(tr, z));
     tr.lastUpd = t; tr.srcs.self = t; tr.beaconT = Math.max(tr.beaconT || 0, m.header.t_sent);
+    tr.observedT = Math.max(tr.observedT ?? -Infinity, m.header.t_sent);
+    if (!c.beacons[id] || m.header.t_sent > c.beacons[id].t) c.beacons[id] = {
+      friend_id: id, t: m.header.t_sent, position: [m.position[0], m.position[1], 0],
+      velocity: [m.velocity[0], m.velocity[1], 0], pos_sigma: Math.sqrt(Math.max(m.covariance[0][0], m.covariance[1][1])),
+    };
   }
   function bestTrack(c, rec) {
     let best = null, bs = Infinity;
@@ -592,6 +612,7 @@
     tr.srcs[key] = Math.max(tr.srcs[key] ?? -Infinity, rec.t);
     if (!tr.firstSources) tr.firstSources = {};
     tr.firstSources[rec.node] = Math.min(tr.firstSources[rec.node] ?? Infinity, rec.t);
+    tr.observedT = Math.max(tr.observedT ?? -Infinity, rec.t);
   }
   // bearing only: needs a second bearing from another node to fix a position
   function pairBearing(c, rec, t) {
@@ -628,10 +649,10 @@
     if (tr.status !== 'tentative' || tr.hitFrames < 6 || Math.sqrt(Math.max(tr.P[0], tr.P[5])) >= 30 || !supported) return;
     tr.status = 'confirmed';
     tr.unsup = null;
-    if (!/^U/.test(tr.id)) return; // a demoted track that is confirmed again keeps its ID
-    tr.id = 'H' + (++c.n.hostile);
-    c.alerts.push({ t, sev: 'info', text: tr.id + ' confirmed hostile' });
-    c.timeline.push({ t, label: tr.id + ' seen', color: 'red' });
+    if (tr.confirmedOnce) return;
+    tr.confirmedOnce = true;
+    c.alerts.push({ t, sev: 'info', text: tr.id + ' track confirmed; assessing behavior' });
+    c.timeline.push({ t, label: tr.id + ' seen', color: 'amber' });
   }
   function announceTentative(c, tr, t) {
     if (tr.status !== 'tentative' || tr.alerted || tr.hitFrames < 3) return;
@@ -665,6 +686,7 @@
       Object.entries(dup.srcs).forEach(([key, time]) => { keep.srcs[key] = Math.max(keep.srcs[key] ?? -Infinity, time); });
       if (!keep.firstSources) keep.firstSources = {};
       Object.entries(dup.firstSources || {}).forEach(([key, time]) => { keep.firstSources[key] = Math.min(keep.firstSources[key] ?? Infinity, time); });
+      keep.observedT = Math.max(keep.observedT ?? -Infinity, dup.observedT ?? -Infinity);
       c.tracks.splice(c.tracks.indexOf(dup), 1);
     }
   }
@@ -705,19 +727,34 @@
   }
 
   // --------------------------------------------------------------------- snapshot
-  function classify(tr, t) {
-    if (tr.kind === 'frd') { const pF = Math.max(0.5, 1 - (t - tr.lastUpd) * 0.05); return { cls: 'friendly', pH: 0, pF, pU: 1 - pF }; }
-    if (tr.status === 'tentative') { const pH = Math.min(0.35, tr.hitFrames * 0.05); return { cls: 'unknown', pH, pF: 0.1, pU: 1 - pH - 0.1 }; }
-    const pH = Math.min(0.99, 0.7 + tr.hitFrames / 120), pU = (1 - pH) * 0.7;
-    return { cls: 'hostile', pH, pU, pF: 1 - pH - pU };
+  function classifyFrame(c, t) {
+    // Only tracker estimates and received beacons cross this boundary. The viewer
+    // tracker is 2D, so project BOTH tracks and beacons to the same plane.
+    const inputs = c.tracks.map((tr) => ({ track_id: tr.id, t, position: [tr.s[0], tr.s[1], 0],
+      velocity: [tr.s[2], tr.s[3], 0], observed_t: tr.observedT ?? 0,
+      pos_sigma: Math.sqrt(Math.max(0, (tr.P[0] + tr.P[5]) / 2 + Math.hypot((tr.P[0] - tr.P[5]) / 2, tr.P[1]))),
+      existence_prob: tr.status === 'tentative' ? 0.5 : 0.95 }));
+    const beacons = Object.values(c.beacons).filter((b) => t - b.t <= 2);
+    const found = c.classifier.update(t, inputs, beacons);
+    const byId = new Map(c.tracks.map((tr) => [tr.id, tr]));
+    found.forEach((v) => {
+      const tr = byId.get(v.track_id), prev = tr.cls;
+      tr.classification = v; tr.cls = v.cls; tr.behavior = c.classifier.explain(v.track_id);
+      if (v.cls !== prev && ['hostile', 'peaceful', 'suspicious'].includes(v.cls)) {
+        c.alerts.push({ t, sev: v.cls === 'hostile' ? 'warn' : 'info',
+          text: tr.id + ' assessed ' + v.cls + ': ' + (v.cls === 'suspicious' ? 'identity unverified; ' : '') +
+            (tr.behavior.reasons || ['insufficient_history']).join(', ').replace(/_/g, ' ') });
+      }
+    });
   }
   function snapTrack(tr, t) {
-    const { cls, pH, pU, pF } = classify(tr, t);
+    const v = tr.classification || { cls: 'unknown', class_prob: 0.5, p_hostile: 0.5, p_friendly: 0.5 };
+    const cls = v.cls, pH = v.p_hostile, pF = v.p_friendly;
     return {
       id: tr.id, cls, st: tr.status, x: tr.s[0], y: tr.s[1], vx: tr.s[2], vy: tr.s[3],
       pxx: tr.P[0], pyy: tr.P[5], pxy: tr.P[1], pvv: tr.P[10] + tr.P[15],
-      conf: cls === 'friendly' ? pF : cls === 'hostile' ? pH : pH + 0.3,
-      age: t - tr.lastUpd, nodes: Object.keys(tr.srcs).filter((n) => t - tr.srcs[n] <= 2), pH, pU, pF, born: tr.born,
+      conf: v.class_prob, behavior: tr.behavior || {},
+      age: t - tr.lastUpd, nodes: Object.keys(tr.srcs).filter((n) => t - tr.srcs[n] <= 2), pH, pF, born: tr.born,
     };
   }
   function snapshot(c, t) {
@@ -834,7 +871,7 @@
   }
 
   // ------------------------------------------------------- drones and commands
-  // A friendly flies its scripted patrol loop until it is commanded. C2 sends a drone_command over the lossy channel
+  // The shared mission controller flies coverage patrols and investigations. C2 sends a drone_command over the lossy channel
   // and repeats it until the drone's drone_state ack arrives; the drone ignores repeats of a command_id it has seen.
   const ACK_TIMEOUT_S = 1.5, MAX_ATTEMPTS = 5; // assumed
   const AREA_M = 1000;

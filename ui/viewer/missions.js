@@ -37,8 +37,9 @@
     return true;
   }
   class Controller {
-    constructor(friendlies, sensors, dt, emit) {
+    constructor(friendlies, sensors, dt, emit, options = {}) {
       this.dt = dt; this.sensors = sensors; this.emit = emit || (() => {});
+      this.options = options;
       this.drones = friendlies.map((f) => ({ id: f.id, x: f.x, y: f.y,
         vx: 0, vy: 0, speed: f.v, cruise: f.v, accel: Math.min(ACCEL, f.flight?.max_accel_mps2 ?? ACCEL),
         yawRate: Math.min(YAW_RATE, (f.flight?.max_turn_dps ?? 20) * Math.PI / 180), heading: Math.atan2(500 - f.y, 500 - f.x),
@@ -76,12 +77,15 @@
       d.speed = d.mode === 'patrol' ? d.cruise : Math.min(flight.max_speed_mps, cmd.speed_mps || flight.max_speed_mps);
       d.commandFace = cmd.face;
     }
-    observe(t, k, isAlive = () => true) {
-      this.sensors.forEach((s) => {
-        const d = this.drones.find((q) => q.id === s.node);
-        if (!d || !isAlive(d.id) || k % s.every || s.pd <= 0) return;
+    observe(t, k, isAlive = () => true, sensorAt = (s) => s) {
+      this.sensors.forEach((base) => {
+        const d = this.drones.find((q) => q.id === base.node);
+        if (!d || !isAlive(d.id) || k % base.every) return;
         this.cells.forEach((c) => {
           const dx = c.x - d.x, dy = c.y - d.y, r = Math.hypot(dx, dy);
+          if (r > (base.sm?.range_m ?? base.range) || r < base.minRange) return;
+          const s = sensorAt(base, d, c);
+          if (s.pd <= 0) return;
           if (r < s.minRange || r > s.range) return;
           if (s.pointing !== 'omni' && Math.abs(wrap(Math.atan2(dy, dx) - d.heading)) > s.fov / 2) return;
           c.last = t;
@@ -128,11 +132,13 @@
       this.drones.forEach((d) => {
         if (!d.target) return;
         const tr = d.target;
-        if (tr.kind === 'frd' || tr.cls === 'friendly') {
+        if (tr.kind === 'frd' || ['friendly', 'peaceful', 'hostile'].includes(tr.cls) ||
+            (this.options.requireInvestigation && !tr.investigation)) {
           this.transition(d, 'patrol', null, t); return;
         }
         const seen = this.contact(tr, d.id);
-        if (active.has(tr) && t - seen <= 1 && tr.status === 'confirmed') {
+        const fresh = this.options.requireInvestigation ? t - tr.lastUpd <= 1 : t - seen <= 1;
+        if (active.has(tr) && fresh && tr.status === 'confirmed') {
           const e = d.lastEstimate, gain = 1 - Math.exp(-this.dt / 0.8);
           d.lastEstimate = !e ? { x: tr.s[0], y: tr.s[1], vx: tr.s[2], vy: tr.s[3], t } : {
             x: e.x + gain * (tr.s[0] - e.x), y: e.y + gain * (tr.s[1] - e.y),
@@ -147,12 +153,16 @@
         }
       });
       // Search assignments may be handed off to a drone with fresh observations.
-      tracks.filter((tr) => tr.kind !== 'frd' && tr.cls !== 'friendly' && tr.status === 'confirmed')
+      tracks.filter((tr) => tr.kind !== 'frd' && !['friendly', 'peaceful', 'hostile'].includes(tr.cls) && tr.status === 'confirmed' &&
+          (!this.options.requireInvestigation || tr.investigation))
         .forEach((tr) => {
           const owner = this.drones.find((d) => d.target === tr);
           if (owner && owner.mode === 'follow') return;
-          const eligible = this.drones.filter((d) => d.mode === 'patrol' && t - this.contact(tr, d.id) <= 1);
+          const eligible = this.drones.filter((d) => d.mode === 'patrol' &&
+            (this.options.requireInvestigation ? this.options.geometry(tr, d, t) !== null : t - this.contact(tr, d.id) <= 1));
           eligible.sort((a, b) => {
+            if (this.options.requireInvestigation) return Math.hypot(tr.s[0] - a.x, tr.s[1] - a.y) -
+              Math.hypot(tr.s[0] - b.x, tr.s[1] - b.y) || a.id.localeCompare(b.id);
             const first = (id) => tr.firstSources && tr.firstSources[id] !== undefined ? tr.firstSources[id] : this.contact(tr, id);
             return first(a.id) - first(b.id) || a.id.localeCompare(b.id);
           });
@@ -189,10 +199,12 @@
           d.assignedAt = t;
         } else if (d.mode === 'follow') {
           const tr = d.target;
+          const geometry = this.options.geometry ? this.options.geometry(tr, d, t) : null;
+          if (this.options.requireInvestigation && !geometry) { this.transition(d, 'patrol', null, t); return; }
           if (!d.followSensor || t - (tr.srcs[d.id + ' ' + d.followSensor.kind] ?? -Infinity) > 2)
             d.followSensor = this.moduleFor(tr, d.id);
           const s = d.followSensor, e = d.lastEstimate;
-          const distance = s ? Math.max(s.minRange + 5, s.range * 0.5) : 60;
+          const distance = geometry ? geometry.distance : s ? Math.max(s.minRange + 5, s.range * 0.5) : 60;
           const dx = e.x - d.x, dy = e.y - d.y, r = Math.hypot(dx, dy) || 1;
           d.goal = { x: clamp(e.x + e.vx - dx / r * distance), y: clamp(e.y + e.vy - dy / r * distance) };
           d.desiredHeading = Math.atan2(dy, dx);
