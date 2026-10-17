@@ -39,10 +39,14 @@ Top level: `schema`, `id` (for example `hard-s3`), `name`, `seed`, `preset`, `de
 | `beacon` | friendly position beacons: `enabled`, `rate_hz`, `pos_sigma_m` |
 | `sensor_set.enabled_kinds` | which sensor kinds exist in this run |
 | `environment` | `weather` (`clear`, `fog`, `rain`, `wind`, `night`, or a combination, see [Weather combinations](#weather-combinations-and-weather-events)), `time_of_day`, optional `weather_events[]` and `sky`, `clutter` = `{false_alarms_per_min, birds, vehicles}` (the last two are object counts, 0 to 10) |
-| `degradations` | `clock`, `pose`, `network` (`loss`, `burst`, `latency_ms`, `out_of_order`, `topology`, `jamming_zones[]`, see [Jamming zones](#jamming-zones)), `dropout[]` = `{node, t}` |
+| `degradations` | `clock`, `pose`, `network` (`loss`, `burst`, `latency_ms`, `out_of_order`, `topology`, `bandwidth_kbps`, see [Bandwidth limits](#bandwidth-limits), `jamming_zones[]`, see [Jamming zones](#jamming-zones)), `dropout[]` = `{node, t}` |
 | `config` | the config that produced it |
 
 A hostile's (or clutter object's) position at time `t`: walk the waypoints linearly, then add a sideways wobble of amplitude `wobble_m` that fades to zero near each waypoint. The exact formula is `target_state` in [seeder/scenario.py](../seeder/scenario.py); do not rewrite it, import it.
+
+### Bandwidth limits
+
+`degradations.network.bandwidth_kbps` = `null` (no cap, the default) or a number above 0: what each node's link to C2 can carry, in kilobits per second. A message occupies the link for its size divided by the rate, one after another, so a link never delivers more than the cap in any window. Messages wait in order; when more than 2 s of data are waiting (an assumed number), the **oldest** waiting messages are dropped. A message the channel later loses (base loss or a jamming zone) still used its airtime. Size is the length of the message as JSON without the mock-only `z` and `arr`, unrounded, so it is an upper bound: today about 410 bytes for an `observation` and 275 for a `friendly_beacon`; the codec's float rounding will lower that. In the `challenge` preset the nodes send about 4 to 15 kbit/s each, and the radar-and-RF ground sensor `GS2` about 45; with a 32 kbit/s cap about 13 % of the messages are dropped, with 8 kbit/s about 55 %. Commands from C2 to a drone share that drone's link. The mock applies the cap in Realistic mode only; a run with a cap has a `bandwidth` entry in its result, `{type: {count, bytes, avg_bytes, dropped}}`, and a run without one has none. The seeder only checks the value; the rule is built in [ui/viewer/linkcap.js](../ui/viewer/linkcap.js) as a spec for the channel emulator.
 
 ### Jamming zones
 

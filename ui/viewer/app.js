@@ -18,7 +18,7 @@
     return {
       preset: sc.preset || 'challenge', seed: sc.seed, name: sc.name, mode: anyDeg ? 'realistic' : 'optimistic', weather: sc.environment.weather, sky: sc.environment.sky || null,
       loss: net.enabled ? Math.round(net.loss * 100) : 0, delayMs: net.enabled ? Math.round((lat[0] + lat[1]) / 2) : 0,
-      driftMs: d.clock.enabled ? d.clock.offset_ms[1] : 0, assign: Sim.prepare(sc).assign,
+      driftMs: d.clock.enabled ? d.clock.offset_ms[1] : 0, bandwidthKbps: net.enabled ? (net.bandwidth_kbps || null) : null, assign: Sim.prepare(sc).assign,
     };
   }
   const KINDS = { eo_camera: 'EO', thermal_camera: 'IR', microphone: 'MIC', rf_receiver: 'RF', radar: 'RAD' };
@@ -86,7 +86,7 @@
   // ------------------------------------------------------------- run / apply
   function runSim(p) {
     S.applied = clone(p);
-    S.res = Sim.run({ seed: p.seed, mode: p.mode, weather: p.weather, sky: p.sky, loss: p.loss, delayMs: p.delayMs, driftMs: p.driftMs, assign: p.assign, scenario: S.scenario });
+    S.res = Sim.run({ seed: p.seed, mode: p.mode, weather: p.weather, sky: p.sky, loss: p.loss, delayMs: p.delayMs, driftMs: p.driftMs, bandwidthKbps: p.bandwidthKbps, assign: p.assign, scenario: S.scenario });
     S.deg = null; S.idx = 0; S.acc = 0; S.last = 0; S.playing = true; S.sel = null; S.userSel = false;
     $('runTitle').textContent = scen().id + ' · ' + p.name + ' · seed ' + p.seed;
     $('tTotal').textContent = fmtT(S.res.T_END);
@@ -101,7 +101,7 @@
     if (S.deg) return S.deg;
     const p = S.applied, out = [];
     for (let l = 0; l <= 90; l += 10) {
-      const r = Sim.run({ seed: p.seed, mode: 'realistic', weather: p.weather, sky: p.sky, loss: l, delayMs: p.delayMs, driftMs: p.driftMs, assign: p.assign, scenario: S.scenario }, { lite: true });
+      const r = Sim.run({ seed: p.seed, mode: 'realistic', weather: p.weather, sky: p.sky, loss: l, delayMs: p.delayMs, driftMs: p.driftMs, bandwidthKbps: p.bandwidthKbps, assign: p.assign, scenario: S.scenario }, { lite: true });
       out.push({ loss: l, rmse: r.summary.rmse, count: r.summary.countErr, swaps: r.summary.swaps, ffa: r.summary.ffa });
     }
     S.deg = out;
@@ -168,6 +168,7 @@
     $('loss').addEventListener('input', (e) => { S.staged.loss = +e.target.value; syncStaged(); });
     $('delay').addEventListener('input', (e) => { S.staged.delayMs = Math.max(0, +e.target.value || 0); });
     $('drift').addEventListener('input', (e) => { S.staged.driftMs = Math.max(0, +e.target.value || 0); });
+    $('cap').addEventListener('input', (e) => { S.staged.bandwidthKbps = +e.target.value > 0 ? +e.target.value : null; });
     $('apply').addEventListener('click', applyStaged);
     $('reset').addEventListener('click', () => choosePreset(S.staged.preset));
   }
@@ -216,7 +217,7 @@
   }
   function fillInputs() {
     const s = S.staged;
-    $('preset').value = s.preset; $('seed').value = s.seed; $('name').value = s.name; $('loss').value = s.loss; $('delay').value = s.delayMs; $('drift').value = s.driftMs;
+    $('preset').value = s.preset; $('seed').value = s.seed; $('name').value = s.name; $('loss').value = s.loss; $('delay').value = s.delayMs; $('drift').value = s.driftMs; $('cap').value = s.bandwidthKbps || '';
     setSeg('modeSeg', s.mode); WeatherUI.show(s.weather, s.sky);
   }
   function syncStaged() {

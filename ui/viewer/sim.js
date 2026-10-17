@@ -21,6 +21,7 @@
   const Mission = typeof window !== 'undefined' ? window.Missions : require('./missions.js');
   const Weather = typeof window !== 'undefined' ? window.Weather : require('./weather.js');
   const Jamming = typeof window !== 'undefined' ? window.Jamming : require('./jamming.js');
+  const LinkCap = typeof window !== 'undefined' ? window.LinkCap : require('./linkcap.js');
   const Behavior = typeof window !== 'undefined' ? window.Behavior : require('./behavior.js');
   const FriendFoe = typeof window !== 'undefined' ? window.FriendFoe : require('./friend-foe.js');
   const Investigations = typeof window !== 'undefined' ? window.Investigations : require('./investigations.js');
@@ -297,6 +298,7 @@
       loss: real ? P.loss / 100 : 0, delay: real ? P.delayMs / 1000 : 0, drift: real ? P.driftMs / 1000 : 0,
       T_END: world.duration, NF: Math.round(world.duration / DT), EVAL: world.eval,
       wx: wx.provider, wxStatic: wx.isStatic,
+      link: linkFor(P, world, real),
       zones: real ? ((world.deg.network && world.deg.network.jamming_zones) || []) : [], // jamming is a comms degradation: only in Realistic mode
       sensors: buildSensors(assign, Weather.activeEffects(wx.base), world.sensorKinds),
       nodes: world.ground.map((g) => g.id).concat(world.friendlies.map((f) => f.id)),
@@ -355,6 +357,7 @@
     issueCommands(c, t);
     const truth = truthAt(c, t);
     sendAll(c, k, t, sense(c, k, t, truth));
+    drainLinks(c, t);
     const frameMeas = trackFrame(c, t, handleControl(c, t, deliver(c, t)));
     updateLifecycle(c, t);
     pruneTracks(c, t);
@@ -377,7 +380,7 @@
     // entry markers from scenario script
     c.world.hostiles.forEach((h) => c.timeline.push({ t: h.wps[0][0], label: h.id + ' in', color: 'red' }));
     const commands = Object.keys(c.cmd.records).map((id) => c.cmd.records[id]);
-    return Object.assign(commands.length ? { commands } : {}, {
+    return Object.assign(commands.length ? { commands } : {}, c.link ? { bandwidth: LinkCap.summary(c.link) } : {}, {
       frames: c.frames, alerts: c.alerts, timeline: c.timeline, summary, scen: c.world,
       params: Object.assign({}, c.P, { assign: c.assign, scenario: undefined, scenario_id: c.world.id }),
       T_END: c.T_END, DT, NF: c.NF, EVAL: c.EVAL, sensors: c.sensors.map(sensorInfo),
@@ -507,8 +510,22 @@
   function lossFor(c, node, t) {
     return c.zones.length ? Jamming.lossAt(c.zones, c.loss, nodePos(c, node, t), t) : c.loss;
   }
+  // each node's link to C2 has a cap when the scenario (or the run) sets one; like jamming, only in Realistic mode
+  function linkFor(P, world, real) {
+    const kbps = P.bandwidthKbps !== undefined ? P.bandwidthKbps : (world.deg.network || {}).bandwidth_kbps;
+    return real && kbps ? LinkCap.create(kbps) : null;
+  }
   function sendMessage(c, node, payload, t, latency) {
     if (c.tap) c.tap(payload);
+    if (c.link) LinkCap.enqueue(c.link, node, payload, t, latency);
+    else putOnChannel(c, node, payload, t, latency);
+  }
+  // messages whose turn has come on their node's link leave now, at the moment their last byte does
+  function drainLinks(c, t) {
+    if (c.link) LinkCap.drain(c.link, t, (m, at) => putOnChannel(c, m.node, m.payload, at, m.latency));
+  }
+  // the channel decides: lost (base loss or a jamming zone) or delivered after delay and latency
+  function putOnChannel(c, node, payload, t, latency) {
     const ok = c.rnet() >= lossFor(c, node, t);
     noteLink(c, node, ok);
     if (!ok) return;
