@@ -35,13 +35,14 @@ Top level: `schema`, `id` (for example `hard-s3`), `name`, `seed`, `preset`, `de
 | `ground[]` | `id`, `platform`, `position` `[x, y]`, `heading_deg`, `sensors[]` |
 | `commands[]` | tasking sent from C2 to friendly drones during the run, sorted by `t`: `{t, drone_id, command, target?, speed_mps?, heading_deg?, face_target?, track_id?}`. Empty by default. See "Drone commands" below |
 | `targets[]` | hostiles: `id`, `motion`, `speed_mps`, `altitude_m`, `waypoints` = `[[t, x, y], ...]` (straight lines between them), `wobble_m`, `phase`, `signature` (how well each sensor type sees it: `eo`, `thermal`, `acoustic`, `rf`, `radar`), `emits` (false = silent, invisible to RF) |
+| `clutter[]` | birds and vehicles: real objects the sensors see that are **not threats**. Same fields as `targets[]` plus `type` (`bird` or `vehicle`) and `role: "clutter"`; `emits` is always false. Empty by default |
 | `beacon` | friendly position beacons: `enabled`, `rate_hz`, `pos_sigma_m` |
 | `sensor_set.enabled_kinds` | which sensor kinds exist in this run |
-| `environment` | `weather` (`clear`, `fog`, `rain`, `wind`), `time_of_day`, `clutter.false_alarms_per_min` |
+| `environment` | `weather` (`clear`, `fog`, `rain`, `wind`), `time_of_day`, `clutter` = `{false_alarms_per_min, birds, vehicles}` (the last two are object counts, 0 to 10) |
 | `degradations` | `clock`, `pose`, `network` (`loss`, `burst`, `latency_ms`, `out_of_order`, `topology`, `jamming_zones`), `dropout[]` = `{node, t}` |
 | `config` | the config that produced it |
 
-A hostile's position at time `t`: walk the waypoints linearly, then add a sideways wobble of amplitude `wobble_m` that fades to zero near each waypoint. The exact formula is `target_state` in [seeder/scenario.py](../seeder/scenario.py); do not rewrite it, import it.
+A hostile's (or clutter object's) position at time `t`: walk the waypoints linearly, then add a sideways wobble of amplitude `wobble_m` that fades to zero near each waypoint. The exact formula is `target_state` in [seeder/scenario.py](../seeder/scenario.py); do not rewrite it, import it.
 
 ### Weather combinations and weather events (proposed)
 
@@ -68,13 +69,13 @@ Why it matters: `seed_catalog.py --check` tests single weathers only. In combina
 ```
 { "scenario_id", "seed", "duration_s", "dt_s": 0.1,
   "columns": ["t", "x", "y", "vx", "vy"],
-  "objects": [ { "id": "H1", "kind": "hostile|friendly", "altitude_m": 45.0,
-                 "samples": [[t, x, y, vx, vy], ...] } ],
+  "objects": [ { "id": "H1", "kind": "hostile|friendly|clutter", "altitude_m": 45.0,
+                 "samples": [[t, x, y, vx, vy], ...] } ],   -- a clutter object also has "type": "bird|vehicle"
   "events":  [ {"type": "enter|exit", "id", "t"},
                {"type": "crossing", "a", "b", "t", "sep_m", "x", "y"} ] }
 ```
 
-Positions are rounded to 0.1 m, velocities to 0.01 m/s. A hostile has samples only while it is inside the area.
+Positions are rounded to 0.1 m, velocities to 0.01 m/s. A hostile or clutter object has samples only while it is inside the area. Events are about hostiles only. Scoring: a hostile track on a clutter object is a false alarm, not a missed hostile.
 
 ## Catalog
 
@@ -169,7 +170,7 @@ Today the mock simulation ([ui/viewer/sim.js](../ui/viewer/sim.js), header in [m
 
 ## Saved simulation run (`simulations` table, `export-run.js` output)
 
-`{ params, scenario, result }`, where `result` has `frames`, `alerts`, `timeline`, `summary`, `sensors`. Frames are one per 0.1 s (`k`, `t`, `meas`, `tracks`, `truth`, `links`, `m` = metrics).
+`{ params, scenario, result }`, where `result` has `frames`, `alerts`, `timeline`, `summary`, `sensors`. Frames are one per 0.1 s (`k`, `t`, `meas`, `tracks`, `truth`, `links`, `m` = metrics). `summary` = `{rmse, countErr, swaps, ffa}` (`ffa` = friendlies flagged hostile), plus `cfa` (clutter objects tracked as hostile) when the scenario has clutter. In `meas`, `clutter: true` marks a random false alarm, not a detection of a clutter object.
 
 To save space, numbers are rounded and a list of same-shaped objects is stored as `{"cols": [...], "rows": [[...]]}`. Read it back with `unpack()` from [seeder/tables.py](../seeder/tables.py):
 
@@ -194,7 +195,17 @@ Every message has the top-level `type` and the `header` described in [Messages](
 | `investigation_request` | `friend_foe/` | `track_id`, `position`, `covariance` (3x3), `class_prob`, `priority`, `t_requested`, `standoff_m`, `standoff_by_module`, `weather_confidence`, `feasible` |
 | `investigation_status` | drone behaviour | `track_id`, `drone_id`, `state` = `assigned`, `en_route`, `on_station`, `done` or `aborted` |
 
-Track classes: `friendly`, `hostile`, `suspicious`, `unknown`. A class always comes with a probability and is a presumption, never a deletion.
+Track classes: `friendly`, `hostile`, `suspicious`, `peaceful`, `unknown`. A class always comes with a probability and is a presumption, never a deletion.
+
+| Class | Meaning |
+|-------|---------|
+| `friendly` | ally: confirmed by its beacon or identity |
+| `hostile` | enemy: positive behaviour evidence |
+| `suspicious` | not identified, probably an enemy; worth investigating |
+| `peaceful` | not identified, probably not an enemy (for example it keeps away from friendlies and moves steadily); still watched, not an ally |
+| `unknown` | not identified, no evidence either way |
+
+`peaceful` is the mirror of `suspicious`: both are leanings, not identifications. It needs positive behaviour evidence (never silence alone, because beacons can be jammed), it is dropped back to `unknown` or raised to `suspicious` when the behaviour changes, and it never stops a track from being tracked or counted. Any thresholds for it are assumptions. Neither the mock simulation nor the scenario generator produces it yet; it comes from the estimator.
 
 `investigation_request.standoff_by_module` maps a catalog module id to `{max_range_m, recommended_m, confidence, feasible}`: how close a drone carrying that module must get to identify the object in the current weather. Pick the entries of the modules the chosen drone carries (`scenario.json` `friendlies[].sensors[].module`). `standoff_m` and `feasible` summarise the best module. The numbers are derived from the catalog, so they are assumptions unless the catalog says `verified`.
 

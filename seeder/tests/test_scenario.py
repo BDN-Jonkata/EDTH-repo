@@ -141,6 +141,50 @@ class Commands(unittest.TestCase):
                 self.assertEqual(sorted(p["spec"]["flight"]), ["assumed", "max_accel_mps2", "max_speed_mps", "max_turn_dps"], p["id"])
 
 
+def with_clutter(name, birds=3, vehicles=2):
+    cfg = load(name)
+    cfg["environment"] = dict(cfg.get("environment", {}), clutter={"false_alarms_per_min": 3, "birds": birds, "vehicles": vehicles})
+    return cfg
+
+
+class Clutter(unittest.TestCase):
+    def test_none_by_default(self):
+        for p in PRESETS:
+            scenario, truth = sc.generate(json.loads(p.read_text(encoding="utf-8")))
+            self.assertEqual(scenario["clutter"], [], p.stem)
+            self.assertFalse([o for o in truth["objects"] if o["kind"] == "clutter"], p.stem)
+
+    def test_counts_types_and_no_rf(self):
+        scenario, _ = sc.generate(with_clutter("challenge"))
+        self.assertEqual([c["id"] for c in scenario["clutter"]], ["B1", "B2", "B3", "V1", "V2"])
+        for c in scenario["clutter"]:
+            self.assertEqual(c["role"], "clutter")
+            self.assertIn(c["type"], sc.CLUTTER_KINDS)
+            self.assertFalse(c["emits"])
+            self.assertEqual(c["signature"]["rf"], 0)
+        self.assertTrue(all(c["altitude_m"] <= 2 for c in scenario["clutter"] if c["type"] == "vehicle"), "vehicles stay on the ground")
+
+    def test_does_not_move_the_hostiles_or_friendlies(self):
+        for name in ("easy", "challenge"):
+            plain, _ = sc.generate(load(name))
+            cluttered, _ = sc.generate(with_clutter(name))
+            self.assertEqual(plain["targets"], cluttered["targets"], name)
+            self.assertEqual(plain["friendlies"], cluttered["friendlies"], name)
+
+    def test_same_seed_is_identical(self):
+        a, b = sc.generate(with_clutter("hard")), sc.generate(with_clutter("hard"))
+        self.assertEqual(json.dumps(a, sort_keys=True), json.dumps(b, sort_keys=True))
+
+    def test_truth_lists_clutter_apart_from_hostiles(self):
+        scenario, truth = sc.generate(with_clutter("medium"))
+        clutter = [o for o in truth["objects"] if o["kind"] == "clutter"]
+        self.assertEqual([o["id"] for o in clutter], [c["id"] for c in scenario["clutter"]])
+        self.assertTrue(all(o["samples"] and o["type"] in sc.CLUTTER_KINDS for o in clutter))
+        self.assertFalse([e for e in truth["events"] if e.get("id", "").startswith(("B", "V"))], "events are about hostiles only")
+        first = clutter[0]["samples"][0]
+        self.assertEqual(first[1:3], [round(v, 1) for v in sc._target_pos(scenario["clutter"][0], first[0])], "same motion as hostiles")
+
+
 class Validation(unittest.TestCase):
     def check(self, mutate, text):
         cfg = load("challenge")
@@ -175,6 +219,11 @@ class Validation(unittest.TestCase):
 
     def test_rejects_unknown_command(self):
         self.check(lambda c: c.update(commands=[{"t": 5, "drone_id": "F1", "command": "dance"}]), "command must be one of")
+
+    def test_rejects_bad_clutter_counts(self):
+        self.check(lambda c: c.update(environment={"clutter": {"birds": -1}}), "clutter.birds must be")
+        self.check(lambda c: c.update(environment={"clutter": {"vehicles": 11}}), "clutter.vehicles must be")
+        self.check(lambda c: c.update(environment={"clutter": {"birds": True}}), "clutter.birds must be")
 
     def test_seed_sets(self):
         self.assertEqual(sc.seed_for("tuning", 0), 1)

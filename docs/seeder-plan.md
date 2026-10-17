@@ -7,13 +7,14 @@ Done so far: catalog and PostgreSQL storage, scenario generator with four preset
 | # | Task | Why | Status |
 |---|------|-----|--------|
 | 1 | Shared header on the mock's `meas` and `beacon` messages | One message format across modules; the codec and the channel emulator need it | done |
-| 2 | Clutter objects (birds, vehicles) | The tracker and friend/foe must not call them hostile; today there is only a false-alarm rate | todo |
+| 2 | Clutter objects (birds, vehicles) | The tracker and friend/foe must not call them hostile; today there is only a false-alarm rate | done |
 | 3 | Jamming zones | Graceful degradation under electronic warfare is the point of the task | todo |
 | 4 | Bandwidth limits | Link capacity makes "share compact tracks, not raw observations" matter | todo |
 | 5 | Scenario sweeps | A table of results over many seeds for tuning and the final test | blocked by scoring |
 | 6 | Moving ground units | Only if the mentor says ground units move | blocked by mentor |
 | 7 | Terrain and line of sight | Only if the mentor confirms terrain matters; the largest piece | blocked by mentor |
 | 8 | Catalog verification | Replace assumed numbers with datasheet values | needs people |
+| 9 | Weather combinations, weather events, seasonal sky | Kris's `sensors/` already reads them; the seeder validator rejects them and the viewer has exclusive weather buttons | plan proposed, waiting for yes |
 
 ## 1. Shared header on `meas` and `beacon`
 
@@ -32,6 +33,8 @@ Done so far: catalog and PostgreSQL storage, scenario generator with four preset
 **Test:** unit tests for determinism and for the separate random stream (hostile paths identical with and without clutter); a run test that a clutter object produces detections; the baseline presets (no clutter) stay byte-identical.
 
 **Risk:** signatures are assumptions, so say so in the catalog notes. Keep object counts small (a handful) so runs stay fast.
+
+**Done:** `scenario.json` `clutter[]` has the same shape as `targets[]` (plus `type`, `role: clutter`), so `target_state` and the mock move both; built by one shared `_path_object`, paths from `_free_path`, own `clutter` random stream. Counts are 0 to 10 per type. Signatures and motion live in `CLUTTER_KINDS` in `seeder/scenario.py`, marked assumed and listed in [seeder-config.md](seeder-config.md), not in the catalog (the catalog describes our sensors and platforms, not the world). Simplified from the plan: a bird's acoustic signature is just weak (0.3), with no extra "only up close" rule. The mock counts a hostile track on clutter as `cfa` (in the summary only when the scenario has clutter) and draws clutter as grey dashed rings. No preset has clutter yet. Verified: 24 preset scenario and truth files (4 presets × 6 seeds) identical apart from the new keys; 8 baseline runs and 6 command runs hash identical; viewer DOM identical for 5 views; 6 new generator tests, 5 new mock tests (`node ui/viewer/test-clutter.js`); a generated `hard` scenario with 4 birds and 2 vehicles runs through `generate.py` and `export-run.js`, and the viewer shows them.
 
 ## 3. Jamming zones
 
@@ -62,6 +65,29 @@ Do not plan in detail before the mentor answers what ground units are and whethe
 ## 8. Catalog verification
 
 Check each unverified module against its datasheet, set `verified: true` with the source, and replace the assumed numbers. Add the platforms' real speed and acceleration limits. This is reading work, not code.
+
+## 9. Weather combinations, weather events, seasonal sky
+
+Requested by Kris (branch Krischo, commit 4336605). Format: "Weather combinations and weather events (proposed)" in [data-formats.md](data-formats.md) on that branch. Everything is backward compatible: a single weather keeps working.
+
+**Change:**
+1. **Validator** (`seeder/scenario.py`): `environment.weather` accepts `fog+wind` and `rain:0.6+wind`; `environment.weather_events[]` and `environment.sky` are checked and passed through to `scenario.json` unchanged. The checks call `sensors/weather.py` (`parse_weather`) and `sensors/daylight.py` (`sky_from_dict`) instead of copying them. The generator does not use weather for anything, so no random stream changes.
+2. **Viewer** (`ui/viewer/sim.js`, `app.js`, `index.html`): the five exclusive weather buttons become toggles for fog, rain and wind, each with a strength slider. The Night button is replaced by a sky control: date picker, hour slider with sunrise and sunset marked, and a place (latitude and longitude, plus a few presets). `buildSensors` multiplies the active effects (strength moves a multiplier that share of the way to 1; overlapping effects multiply, events take the strongest strength of each effect). Night is a strength from 0 to 1 and combines with fog and rain. `weather_events` change a sensor's multiplier by time and by its position inside the zone, so the multiplier is looked up per detection, not once per run.
+3. **Catalog check** (`seed_catalog.py --check`): also test the combinations, and report platforms that lose every working detection module.
+4. **Catalog field** `sim.ident_range_m` per module (Kris's item a), so `sensors/` can drop its placeholder fraction of `sim.range_m`. Assumed numbers, marked as such.
+
+**Left out:** moon and cloud cover; the `sensors/report.py` table (Kris's); changing any module's weather multipliers (that is catalog verification, task 8).
+
+**Test:** unit tests for the validator (accepts the new forms, rejects bad strengths, unknown names, a zone without radius, a sky missing one of its four fields); a Node test that the product of effects and the strongest-strength rule match `sensors/weather.py` on a fixed table of cases, and that an event covers a detection only inside its zone and time. Single-weather runs must stay byte-identical (8 baseline hashes, 6 command hashes, 5 viewer views).
+
+**Risks and decisions for the team:**
+- **Two languages:** the weather product and the sun position exist in Python (`sensors/`) and the viewer needs them in JS. Recommended: a small JS port plus a shared table of test cases that both sides check, so they cannot drift apart. The alternative is to precompute the effects per second in the seeder and ship them in `scenario.json`; that stops the date and hour sliders working live. Your call.
+- **Merge first:** this needs `sensors/weather.py` and `daylight.py`, which are on origin/Krischo only. Merge it into Orcho before starting.
+- **Where is the village?** Without a default latitude and longitude the sky cannot be used by presets. Ask the mentor; until then the viewer's place presets are only examples and presets stay without `sky`.
+- **Platforms with no working module:** Kris's finding (fog + wind leaves `mini4pro` and `gs_eo_acoustic` blind; fog + rain + wind at night leaves 4 of 7 platforms blind) is realistic physics, not a bug. Recommended: the check reports it as information and does not fail, and no module is made artificially robust. Giving a platform a robust module is a design decision about the platforms, not about the check.
+- **`en_route` (Kris's item b):** the mapping in `docs/data-formats.md` was meant as you emit it: an accepted `goto` or `return` gives `assigned` then `en_route`, and the mock does the same. No change.
+
+**Order:** merge Krischo, then 1, 3, 4 (small), then 2 (largest), then docs.
 
 ## Order and checkpoints
 

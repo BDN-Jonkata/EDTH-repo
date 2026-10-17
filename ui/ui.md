@@ -26,6 +26,8 @@ Commanded drones: the mock accepts `commands` from the scenario (or `params.comm
 
 Messages: every message the mock sends (`observation`, `friendly_beacon`, `drone_command`, `drone_state`) has the shared header from `messages.js`, with the fields in [docs/data-formats.md](../docs/data-formats.md#messages); test with `node ui/viewer/test-messages.js`.
 
+Clutter: birds and vehicles from `scenario.json` `clutter[]` move like hostiles and are seen through their signatures, but are not threats. The map shows them as grey dashed rings with their id; a hostile track on one raises a "Clutter ... tracked as hostile" alert and counts as `cfa` in the summary. Test with `node ui/viewer/test-clutter.js`.
+
 What the mock does:
 
 | Part | Mock behaviour |
