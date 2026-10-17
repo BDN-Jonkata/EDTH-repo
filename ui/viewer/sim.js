@@ -313,7 +313,7 @@
       pathById: {}, dropT: {}, driftScale: {}, linkQ: {}, queue: [],
       drones: {}, seqs: {}, cmd: { script: scriptedCommands(P, world), open: {}, records: {}, seen: {}, count: 0 },
       beaconEvery: Math.max(1, Math.round(10 / (world.beacon.rate_hz || 2))), beaconSigma: world.beacon.pos_sigma_m || 3,
-      tracks: [], pending: [], friends: {}, alerts: [], frames: [], timeline: [], lastMatch: {}, sqHist: [], crossAlerted: {},
+      tracks: [], pending: [], rfRecent: [], friends: {}, alerts: [], frames: [], timeline: [], lastMatch: {}, sqHist: [], crossAlerted: {},
       beacons: {},
       groundWatch: world.ground.map((g)=>({...g,goalHeading:g.heading,updated:0})),
       n: { hostile: 0, unk: 0, swaps: 0, ffa: 0, cfa: 0, bfa: 0, evalSq: 0, evalN: 0, evalVelocitySq: 0,
@@ -752,8 +752,29 @@
       associate(c, m.z, t);
     });
     c.pending = c.pending.filter((p) => t - p.t <= 1.0);
+    noteEmitters(c, t, frameMeas);
     return frameMeas;
   }
+  // An RF receiver only hears a transmitter, and the birds and vehicles do not transmit. One receiver gives a bearing and
+  // any track on that line could take it, so the bearings of two receivers are crossed into a fix and the fix goes to the
+  // one track it agrees with best, unless that is a friendly. Three fixes in 6 s make the track a hostile emitter.
+  // The same rule as pipeline/identify.py. It is a run parameter (`emitterHostile`, set by the viewer, off for the tests):
+  // sensor evidence that an object transmits is not evidence of hostile intent, which the behaviour module alone decides.
+  const EMIT = { fixes: 3, window: 6, pair: 0.3, keep: 1.0, gate: 9.21 };
+  function noteEmitters(c, t, recs) {
+    const rf = recs.filter((r) => r.k === 'RF' && r.m === 'bearing');
+    rf.forEach((r) => c.rfRecent.forEach((o) => {
+      if (o.node === r.node || Math.abs(o.t - r.t) > EMIT.pair) return;
+      const fix = triangulate(o, r);
+      if (!fix) return;
+      let best = null, bestD2 = EMIT.gate;
+      c.tracks.forEach((tr) => { const d2 = innov(tr, fix).d2; if (d2 <= bestD2) { bestD2 = d2; best = tr; } });
+      if (best && best.kind !== 'frd') (best.emitFixes = best.emitFixes || []).push(t);
+    }));
+    c.rfRecent = c.rfRecent.concat(rf).filter((r) => t - r.t <= EMIT.keep);
+    c.tracks.forEach((tr) => { if (tr.emitFixes) tr.emitFixes = tr.emitFixes.filter((u) => t - u <= EMIT.window); });
+  }
+  const isEmitter = (tr) => tr.kind !== 'frd' && (tr.emitFixes || []).length >= EMIT.fixes;
   function applyBeacon(c, m, t) {
     const id = m.friend_id, z = { x: m.position[0], y: m.position[1], R: [9, 0, 9], t, node: id };
     let tr = c.friends[id];
@@ -874,6 +895,7 @@
       if (!keep.firstSources) keep.firstSources = {};
       Object.entries(dup.firstSources || {}).forEach(([key, time]) => { keep.firstSources[key] = Math.min(keep.firstSources[key] ?? Infinity, time); });
       keep.observedT = Math.max(keep.observedT ?? -Infinity, dup.observedT ?? -Infinity);
+      keep.emitFixes = (keep.emitFixes || []).concat(dup.emitFixes || []);
       c.tracks.splice(c.tracks.indexOf(dup), 1);
     }
   }
@@ -929,6 +951,7 @@
       let v=original;
       const tr = byId.get(v.track_id), prev = tr.cls;
       const reviewed=c.assessment.update(t,tr,v); v=reviewed.decision;
+      if (c.P.emitterHostile && v.cls !== 'friendly' && isEmitter(tr)) v = { ...v, cls: 'hostile', class_prob: Math.max(v.class_prob || 0, 0.9), p_hostile: Math.max(v.p_hostile || 0, 0.9) };
       tr.assessment=reviewed.review;
       tr.classification = v; tr.cls = v.cls; tr.behavior = c.classifier.explain(v.track_id);
       if(reviewed.reasons.length)tr.behavior={...tr.behavior,reasons:[...(tr.behavior.reasons||[]),...reviewed.reasons]};
