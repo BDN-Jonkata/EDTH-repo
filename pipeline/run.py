@@ -11,7 +11,7 @@ channel delivered. Run `python -m pipeline.sweep` for the metrics over message l
 """
 
 import math
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Dict, Iterator, List, Optional
 
 from common.channel import Channel
@@ -25,7 +25,8 @@ from fusion.merger import Merger
 from pipeline.cueing import Cueing
 from pipeline.fleet import Fleet
 from pipeline.nodes import NodeTrackers
-from predictor.identity import IdentityKeeper
+from predictor.identity import IdentityConfig, IdentityKeeper
+from predictor.motion import MotionModel
 from scoring.metrics import Estimate
 from sensors.beacons import BeaconSource
 from sensors.observe import ObservationSource
@@ -50,10 +51,13 @@ class Frame:
 
 class Pipeline:
     def __init__(self, scenario: dict, seed: int = 0, tracker_config: Optional[TrackerConfig] = None,
-                 investigate: bool = False, distributed: bool = False, cue: bool = False, trust: bool = False):
+                 investigate: bool = False, distributed: bool = False, cue: bool = False, trust: bool = False,
+                 oosm: bool = False):
         """`investigate` lets the drones be commanded (`pipeline/fleet.py`) and adds the investigator that
         commands them (`pipeline/dispatch.py`); without it every drone flies its patrol loop. `trust` weights each
-        reading by how healthy its node's link is and leaves out late ones (`health/`; central tracker only). `distributed`
+        reading by how healthy its node's link is and leaves out late ones (`health/`; central tracker only). `oosm` applies
+        a late reading at the time it was taken instead (`tracker/oosm.py`; central tracker only; with `trust` the late
+        ones are weighted by their age, not left out). `distributed`
         replaces the one central tracker by a tracker per node and a merger (`pipeline/nodes.py`). `cue` also
         sends the closest other drone at a bearing nothing explains (`pipeline/cueing.py`); it implies the
         commanded drones and the investigator."""
@@ -65,7 +69,9 @@ class Pipeline:
         self.observations = ObservationSource(scenario, seed, self.modules, sequencers, world)
         self.beacons = BeaconSource(scenario, seed + 1, sequencers, world)
         self.channel = Channel(scenario, seed + 2, lambda node, t: _node_xy(world, node, t))   # for jamming zones
-        self.poses, self.tracker = PoseBook(scenario), Tracker(tracker_config)
+        self.use_oosm = oosm and not distributed
+        central = replace(tracker_config or TrackerConfig(), oosm=True) if self.use_oosm else tracker_config
+        self.poses, self.tracker = PoseBook(scenario), Tracker(central)
         self.investigator = Investigator(scenario, self.fleet, sequencers, cueing=Cueing() if cue else None) if commanded else None
         self.nodes = NodeTrackers(tracker_config, sequencers) if distributed else None
         self.merger = Merger() if distributed else None
@@ -105,7 +111,7 @@ class Pipeline:
     def _readings(self, observations: List[dict], t: float = 0.0) -> list:
         out = []
         for obs in observations:
-            if self.use_trust and self.health.is_late(t - obs["t_obs"]):
+            if self.use_trust and not self.use_oosm and self.health.is_late(t - obs["t_obs"]):
                 continue                                  # too old for the live picture
             module = self.modules[obs["sensor_id"]]
             pose = self.poses.pose(obs["header"]["source_id"], obs["t_obs"])
@@ -152,7 +158,7 @@ def scored_frames(scenario: dict, seed: int = 0, tracker_config: Optional[Tracke
                   estimator: Optional[FriendFoeEstimator] = None, investigate: bool = False,
                   stats: Optional[dict] = None, recorded: Optional[dict] = None,
                   keep_identity: bool = False, distributed: bool = False, cue: bool = False,
-                  trust: bool = False) -> Iterator[tuple]:
+                  trust: bool = False, oosm: bool = False) -> Iterator[tuple]:
     """(t, [Estimate]) for the scoring module: the tracker's confirmed tracks with the estimator's class.
 
     With `investigate`, suspicious tracks send drones out; when the run ends `stats` (if given) is filled with
@@ -160,12 +166,13 @@ def scored_frames(scenario: dict, seed: int = 0, tracker_config: Optional[Tracke
     each drone's real trajectory as `[t, x, y, vx, vy]` rows, which scoring needs because the drones left
     the scripted patrol in `truth.json` (see `scoring.truth.with_recorded_samples`). `keep_identity` runs the
     predictor's identity keeper (`predictor/identity.py`) on the tracks, so a re-acquired target keeps its ID.
-    `trust` weights readings by link health and lets a cut-off friendly's silence count for less (`health/`)."""
+    `trust` weights readings by link health and lets a cut-off friendly's silence count for less (`health/`).
+    `oosm` applies a late reading to its track at the time it was taken (`tracker/oosm.py`)."""
     estimator = estimator or FriendFoeEstimator(for_scenario(scenario))
-    pipeline = Pipeline(scenario, seed, tracker_config, investigate, distributed, cue, trust)
+    pipeline = Pipeline(scenario, seed, tracker_config, investigate, distributed, cue, trust, oosm)
     if trust:        # a missing beacon of a node whose link is down is not evidence against the drone
         getattr(estimator, "estimator", estimator).silence_explained = pipeline.health.explains_silence
-    keeper = IdentityKeeper() if keep_identity else None
+    keeper = IdentityKeeper(IdentityConfig(model=MotionModel.load() if keep_identity == "learned" else None)) if keep_identity else None
     pending: List[Beacon] = []
     classes: Dict[str, str] = {}
     for k in range(int(scenario["duration_s"] / STEP_S) + 1):

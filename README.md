@@ -103,8 +103,8 @@ Phased, starting from the optimistic case. Status legend: ⬜ not started · �
 
 | Status | Task |
 |--------|------|
-| 🟡 | Predictor: a constant-velocity identity keeper (`predictor/identity.py`) is built and tested but did not change ID swaps (the lost track is far from its extrapolation after a 10 to 20 s gap), so it is off by default; see [predictor.md](predictor/predictor.md). Not done: a learned predictor |
-| ⬜ | Use prediction to hold identity through the close-range crossing |
+| ✅ | Predictor: a constant-velocity identity keeper (`predictor/identity.py`) and a learned motion model for its gate (`predictor/motion.py`, trained on the tracker's own tracks by `predictor.train`, no truth), built and tested, off by default (`--keep-identity`, `--keep-identity learned`). **Measured on 5 tuning seeds: neither changes ID swaps** (0.00 at 0 % loss, -0.20±0.20 at 50 %), so this is done as a tested option, not as an improvement; see [predictor.md](predictor/predictor.md) |
+| ⬜ | Use prediction to hold identity through the close-range crossing. **Not planned:** the ID-swap log (`--swaps`, 5 tuning seeds) shows crossings are 1 to 2 of the swaps at 0 % and 30 % loss, so even a perfect hold saves at most 0.2 to 0.4 swaps per run; pickups and ghost tracks are the bigger causes |
 
 ### Phase 4 - Realism
 
@@ -113,7 +113,7 @@ Phased, starting from the optimistic case. Status legend: ⬜ not started · �
 | 🟨 | Noise and bias on sensors: honest per-field noise, scaled by weather, is in the observation models; bias is not modelled |
 | 🟨 | Clock drift and time-sync handling: node clocks (offset, drift) stamp beacons in `common/channel.py`; the tracker does no time-sync |
 | 🟨 | Position uncertainty (GNSS-denied): pose error is added to beacons and the tracker takes node poses from them; no pose estimation |
-| 🟨 | Missing data, delay, out-of-order messages: loss and delay are in the channel; the tracker uses readings at arrival time and does not handle out-of-order ones |
+| 🟨 | Missing data, delay, out-of-order messages: loss, delay and delay bursts are in the channel; the tracker has an optional replay of late readings at the time they were taken (`--oosm`, `tracker/oosm.py`): it removes the ghost tracks late readings start, but did not win back the hostiles that `--trust` loses; a resend after an outage (store-and-forward) is not in the Python channel |
 | ✅ | Message-loss sweep for the friend/foe estimator, with weather and clutter (`python -m friend_foe.sweep`, results in `friend_foe/friend_foe.md`) |
 | ✅ | Message-loss sweep for the whole pipeline (`python -m pipeline.sweep`, see Phase 1) |
 

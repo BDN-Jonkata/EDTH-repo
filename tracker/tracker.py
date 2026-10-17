@@ -21,6 +21,7 @@ from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Sequence
 
 from common.assignment import assign
+from tracker import oosm
 from tracker.ekf import Mat, Vec, identity_like, predict, scalar_update
 from tracker.measurement import BEARING, RANGE_BEARING, RANGE, Measurement
 from tracker.models import apply_measurement, fix_from_range_bearing, gate_cost, triangulate
@@ -50,6 +51,9 @@ class TrackerConfig:
     beacon_trust_s: float = 2.0            # while a friend's last beacon is this recent, sensor readings of it are only absorbed
     duplicate_distance_m: float = 30.0     # two non-friend tracks this close and alike in velocity are one target (0 = off)
     duplicate_speed_mps: float = 6.0       # "alike in velocity": within this
+    oosm: bool = False                     # apply a late reading at the time it was taken (tracker/oosm.py); off: at arrival
+    oosm_min_age_s: float = 1.0            # ASSUMED: a reading at least this old on arrival is out of sequence; younger ones are on time
+    oosm_window_s: float = 15.0            # ASSUMED: how far back a track can be replayed; older readings are dropped
 
 
 @dataclass
@@ -67,6 +71,8 @@ class Track:
     range_time: float = -math.inf       # last reading that gave a range
     node_times: Dict[str, float] = field(default_factory=dict)
     unsupported_since: Optional[float] = None
+    checkpoint: Optional[tuple] = None   # out-of-sequence replay (tracker/oosm.py): the state at some past time ...
+    log: list = field(default_factory=list)   # ... and the readings applied since
 
     @property
     def position_sigma(self) -> float:
@@ -87,8 +93,10 @@ class Tracker:
         self._predict(t)
         for b in beacons:
             self._beacon(t, b)
-        leftovers = self._associate(t, measurements)
+        late, on_time = self._split_late(t, measurements)
+        leftovers = self._associate(t, on_time)
         self._initiate(t, leftovers)
+        self._late_readings(t, late)
         self._life_cycle(t)
         self._drop_duplicates()
         return [tr for tr in self.tracks if tr.confirmed]
@@ -136,12 +144,49 @@ class Tracker:
                 tr.last_update = t          # absorbed: it is the drone, whose beacons know better than a sensor
                 continue
             tr.state, tr.cov = apply_measurement(tr.state, tr.cov, m)
+            if self.config.oosm:
+                oosm.record(tr, t, m)
             tr.last_update = t
             tr.update_times.append(t)
             tr.node_times[m.node] = t
             if m.kind in RANGE_KINDS:
                 tr.range_time = t
         return pairs
+
+    # ------------------------------------------------------- out-of-sequence readings
+    def _split_late(self, t: float, measurements: Sequence[Measurement]):
+        """(late, on time): with `oosm` on, a reading at least `oosm_min_age_s` old on arrival is out of sequence."""
+        if not self.config.oosm:
+            return [], list(measurements)
+        late = [m for m in measurements if t - m.t >= self.config.oosm_min_age_s]
+        return late, [m for m in measurements if t - m.t < self.config.oosm_min_age_s]
+
+    def _late_readings(self, t: float, late: List[Measurement]) -> None:
+        """Match each late scan to the tracks as they were when it was taken and replay the matched tracks with the
+        reading in. A late reading starts no track (what it saw has moved on) and a friendly's is only absorbed."""
+        scans: Dict[tuple, List[Measurement]] = {}
+        for m in late:
+            scans.setdefault(m.scan, []).append(m)
+        for scan in scans.values():
+            cost = [[self._late_cost(tr, m, t) for m in scan] for tr in self.tracks]
+            for i, j in (assign(cost, BIG_GATE) if self.tracks else []):
+                if self.tracks[i].friend_id is None:
+                    self._replay_with(self.tracks[i], scan[j], t)
+
+    def _late_cost(self, tr: Track, m: Measurement, t: float) -> float:
+        accel = self.config.friend_accel_noise_mps2 if tr.friend_id else self.config.accel_noise_mps2
+        then = oosm.state_at(tr, accel, m.t, t, tr.state, tr.cov)
+        c = None if then is None else gate_cost(then[0], then[1], m)
+        return NO_MATCH if c is None else c
+
+    def _replay_with(self, tr: Track, m: Measurement, t: float) -> None:
+        tr.state, tr.cov = oosm.replay(tr, self.config.accel_noise_mps2, t, extra=m)
+        oosm.insert(tr, m)
+        tr.last_update = max(tr.last_update, m.t)      # it proves the target was there then, not that it is there now
+        tr.update_times.append(m.t)
+        tr.node_times[m.node] = max(tr.node_times.get(m.node, -math.inf), m.t)
+        if m.kind in RANGE_KINDS:
+            tr.range_time = max(tr.range_time, m.t)
 
     # ---------------------------------------------------------------- initiation
     def _initiate(self, t: float, leftovers: List[Measurement]) -> None:
@@ -179,6 +224,8 @@ class Tracker:
             tr.range_time = t
 
     def _add(self, track: Track) -> Track:
+        if self.config.oosm and track.friend_id is None:
+            oosm.start_log(track, track.born)
         self.tracks.append(track)
         return track
 
@@ -190,6 +237,8 @@ class Tracker:
     def _life_cycle(self, t: float) -> None:
         keep = []
         for tr in self.tracks:
+            if tr.checkpoint is not None:
+                oosm.fold_old(tr, t, self.config.oosm_window_s, self.config.accel_noise_mps2)
             if tr.friend_id is None:
                 self._confirm_or_demote(tr, t)
             ttl = self.config.confirmed_ttl_s if tr.confirmed else self.config.tentative_ttl_s
