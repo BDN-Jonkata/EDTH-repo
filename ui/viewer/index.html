@@ -88,15 +88,18 @@
     <rect x="-4000" y="-4000" width="9000" height="9000" fill="url(#grid)"/>
     <rect width="1000" height="1000" fill="#0D1318"/>
     <g id="terrain" clip-path="url(#clip)"></g>
+    <g id="coverageAge" clip-path="url(#clip)" pointer-events="none"></g>
     <rect width="1000" height="1000" fill="none" stroke="#3A4553" stroke-width="1.5" stroke-dasharray="8 6"/>
     <text class="t" x="8" y="-8" style="fill:#6F7B89">AREA OF OPERATIONS · 1 km²</text>
     <g id="cover"></g>
+    <g id="policy" pointer-events="none"></g>
     <g id="jam"></g>
     <g id="links"></g>
     <g id="raw"></g>
     <g id="truth"></g>
     <g id="cross"></g>
     <g id="trk"></g>
+    <g id="missions" pointer-events="none"></g>
     <g id="fixed"></g>
     <g id="furniture"></g>
   </svg>
@@ -134,6 +137,11 @@
         <tbody id="trkBody"></tbody>
       </table>
     </div>
+  </div>
+  <div class="sec" style="gap:6px">
+    <p class="h">Drone missions</p>
+    <div id="missionStatus" class="mono" style="font-size:11px;display:flex;flex-direction:column;gap:5px"></div>
+    <div id="coverageStatus" style="font-size:11px;color:#8B96A5"></div>
   </div>
   <div class="sec" style="gap:0">
     <div style="display:flex;justify-content:space-between;align-items:center;padding-bottom:4px"><p class="h">Alerts</p><span class="mono" style="font-size:11px;color:#8B96A5" id="alertCount"></span></div>
@@ -197,11 +205,15 @@
 </footer>
 </div>
 <script src="catalog.js"></script>
+<script src="missions.js"></script>
 <script src="scenarios.js"></script>
 <script src="messages.js"></script>
 <script src="weather.js"></script>
 <script src="jamming.js"></script>
 <script src="drones.js"></script>
+<script src="behavior.js"></script>
+<script src="friend-foe.js"></script>
+<script src="investigations.js"></script>
 <script src="sim.js"></script>
 <script src="weather-ui.js"></script>
 <script src="app.js"></script>

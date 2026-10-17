@@ -74,7 +74,13 @@ const withEnv = (env) => {
   sc.environment = Object.assign(sc.environment, env);
   return sc;
 };
-const sim = (weather, env, sky) => Sim.run({ seed: 5, mode: 'optimistic', weather, sky, loss: 0, delayMs: 0, driftMs: 0, scenario: withEnv(env || {}) });
+// Fix the sensor platforms in place to isolate weather physics. Autonomous
+// coverage and investigation routes also respond to weather and change detections.
+const sim = (weather, env, sky) => {
+  const scenario = withEnv(env || {});
+  const commands = scenario.friendlies.map((f) => ({ t: 0, drone_id: f.id, command: 'hold' }));
+  return Sim.run({ seed: 5, mode: 'optimistic', weather, sky, loss: 0, delayMs: 0, driftMs: 0, scenario, commands });
+};
 const measOf = (res, from, to) => JSON.stringify(res.frames.slice(from, to).map((f) => f.meas));
 const WHOLE = { weather: 'fog' }; // an event with no time or zone covers everything
 

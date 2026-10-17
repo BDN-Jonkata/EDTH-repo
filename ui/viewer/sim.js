@@ -18,8 +18,12 @@
 
   const Drones = typeof window !== 'undefined' ? window.Drones : require('./drones.js');
   const Messages = typeof window !== 'undefined' ? window.Messages : require('./messages.js');
+  const Mission = typeof window !== 'undefined' ? window.Missions : require('./missions.js');
   const Weather = typeof window !== 'undefined' ? window.Weather : require('./weather.js');
   const Jamming = typeof window !== 'undefined' ? window.Jamming : require('./jamming.js');
+  const Behavior = typeof window !== 'undefined' ? window.Behavior : require('./behavior.js');
+  const FriendFoe = typeof window !== 'undefined' ? window.FriendFoe : require('./friend-foe.js');
+  const Investigations = typeof window !== 'undefined' ? window.Investigations : require('./investigations.js');
   const CAT = typeof CATALOG !== 'undefined' ? CATALOG : require('./catalog.js'); // eslint-disable-line no-undef
   const DT = 0.1;
   const T_END = 120;
@@ -44,7 +48,9 @@
     const world = {
       id: sc.id, name: sc.name, duration: sc.duration_s, c2: { x: sc.c2[0], y: sc.c2[1] },
       ground: sc.ground.map((g) => ({ id: g.id, platform: g.platform, x: g.position[0], y: g.position[1], heading: (90 - g.heading_deg) * D2R })),
-      friendlies: sc.friendlies.map((f) => Object.assign({ id: f.id, platform: f.platform, alt: f.altitude_m }, f.loop)),
+      friendlies: sc.friendlies.map((f) => Object.assign({ id: f.id, platform: f.platform, alt: f.altitude_m }, f.loop, {
+        x: f.loop.cx + f.loop.R * Math.cos(f.loop.th0), y: f.loop.cy + f.loop.R * Math.sin(f.loop.th0),
+      })),
       hostiles: sc.targets.map(pathObject),
       clutter: (sc.clutter || []).map((o) => Object.assign(pathObject(o), { type: o.type })), // birds, vehicles: seen, not threats
       commands: sc.commands || [], beacon: sc.beacon, env: sc.environment, deg: sc.degradations, sensorKinds: sc.sensor_set.enabled_kinds, assign: {},
@@ -58,13 +64,6 @@
   // an object on a waypoint path (a hostile or clutter); moved by hoState
   const pathObject = (t) => ({ id: t.id, wps: t.waypoints, wob: t.wobble_m, ph: t.phase, alt: t.altitude_m, sig: t.signature || {}, emits: t.emits !== false });
 
-  function frState(f, t) {
-    const a = f.th0 + f.dir * (f.v / f.R) * t;
-    return {
-      x: f.cx + f.R * Math.cos(a), y: f.cy + f.R * Math.sin(a),
-      vx: -f.dir * f.v * Math.sin(a), vy: f.dir * f.v * Math.cos(a),
-    };
-  }
   // piecewise-linear path with a sideways wobble (same maths as seeder/scenario.py)
   function hoPos(h, t) {
     const w = h.wps;
@@ -279,7 +278,7 @@
   function run(P, opts) {
     const c = newContext(P);
     c.lite = !!(opts && opts.lite);
-    c.tap = (opts && opts.tap) || null; // tests: called with every message sent, lost or not
+    c.tap = (opts && opts.tap) || null; // tests: network sends plus local investigation contract events; arr is set only by the channel
     startFriendTracks(c);
     for (let k = 0; k <= c.NF; k++) stepFrame(c, k);
     return finish(c);
@@ -305,11 +304,25 @@
       drones: {}, seqs: {}, cmd: { script: scriptedCommands(P, world), open: {}, records: {}, seen: {}, count: 0 },
       beaconEvery: Math.max(1, Math.round(10 / (world.beacon.rate_hz || 2))), beaconSigma: world.beacon.pos_sigma_m || 3,
       tracks: [], pending: [], friends: {}, alerts: [], frames: [], timeline: [], lastMatch: {}, sqHist: [], crossAlerted: {},
+      beacons: {},
       n: { hostile: 0, unk: 0, swaps: 0, ffa: 0, cfa: 0, evalSq: 0, evalN: 0, evalCnt: 0, evalCntN: 0 },
     };
     world.hostiles.concat(world.clutter).forEach((h) => { c.pathById[h.id] = h; });
     if (real) (world.deg.dropout || []).forEach((d) => { c.dropT[d.node] = d.t; }); // nodes that die mid-run
     c.nodes.forEach((n) => { c.driftScale[n] = c.rn() * 2 - 1; c.linkQ[n] = 1; });
+    const fleet = world.friendlies.map((f) => {
+      const flight = PLATFORMS[assign[f.id]].spec.flight;
+      return { ...f, v: Math.min(f.v, flight.max_speed_mps), flight };
+    });
+    c.investigations = new Investigations.Controller(c.sensors, fleet.map((f) => f.id), c.wx,
+      (s, sp, tg, t) => sensorAt(c, s, t, sp, tg), (m) => { if (c.tap) c.tap(m); }, c.seqs,
+      (id, t) => id === 'estimator' ? t : localTime(c, id, t));
+    c.missions = new Mission.Controller(fleet, c.sensors, DT, (t, text) => {
+      c.alerts.push({ t, text, sev: 'info' }); c.timeline.push({ t, label: text, color: 'amber' });
+    }, { requireInvestigation: true, geometry: (tr, d, t) => c.investigations.geometry(tr, d, t) });
+    const policy = P.behavior || (P.scenario?.config?.drone_behavior) || {};
+    c.classifier = new FriendFoe.AutomaticEstimator(Behavior.configFor([world.c2.x, world.c2.y], policy),
+      { beacon_rate_hz: world.beacon.rate_hz || 2 }, fleet.map((f) => f.id));
     shareFalseAlarmsAcrossRadars(c);
     return c;
   }
@@ -326,7 +339,7 @@
   // friendly roster is synced before the mission: tracks start at the true state
   function startFriendTracks(c) {
     c.world.friendlies.forEach((f) => {
-      const st = frState(f, 0);
+      const st = friendlyState(c, f, 0);
       const tr = newTrack(f.id, 'frd', { x: st.x, y: st.y, R: [9, 0, 9], t: 0 }, 6, 4);
       tr.s[2] = st.vx; tr.s[3] = st.vy; tr.cls = 'friendly'; tr.srcs.self = 0;
       c.friends[f.id] = tr; c.tracks.push(tr);
@@ -335,6 +348,9 @@
 
   function stepFrame(c, k) {
     const t = k * DT;
+    c.missions.drones.forEach((d) => { d.disabled = !alive(c, d.id, t); });
+    c.missions.record(t);
+    c.missions.observe(t, k, (id) => alive(c, id, t), (s, sp, tg) => sensorAt(c, s, t, sp, tg));
     stepDrones(c, t);
     issueCommands(c, t);
     const truth = truthAt(c, t);
@@ -342,11 +358,16 @@
     const frameMeas = trackFrame(c, t, handleControl(c, t, deliver(c, t)));
     updateLifecycle(c, t);
     pruneTracks(c, t);
+    classifyFrame(c, t);
+    c.investigations.update(t, c.tracks);
+    c.missions.update(t, c.tracks);
+    c.investigations.sync(t, c.missions.drones);
     const { snap, hostileTracks } = snapshot(c, t);
     const score = scoreFrame(c, t, truth, hostileTracks);
     const cross = findCrossing(hostileTracks);
     if (cross) announceCrossing(c, t, cross);
     if (!c.lite) c.frames.push(frameRecord(c, { t, k, truth, snap, frameMeas, cross, score, hostileTracks }));
+    if (k < c.NF) c.missions.move(t);
   }
 
   function finish(c) {
@@ -360,6 +381,10 @@
       frames: c.frames, alerts: c.alerts, timeline: c.timeline, summary, scen: c.world,
       params: Object.assign({}, c.P, { assign: c.assign, scenario: undefined, scenario_id: c.world.id }),
       T_END: c.T_END, DT, NF: c.NF, EVAL: c.EVAL, sensors: c.sensors.map(sensorInfo),
+      missionConfig: { cellSize: Mission.CELL, areaSize: Mission.SIZE, separation: Mission.SEP,
+        patrolSpacing: Mission.COMFORT, maxAcceleration: Mission.ACCEL, maxYawDegSec: Mission.YAW_RATE * RAD2DEG },
+      behaviorConfig: c.classifier.behavior.config,
+      investigations: { requests: c.investigations.requests, statuses: c.investigations.statuses },
     });
   }
   function sensorInfo(s) {
@@ -373,6 +398,7 @@
     const { score } = f;
     return {
       t: f.t, k: f.k, truth: f.truth, tracks: f.snap, match: score.match.map((m) => [m[0], m[1]]),
+      missions: c.missions.snapshot(), coverage: c.missions.cells.map((cell) => cell.last),
       meas: f.frameMeas.map((z) => ({ k: z.k, node: z.node, module: z.module, t: z.t, m: z.m, sx: z.sx, sy: z.sy, b: z.b, r: z.r, rmax: z.rmax, fields: z.fields, merged: !!z.merged, clutter: !!z.clutter })),
       links: Object.assign({}, c.linkQ), cross: f.cross,
       m: { est: f.hostileTracks.length, tru: score.trueHost.length, countErr: score.countErr, rmse10: score.rmse10, swaps: c.n.swaps, ffa: c.n.ffa },
@@ -553,7 +579,12 @@
       tr.cls = 'friendly';
       c.tracks.push(tr);
     } else update(tr, z, innov(tr, z));
-    tr.lastUpd = t; tr.srcs.self = t;
+    tr.lastUpd = t; tr.srcs.self = t; tr.beaconT = Math.max(tr.beaconT || 0, m.header.t_sent);
+    tr.observedT = Math.max(tr.observedT ?? -Infinity, m.header.t_sent);
+    if (!c.beacons[id] || m.header.t_sent > c.beacons[id].t) c.beacons[id] = {
+      friend_id: id, t: m.header.t_sent, position: [m.position[0], m.position[1], 0],
+      velocity: [m.velocity[0], m.velocity[1], 0], pos_sigma: Math.sqrt(Math.max(m.covariance[0][0], m.covariance[1][1])),
+    };
   }
   function bestTrack(c, rec) {
     let best = null, bs = Infinity;
@@ -574,7 +605,14 @@
     applyRecord(tr, rec);
     if (rec.m !== 'bearing') tr.rangeT = t;
     tr.updated = true; tr.lastUpd = t;
-    tr.srcs[rec.node + ' ' + rec.k] = t;
+    recordSource(tr, rec);
+  }
+  function recordSource(tr, rec) {
+    const key = rec.node + ' ' + rec.k;
+    tr.srcs[key] = Math.max(tr.srcs[key] ?? -Infinity, rec.t);
+    if (!tr.firstSources) tr.firstSources = {};
+    tr.firstSources[rec.node] = Math.min(tr.firstSources[rec.node] ?? Infinity, rec.t);
+    tr.observedT = Math.max(tr.observedT ?? -Infinity, rec.t);
   }
   // bearing only: needs a second bearing from another node to fix a position
   function pairBearing(c, rec, t) {
@@ -590,7 +628,7 @@
     const tr = newTrack('U' + (++c.n.unk), 'trk', fix, 3, 225);
     if (hasRange) tr.rangeT = t;
     tr.updated = true;
-    recs.forEach((r) => { tr.srcs[r.node + ' ' + r.k] = t; });
+    recs.forEach((r) => recordSource(tr, r));
     c.tracks.push(tr);
   }
 
@@ -611,10 +649,10 @@
     if (tr.status !== 'tentative' || tr.hitFrames < 6 || Math.sqrt(Math.max(tr.P[0], tr.P[5])) >= 30 || !supported) return;
     tr.status = 'confirmed';
     tr.unsup = null;
-    if (!/^U/.test(tr.id)) return; // a demoted track that is confirmed again keeps its ID
-    tr.id = 'H' + (++c.n.hostile);
-    c.alerts.push({ t, sev: 'info', text: tr.id + ' confirmed hostile' });
-    c.timeline.push({ t, label: tr.id + ' seen', color: 'red' });
+    if (tr.confirmedOnce) return;
+    tr.confirmedOnce = true;
+    c.alerts.push({ t, sev: 'info', text: tr.id + ' track confirmed; assessing behavior' });
+    c.timeline.push({ t, label: tr.id + ' seen', color: 'amber' });
   }
   function announceTentative(c, tr, t) {
     if (tr.status !== 'tentative' || tr.alerted || tr.hitFrames < 3) return;
@@ -639,8 +677,18 @@
   }
   function pruneTracks(c, t) {
     removeWhere(c.tracks, (tr) => tr.kind !== 'frd' && isStale(tr, t));
-    removeWhere(c.tracks, (tr) => tr.kind !== 'frd' && tr.status !== 'confirmed' && ridesOnFriend(c, tr));
-    for (let dup = findDuplicate(c.tracks); dup; dup = findDuplicate(c.tracks)) c.tracks.splice(c.tracks.indexOf(dup), 1);
+    removeWhere(c.tracks, (tr) => {
+      if (tr.kind === 'frd' || !ridesOnFriend(c, tr, t)) return false;
+      tr.cls = 'friendly'; return true;
+    });
+    for (let dup = findDuplicate(c.tracks); dup; dup = findDuplicate(c.tracks)) {
+      const keep = dup.replacement;
+      Object.entries(dup.srcs).forEach(([key, time]) => { keep.srcs[key] = Math.max(keep.srcs[key] ?? -Infinity, time); });
+      if (!keep.firstSources) keep.firstSources = {};
+      Object.entries(dup.firstSources || {}).forEach(([key, time]) => { keep.firstSources[key] = Math.min(keep.firstSources[key] ?? Infinity, time); });
+      keep.observedT = Math.max(keep.observedT ?? -Infinity, dup.observedT ?? -Infinity);
+      c.tracks.splice(c.tracks.indexOf(dup), 1);
+    }
   }
   function isStale(tr, t) {
     const silent = t - tr.lastUpd;
@@ -648,11 +696,13 @@
     return (tentative && silent > 1.5) || (!tentative && silent > 8) || tr.P[0] + tr.P[5] > 40000;
   }
   // a track riding on a beacon-known friendly is that friendly, not a new object
-  function ridesOnFriend(c, tr) {
+  function ridesOnFriend(c, tr, t) {
     return Object.keys(c.friends).some((id) => {
       const f = c.friends[id];
       const n = innov(f, { x: tr.s[0], y: tr.s[1], R: [tr.P[0], tr.P[1], tr.P[5]] });
-      return n.d2 < GATE && Math.hypot(f.s[2] - tr.s[2], f.s[3] - tr.s[3]) < 5;
+      const radius = Math.min(60, Math.max(20, 2 * Math.sqrt(Math.max(tr.P[0], tr.P[5]))));
+      const onFreshBeacon = t - (f.beaconT || 0) <= 2 && Math.hypot(f.s[0] - tr.s[0], f.s[1] - tr.s[1]) < radius;
+      return n.d2 < GATE && (onFreshBeacon || (tr.status !== 'confirmed' && Math.hypot(f.s[2] - tr.s[2], f.s[3] - tr.s[3]) < 5));
     });
   }
   // two confirmed tracks on top of each other moving alike are one object: returns the one to drop
@@ -661,7 +711,11 @@
       for (let j = i + 1; j < tracks.length; j++) {
         const a = tracks[i], b = tracks[j];
         if (a.kind === 'frd' || b.kind === 'frd' || a.status === 'tentative' || b.status === 'tentative') continue;
-        if (sameObject(a, b)) return a.hitFrames >= b.hitFrames ? b : a;
+        if (sameObject(a, b)) {
+          const drop = a.hitFrames >= b.hitFrames ? b : a;
+          drop.replacement = drop === a ? b : a;
+          return drop;
+        }
       }
     }
     return null;
@@ -673,19 +727,34 @@
   }
 
   // --------------------------------------------------------------------- snapshot
-  function classify(tr, t) {
-    if (tr.kind === 'frd') { const pF = Math.max(0.5, 1 - (t - tr.lastUpd) * 0.05); return { cls: 'friendly', pH: 0, pF, pU: 1 - pF }; }
-    if (tr.status === 'tentative') { const pH = Math.min(0.35, tr.hitFrames * 0.05); return { cls: 'unknown', pH, pF: 0.1, pU: 1 - pH - 0.1 }; }
-    const pH = Math.min(0.99, 0.7 + tr.hitFrames / 120), pU = (1 - pH) * 0.7;
-    return { cls: 'hostile', pH, pU, pF: 1 - pH - pU };
+  function classifyFrame(c, t) {
+    // Only tracker estimates and received beacons cross this boundary. The viewer
+    // tracker is 2D, so project BOTH tracks and beacons to the same plane.
+    const inputs = c.tracks.map((tr) => ({ track_id: tr.id, t, position: [tr.s[0], tr.s[1], 0],
+      velocity: [tr.s[2], tr.s[3], 0], observed_t: tr.observedT ?? 0,
+      pos_sigma: Math.sqrt(Math.max(0, (tr.P[0] + tr.P[5]) / 2 + Math.hypot((tr.P[0] - tr.P[5]) / 2, tr.P[1]))),
+      existence_prob: tr.status === 'tentative' ? 0.5 : 0.95 }));
+    const beacons = Object.values(c.beacons).filter((b) => t - b.t <= 2);
+    const found = c.classifier.update(t, inputs, beacons);
+    const byId = new Map(c.tracks.map((tr) => [tr.id, tr]));
+    found.forEach((v) => {
+      const tr = byId.get(v.track_id), prev = tr.cls;
+      tr.classification = v; tr.cls = v.cls; tr.behavior = c.classifier.explain(v.track_id);
+      if (v.cls !== prev && ['hostile', 'peaceful', 'suspicious'].includes(v.cls)) {
+        c.alerts.push({ t, sev: v.cls === 'hostile' ? 'warn' : 'info',
+          text: tr.id + ' assessed ' + v.cls + ': ' + (v.cls === 'suspicious' ? 'identity unverified; ' : '') +
+            (tr.behavior.reasons || ['insufficient_history']).join(', ').replace(/_/g, ' ') });
+      }
+    });
   }
   function snapTrack(tr, t) {
-    const { cls, pH, pU, pF } = classify(tr, t);
+    const v = tr.classification || { cls: 'unknown', class_prob: 0.5, p_hostile: 0.5, p_friendly: 0.5 };
+    const cls = v.cls, pH = v.p_hostile, pF = v.p_friendly;
     return {
       id: tr.id, cls, st: tr.status, x: tr.s[0], y: tr.s[1], vx: tr.s[2], vy: tr.s[3],
       pxx: tr.P[0], pyy: tr.P[5], pxy: tr.P[1], pvv: tr.P[10] + tr.P[15],
-      conf: cls === 'friendly' ? pF : cls === 'hostile' ? pH : pH + 0.3,
-      age: t - tr.lastUpd, nodes: Object.keys(tr.srcs).filter((n) => t - tr.srcs[n] <= 2), pH, pU, pF, born: tr.born,
+      conf: v.class_prob, behavior: tr.behavior || {},
+      age: t - tr.lastUpd, nodes: Object.keys(tr.srcs).filter((n) => t - tr.srcs[n] <= 2), pH, pF, born: tr.born,
     };
   }
   function snapshot(c, t) {
@@ -802,31 +871,32 @@
   }
 
   // ------------------------------------------------------- drones and commands
-  // A friendly flies its scripted patrol loop until it is commanded. C2 sends a drone_command over the lossy channel
+  // The shared mission controller flies coverage patrols and investigations. C2 sends a drone_command over the lossy channel
   // and repeats it until the drone's drone_state ack arrives; the drone ignores repeats of a command_id it has seen.
   const ACK_TIMEOUT_S = 1.5, MAX_ATTEMPTS = 5; // assumed
   const AREA_M = 1000;
   const flightOf = (c, f) => PLATFORMS[c.assign[f.id]].spec.flight;
   function friendlyState(c, f, t) {
-    const d = c.drones[f.id];
-    if (!d || d.mode === 'patrol') return frState(f, t);
-    return { x: d.x, y: d.y, vx: d.vx, vy: d.vy, heading: d.heading }; // a commanded drone has no clock offset: it is where it is
+    return c.missions.state(f.id, t);
   }
   function stepDrones(c, t) {
     c.world.friendlies.forEach((f) => {
       const d = c.drones[f.id];
       if (!d || !alive(c, f.id, t)) return;
       repeatMilestone(c, f, d, t);
+      if (d.pendingPatrol) { d.pendingPatrol = false; sendMilestone(c, f, d, 'patrolling', t); }
       if (d.mode === 'patrol') return;
-      const goal = d.mode === 'return' ? frState(f, t) : d.mode === 'goto' ? { x: d.target[0], y: d.target[1] } : d;
-      Drones.step(d, goal, flightOf(c, f), DT, f.v);
+      Object.assign(d, friendlyState(c, f, t));
+      const goal = d.mode === 'goto' ? { x: d.target[0], y: d.target[1] } : d;
       if (Drones.arrived(d, goal)) reachGoal(c, f, d, goal, t);
     });
   }
   function reachGoal(c, f, d, goal, t) {
-    if (d.mode === 'goto') { d.x = goal.x; d.y = goal.y; d.vx = 0; d.vy = 0; d.mode = 'hold'; d.reported = false; }
+    if (d.mode === 'goto') {
+      d.mode = 'hold'; d.reported = false;
+      c.missions.command(f.id, { command: 'hold', face: d.face }, flightOf(c, f));
+    }
     if (d.mode === 'hold' && !d.reported) { d.reported = true; sendMilestone(c, f, d, 'on_station', t); }
-    if (d.mode === 'return') { d.mode = 'patrol'; sendMilestone(c, f, d, 'patrolling', t); }
   }
   // arriving or rejoining is sent once and repeated twice more, 2 s apart, because a state message has no ack of its own
   function sendMilestone(c, f, d, state, t) {
@@ -856,18 +926,20 @@
   }
   function applyCommand(c, f, m, t) {
     const prev = c.drones[f.id];
-    const d = prev && prev.mode !== 'patrol' ? prev : (c.drones[f.id] = Drones.newDrone(frState(f, t)));
-    d.mode = { goto: 'goto', hold: 'hold', return_to_patrol: 'return' }[m.command];
+    const d = prev || (c.drones[f.id] = Drones.newDrone(friendlyState(c, f, t)));
+    d.mode = { goto: 'goto', hold: 'hold', return_to_patrol: 'patrol' }[m.command];
     d.target = m.command === 'goto' ? m.target : null;
     d.cap = m.speed_mps || null;
     d.face = Drones.faceOf(m);
     d.cmdId = m.command_id; d.trackId = m.track_id; d.reported = false; d.milestone = null;
+    c.missions.command(f.id, { ...m, face: d.face }, flightOf(c, f));
+    d.pendingPatrol = d.mode === 'patrol';
   }
   function sendState(c, f, d, state, t, extra) {
     const p = friendlyState(c, f, t);
     const body = Object.assign({
       drone_id: f.id, command_id: d.cmdId, state, mode: d.mode || 'patrol', position: [p.x, p.y, f.alt],
-      heading_deg: compass(d.heading !== undefined ? d.heading : Math.atan2(p.vy, p.vx)), track_id: d.trackId,
+      heading_deg: compass(p.heading), track_id: d.trackId,
     }, extra);
     sendMessage(c, f.id, stamped(c, f.id, 'drone_state', body, t), t);
   }
@@ -1009,6 +1081,7 @@
     return out;
   }
 
-  global.Sim = { run, prepare, DT, T_END, NF, EVAL, PLATFORMS, MODULES, DEFAULT_SCENARIO };
+  const SCEN = prepare(DEFAULT_SCENARIO), DEFAULT_ASSIGN = SCEN.assign;
+  global.Sim = { run, prepare, DT, T_END, NF, EVAL, PLATFORMS, MODULES, DEFAULT_SCENARIO, SCEN, DEFAULT_ASSIGN };
   if (typeof module !== 'undefined') module.exports = global.Sim;
 })(typeof window !== 'undefined' ? window : globalThis);

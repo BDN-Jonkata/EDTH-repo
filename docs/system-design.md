@@ -200,7 +200,7 @@ required_standoff(module, target_position, t, weather) -> {
 ```
 
 - `module` is a sensor module from the seeder catalog. The request lists the result for every detection module a drone may carry (`standoff_by_module`), so the drone-behaviour side looks up the modules of the drone it considers (`scenario.json` `friendlies[].sensors`).
-- All numbers come from the catalog: the module's `sim.range_m` and `sim.min_range_m`, scaled by its `weather_effects` for the active conditions (`environment.weather` and `time_of_day`; effects multiply, for example fog at night). The one number the catalog lacks is how much of the detection range is good enough to *identify* (a camera sees class cues, a microphone only hears presence). A placeholder fraction per module kind (`IDENT_FRACTION` in `sensors/quality.py`) fills in until the catalog gets a field for it.
+- All numbers come from the catalog: the module's `sim.ident_range_m` and `sim.min_range_m`, scaled by its `weather_effects` for active conditions (effects multiply, for example fog at night). `ident_range_m` is the assumed identification range, distinct from detection range. `IDENT_FRACTION` in `sensors/quality.py` is only a compatibility fallback for older module dictionaries.
 - Re-evaluate on request, because weather changes during the flight.
 - After arrival, new observations from the drone feed the estimator, which upgrades or downgrades the suspicion.
 

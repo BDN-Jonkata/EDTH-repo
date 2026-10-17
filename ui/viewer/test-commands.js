@@ -15,14 +15,20 @@ const TASKS = [
   { t: 60, drone_id: 'F2', command: 'return_to_patrol' },
 ];
 
-test('no commands: result has no commands key and drones follow the script', () => {
+test('no commands: autonomous missions retain coverage and bounded sensor headings', () => {
   const res = run({});
   assert.strictEqual(res.commands, undefined);
-  assert.ok(trackOf(res, 'F2').every((o) => o.heading === undefined));
+  assert.ok(trackOf(res, 'F2').every((o) => Number.isFinite(o.heading)));
+  assert.ok(res.frames.every((f) => f.missions.every((m) => ['patrol', 'follow', 'search'].includes(m.mode))));
+  assert.ok(res.frames.at(-1).coverage.some((last) => last >= 0));
 });
 
 test('goto: acked, reaches the point, faces the target, respects the limits', () => {
-  const res = run({ commands: TASKS });
+  // Isolate arrival/facing from fleet congestion; conflicts are tested separately.
+  const scenario = JSON.parse(JSON.stringify(SCENARIOS.easy));
+  scenario.friendlies = scenario.friendlies.filter((f) => f.id === 'F2');
+  scenario.friendlies[0].loop = { cx: 600, cy: 500, R: 100, v: 8, dir: 1, th0: 0 };
+  const res = run({ scenario, commands: TASKS });
   const goto = res.commands[0];
   assert.strictEqual(goto.status, 'accepted'); assert.strictEqual(goto.attempts, 1);
   const states = goto.reports.map((r) => r.state);
@@ -43,13 +49,17 @@ test('goto: acked, reaches the point, faces the target, respects the limits', ()
   assert.ok(Math.abs(Math.atan2(Math.sin(hold.heading - toTarget), Math.cos(hold.heading - toTarget))) < 0.09, 'camera faces the target');
 });
 
-test('return_to_patrol: back on the scripted loop', () => {
+test('return_to_patrol: resumes coordinated patrol without a position jump', () => {
   const res = run({ commands: TASKS });
   const ret = res.commands[1];
   assert.strictEqual(ret.status, 'accepted');
   assert.ok(ret.reports.some((r) => r.state === 'patrolling'), 'patrolling reported');
-  const last = trackOf(res, 'F2')[res.NF], scripted = trackOf(run({}), 'F2')[res.NF];
-  assert.ok(Math.hypot(last.x - scripted.x, last.y - scripted.y) < 0.01, 'on the script again');
+  const atReturn = res.frames[Math.round(60 / Sim.DT)];
+  assert.strictEqual(atReturn.missions.find((m) => m.id === 'F2').mode, 'patrol');
+  const last = trackOf(res, 'F2')[res.NF], previous = trackOf(res, 'F2')[Math.round(60 / Sim.DT) - 1];
+  const current = atReturn.truth.find((d) => d.id === 'F2');
+  assert.ok(Math.hypot(previous.x - current.x, previous.y - current.y) <= 10 * Sim.DT + 1e-6);
+  assert.ok(last.x >= 0 && last.x <= 1000 && last.y >= 0 && last.y <= 1000);
 });
 
 test('a lossy channel makes the sender retry, deterministically', () => {
@@ -71,7 +81,22 @@ test('a dead drone never acks: the command is reported lost after 5 tries', () =
 test('a goto outside the area is rejected and the drone keeps patrolling', () => {
   const res = run({ commands: [{ t: 10, drone_id: 'F1', command: 'goto', target: [1500, 500] }] });
   assert.strictEqual(res.commands[0].status, 'rejected');
-  assert.ok(trackOf(res, 'F1').every((o) => o.heading === undefined));
+  assert.ok(trackOf(res, 'F1').every((o) => Number.isFinite(o.heading)));
+  assert.ok(res.frames.every((f) => !['goto', 'hold'].includes(f.missions.find((m) => m.id === 'F1').mode)));
+});
+
+test('commanded and autonomous drones share separation, acceleration and yaw limits', () => {
+  const res = run({ commands: TASKS });
+  const wrap = (a) => Math.atan2(Math.sin(a), Math.cos(a));
+  res.frames.forEach((f, k) => {
+    const drones = f.truth.filter((d) => d.kind === 'friendly');
+    const previous = k ? res.frames[k - 1].truth.filter((d) => d.kind === 'friendly') : drones;
+    drones.forEach((d, i) => {
+      assert.ok(Math.hypot(d.vx - previous[i].vx, d.vy - previous[i].vy) <= 2 * Sim.DT + 1e-7);
+      assert.ok(Math.abs(wrap(d.heading - previous[i].heading)) <= 20 * Math.PI / 180 * Sim.DT + 1e-7);
+      for (let j = 0; j < i; j++) assert.ok(Math.hypot(d.x - drones[j].x, d.y - drones[j].y) >= 100 - 1e-7);
+    });
+  });
 });
 
 let failed = 0;

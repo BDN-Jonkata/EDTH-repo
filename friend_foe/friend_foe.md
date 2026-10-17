@@ -2,17 +2,18 @@
 
 Friend/foe classification: friendly beacon matching plus the Drone Behaviour pattern module.
 
-Status: estimator, investigation trigger and drone-status mapping done and tested on synthetic data and on seeder-generated scenarios (with beacon loss, bursts, delay and clock errors), plus a loss and weather sweep and a measurement of drones wasted on clutter; the class `peaceful` and the behaviour hook are in, the behaviour module that feeds the hook is not started. See [system design](../docs/system-design.md).
+Status: estimator, investigation trigger, drone-status mapping and an automatic observed-motion baseline are implemented. The behavior baseline supplies the existing hook and is connected to the viewer. See [drone behaviour](../drone_behavior/drone_behavior.md) for policy assumptions, validation and limits, and [system design](../docs/system-design.md) for the broader architecture.
 
 ## What exists
 
 | File | Contents |
 |------|----------|
 | [estimator.py](estimator.py) | `FriendFoeEstimator`: per-track evidence, beacon matching, class friendly / hostile / suspicious / peaceful / unknown with probability and hysteresis; two evidence axes (beacon, behaviour); weighs silence by the measured beacon delivery rate |
+| [automatic.py](automatic.py) | `AutomaticEstimator`: observed-motion history/evidence through `threat_llr`, verified roster initialization and automatic flag selection; Python reference for the viewer |
 | [investigation.py](investigation.py) | `InvestigationTrigger`: raises `investigation_request` for tracks that stay suspicious, with the weather-based standoff per catalog module, cooldown and status feedback |
 | [drone_status.py](drone_status.py) | `DroneStatusMapper`: turns the mock simulation's `drone_state` messages (and commands reported lost) into `investigation_status`, using the mapping in [data-formats.md](../docs/data-formats.md); feed the result to `InvestigationTrigger.on_status` |
 | [scenario_adapter.py](scenario_adapter.py) | Turns a `scenario.json` into estimator input frames: **test stand-in** for the tracker and beacon source (see below) |
-| [evaluate.py](evaluate.py) | `evaluate(scenario, threat_llr=None)`: friendly false alarms, hostiles called friendly or peaceful, clutter flagged, time to confirm and to flag, requests on friendlies and on clutter, standoff |
+| [evaluate.py](evaluate.py) | `evaluate(scenario, threat_llr=None, automatic=False)`: friendly false alarms, hostiles called friendly or peaceful, clutter flagged, time to confirm and to flag, requests on friendlies and on clutter, standoff; opt into the automatic behavior baseline |
 | [sweep.py](sweep.py) | `python -m friend_foe.sweep`: the estimator over beacon loss (plain and bursty) and weather, optional `--birds` and `--vehicles`, tuning or test seeds, optional CSV |
 | [jsonl_io.py](jsonl_io.py) | Reads JSON Lines files of `local_track` and `friendly_beacon` messages into frames |
 | [make_synthetic.py](make_synthetic.py) | Generates [data/local_tracks.jsonl](data/local_tracks.jsonl) |

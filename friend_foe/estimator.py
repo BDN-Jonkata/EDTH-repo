@@ -39,6 +39,7 @@ class TrackState:
     velocity: Vec3 = (0.0, 0.0, 0.0)
     pos_sigma: float = 1.0          # 1-sigma position uncertainty, m
     existence_prob: float = 1.0
+    observed_t: Optional[float] = None  # optional internal freshness metadata; coasting is not a new observation
 
 
 @dataclass(frozen=True)
@@ -123,6 +124,8 @@ class FriendFoeEstimator:
         self.threat_llr = threat_llr   # per update: > 0 hostile-like, < 0 peaceful-like
         self._memory: Dict[str, _Memory] = {}
         self._last_t: Optional[float] = None
+        self._seen_beacons = {}
+        self._fresh_matches = set()
         # beacons received and expected from friendly tracks, both forgetting over delivery_tau_s
         self._received = self.config.delivery_prior * self.config.delivery_prior_n
         self._expected = self.config.delivery_prior_n
@@ -132,10 +135,20 @@ class FriendFoeEstimator:
         """Share of expected beacons that arrive, measured on tracks currently called friendly."""
         return max(self.config.delivery_min, min(1.0, self._received / self._expected))
 
+    def register_identity(self, track_id: str, t: float = 0.0) -> None:
+        """An already verified fleet identity from the preflight roster sync.
+
+        This is identity evidence, never a result of a similar flight pattern.
+        Subsequent silence uses the same loss-aware confidence rules as beacons.
+        """
+        self._memory[track_id] = _Memory(llr=self.config.llr_limit, n_updates=self.config.min_updates,
+                                        cls="friendly", last_t=t)
+
     def update(
         self, t: float, tracks: Sequence[TrackState], beacons: Sequence[Beacon]
     ) -> List[Classification]:
         dt = self._frame_dt(t)
+        self._forget_stale(t)  # a reappearing/reused ID must not revive expired evidence
         usable = [tr for tr in tracks if tr.existence_prob >= self.config.min_existence]
         matches = self._match(t, usable, beacons)
         out = [self._update_track(t, dt, tr, matches.get(tr.track_id)) for tr in usable]
@@ -151,7 +164,9 @@ class FriendFoeEstimator:
 
     def _update_track(self, t: float, dt: float, tr: TrackState, matched: Optional[str]) -> Classification:
         mem = self._memory.setdefault(tr.track_id, _Memory())
-        self._beacon_evidence(mem, dt, matched)
+        if mem.n_updates:
+            dt = max(0.0, min(t - mem.last_t, self.config.max_dt_s))
+        self._beacon_evidence(mem, dt, matched, tr.track_id in self._fresh_matches)
         self._behaviour_evidence(mem, dt, tr)
         mem.n_updates += 1
         mem.last_t = t
@@ -159,11 +174,11 @@ class FriendFoeEstimator:
         mem.cls = self._classify(mem, p, q)
         return Classification(tr.track_id, t, mem.cls, self._class_prob(mem.cls, p, q), p, matched, q)
 
-    def _beacon_evidence(self, mem: _Memory, dt: float, matched: Optional[str]) -> None:
+    def _beacon_evidence(self, mem: _Memory, dt: float, matched: Optional[str], fresh: bool = True) -> None:
         cfg = self.config
-        if matched is not None:
+        if matched is not None and fresh:
             mem.llr += cfg.match_step
-        elif mem.llr > cfg.no_beacon_floor:
+        elif matched is None and mem.llr > cfg.no_beacon_floor:
             # silence is weaker evidence on a lossy link, where a friendly's beacons are missing too
             mem.llr = max(mem.llr - cfg.no_beacon_per_s * dt * self.delivery_rate, cfg.no_beacon_floor)
         mem.llr = max(-cfg.llr_limit, min(cfg.llr_limit, mem.llr))
@@ -179,7 +194,7 @@ class FriendFoeEstimator:
         cfg = self.config
         forget = math.exp(-dt / cfg.delivery_tau_s)
         friendly = [c for c in found if c.cls == "friendly"]
-        self._received = self._received * forget + sum(c.matched_beacon is not None for c in friendly)
+        self._received = self._received * forget + sum(c.track_id in self._fresh_matches for c in friendly)
         self._expected = self._expected * forget + len(friendly) * cfg.beacon_rate_hz * dt
 
     def _forget_stale(self, t: float) -> None:
@@ -189,11 +204,20 @@ class FriendFoeEstimator:
     def _match(self, t, tracks, beacons) -> Dict[str, str]:
         """One-to-one nearest match of fresh beacons to tracks (greedy)."""
         cfg = self.config
+        self._fresh_matches = set()
+        self._seen_beacons = {key: seen for key, seen in self._seen_beacons.items()
+                              if t - seen <= cfg.memory_ttl_s}
         pairs = []
+        newest = {}
+        for b in beacons:
+            if -cfg.beacon_clock_tolerance_s <= t - b.t <= cfg.beacon_max_age_s:
+                newest[b.friend_id] = max(newest.get(b.friend_id, -math.inf), b.t)
         for i, tr in enumerate(tracks):
             for j, b in enumerate(beacons):
                 age = t - b.t
                 if age < -cfg.beacon_clock_tolerance_s or age > cfg.beacon_max_age_s:
+                    continue
+                if b.t != newest[b.friend_id]:
                     continue
                 age = max(age, 0.0)
                 pred = tuple(p + v * age for p, v in zip(b.position, b.velocity))
@@ -202,13 +226,18 @@ class FriendFoeEstimator:
                 if d <= gate:
                     pairs.append((d, i, j))
         pairs.sort()
-        used_t, used_b, result = set(), set(), {}
+        used_t, used_b, used_f, result = set(), set(), set(), {}
         for _, i, j in pairs:
-            if i in used_t or j in used_b:
+            if i in used_t or j in used_b or beacons[j].friend_id in used_f:
                 continue
             used_t.add(i)
             used_b.add(j)
+            used_f.add(beacons[j].friend_id)
             result[tracks[i].track_id] = beacons[j].friend_id
+            key = (beacons[j].friend_id, beacons[j].t)
+            if key not in self._seen_beacons:
+                self._fresh_matches.add(tracks[i].track_id)
+                self._seen_beacons[key] = t
         return result
 
     def _classify(self, mem: _Memory, p: float, q: float) -> str:
