@@ -18,19 +18,25 @@ from friend_foe.sweep import LOSSES, Setup, load_preset, make_scenario_and_truth
 from pipeline.run import scored_frames
 from scoring.metrics import RunScore, ScoreConfig, score
 from scoring.sweep import COLUMNS, average, fmt
+from scoring.truth import with_recorded_samples
 
 WARMUP_S = 10.0
 
 
-def run_once(setup: Setup, index: int, weather: str, loss: float, behaviour: bool = False) -> RunScore:
-    """`behaviour` puts the automatic drone-behaviour module (`drone_behavior/`) behind the estimator's threat hook."""
+def run_once(setup: Setup, index: int, weather: str, loss: float, behaviour: bool = False,
+             investigate: bool = False) -> RunScore:
+    """`behaviour` puts the automatic drone-behaviour module (`drone_behavior/`) behind the estimator's threat hook;
+    `investigate` sends drones at suspicious tracks, and scores against the trajectories they really flew."""
     scenario, truth = make_scenario_and_truth(setup, index, weather, loss, False)
     estimator = AutomaticEstimator.for_scenario(scenario) if behaviour else None
-    return score(truth, scored_frames(scenario, scenario["seed"], estimator=estimator), ScoreConfig(warmup_s=WARMUP_S))
+    recorded: dict = {}
+    frames = list(scored_frames(scenario, scenario["seed"], estimator=estimator, investigate=investigate, recorded=recorded))
+    return score(with_recorded_samples(truth, recorded), frames, ScoreConfig(warmup_s=WARMUP_S))
 
 
-def run_cell(setup: Setup, weather: str, loss: float, behaviour: bool = False) -> Dict[str, Optional[float]]:
-    return average([run_once(setup, i, weather, loss, behaviour) for i in range(setup.seeds)])
+def run_cell(setup: Setup, weather: str, loss: float, behaviour: bool = False,
+             investigate: bool = False) -> Dict[str, Optional[float]]:
+    return average([run_once(setup, i, weather, loss, behaviour, investigate) for i in range(setup.seeds)])
 
 
 def main() -> None:
@@ -42,12 +48,13 @@ def main() -> None:
     ap.add_argument("--birds", type=int, default=0)
     ap.add_argument("--vehicles", type=int, default=0)
     ap.add_argument("--behaviour", action="store_true", help="use the automatic drone-behaviour module")
+    ap.add_argument("--investigate", action="store_true", help="send drones at suspicious tracks (pipeline/dispatch.py)")
     ap.add_argument("--csv")
     args = ap.parse_args()
     setup = Setup(load_preset(args.preset), args.seed_set, args.seeds, None, args.birds, args.vehicles)
-    rows = [(loss, run_cell(setup, args.weather, loss, args.behaviour)) for loss in LOSSES]
+    rows = [(loss, run_cell(setup, args.weather, loss, args.behaviour, args.investigate)) for loss in LOSSES]
     print(f"preset={args.preset} seed set={args.seed_set} seeds={args.seeds} weather={args.weather} "
-          f"birds={args.birds} vehicles={args.vehicles} behaviour={args.behaviour}")
+          f"birds={args.birds} vehicles={args.vehicles} behaviour={args.behaviour} investigate={args.investigate}")
     print(" | ".join(["loss"] + [c.replace("_", " ") for c in COLUMNS]))
     for loss, cell in rows:
         print(" | ".join([str(loss)] + [fmt(cell[c]) for c in COLUMNS]))

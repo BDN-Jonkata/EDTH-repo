@@ -12,15 +12,14 @@ from typing import Dict, List, Optional
 
 from common.channel import Clock
 from common.codec import Sequencer
-from common.seeder_import import ensure_seeder_on_path
-
-ensure_seeder_on_path()
-import scenario as seeder_scenario  # noqa: E402  (seeder/scenario.py)
+from sensors.world import World
 
 
 class BeaconSource:
-    def __init__(self, scenario: dict, seed: int = 0, sequencers: Optional[Dict[str, Sequencer]] = None):
+    def __init__(self, scenario: dict, seed: int = 0, sequencers: Optional[Dict[str, Sequencer]] = None,
+                 world: Optional[World] = None):
         self.cfg, self.friendlies = scenario["beacon"], scenario["friendlies"]
+        self.world = world or World(scenario)
         self.rng = random.Random(seed)
         deg = scenario["degradations"]
         pose_err = deg["pose"].get("position_err_m", 0.0) if deg["pose"].get("enabled") else 0.0
@@ -37,12 +36,12 @@ class BeaconSource:
         return [self._beacon(f, t) for f in self.friendlies]
 
     def _beacon(self, f: dict, t: float) -> dict:
-        s = seeder_scenario.friendly_state(f, t)
-        position = [s["x"] + self.rng.gauss(0, self.sigma), s["y"] + self.rng.gauss(0, self.sigma), f["altitude_m"]]
+        s = self.world.node_pose(f["id"], t)
+        position = [s.x + self.rng.gauss(0, self.sigma), s.y + self.rng.gauss(0, self.sigma), f["altitude_m"]]
         sequencer = self.seq.setdefault(f["id"], Sequencer(f["id"]))
         v2 = self.sigma ** 2
         return {
             "type": "friendly_beacon", "header": sequencer.header(self.clocks[f["id"]].local(t)),
-            "friend_id": f["id"], "position": position, "velocity": [s["vx"], s["vy"], 0.0],
+            "friend_id": f["id"], "position": position, "velocity": [s.vx, s.vy, 0.0],
             "covariance": [[v2 if i == j else 0.0 for j in range(3)] for i in range(3)],
         }
