@@ -83,7 +83,7 @@ Phased, starting from the optimistic case. Status legend: ⬜ not started · �
 |--------|------|
 | ⬜ | Per-node local trackers sharing compact tracks |
 | ⬜ | Track merge with covariance intersection |
-| ✅ | Drone Behaviour module (`drone_behavior/`, Emkata): automatic five-class assessment from observed history, separate verified identity, uncertainty gates, safe transit/orbit and protected-area intrusion/loiter; Python/JS parity and mixed-traffic tests. Also runs on the Python pipeline's tracks; see [pipeline.md](pipeline/pipeline.md) for integration and tracker limitations |
+| ✅ | Drone Behaviour module (`drone_behavior/`, Emkata): automatic five-class assessment from observed history, separate verified identity, uncertainty gates, safe transit/orbit and responsive pursuit with intercept risk. No protected-zone rule; GUI identity/risk percentages, Python/JS parity and mixed-traffic tests. Also runs on the Python pipeline's tracks; see [pipeline.md](pipeline/pipeline.md) for integration and tracker limitations |
 | ✅ | Weather model (`sensors/`): several anomalies at once, anomalies that start, end and cover a zone, seasonal sun for day and night, per-module quality and sensor hierarchy from the catalog's `weather_effects`, shared golden cases for the JS port; tested |
 | ✅ | Weather applied to simulated observations: the Python observation models and the viewer's mock simulation both look up sensor quality per detection from the weather at the sensor and at the target (combinations, events and sky are accepted by the seeder and the viewer); standoff uses the catalog's `sim.ident_range_m` |
 | ✅ | Suspicious class, investigation trigger and weather-based standoff per catalog module; reads drone acks through `DroneStatusMapper`; tested |

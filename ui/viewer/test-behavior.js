@@ -34,7 +34,7 @@ test('confirmed tracker contacts stay unidentified until there is behavior evide
   assert.ok(!res.alerts.some((a) => /confirmed hostile/.test(a.text)));
   res.frames.forEach((f) => f.tracks.forEach((t) => {
     if (t.cls === 'hostile') {
-      assert.ok(t.behavior.reasons.some((r) => r === 'sustained_protected_entry' || r === 'protected_loiter'));
+      assert.ok(t.behavior.reasons.includes('responsive_pursuit') || t.behavior.retained_risk?.reasons.includes('responsive_pursuit'));
       assert.ok(t.pH >= DEFAULTS.hostile_exit);
     }
     assert.ok(Number.isFinite(t.pF) && Number.isFinite(t.pH));

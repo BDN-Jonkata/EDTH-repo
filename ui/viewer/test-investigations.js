@@ -50,6 +50,21 @@ test('peaceful and hostile assessments finish an investigation and release the d
   }
 });
 
+test('an approached ally keeps its mission while a different drone investigates', () => {
+  const { missions, track, step } = fixture();
+  track.behavior = { features: { reference_track_id: 'F2' } };
+  step(0); step(3);
+  assert.equal(missions.drones[1].mode, 'patrol');
+  assert.equal(missions.drones[0].mode, 'follow');
+});
+
+test('retained encounter evidence also excludes its approached ally', () => {
+  const { missions, track, step } = fixture();
+  track.behavior = { features: { reference_track_id: 'F1' }, retained_risk: { features: { reference_track_id: 'F2' } } };
+  step(0); step(3);
+  assert.ok(missions.drones.every((d) => d.mode === 'patrol'), 'wait for an uninvolved observer');
+});
+
 test('deleted tracks abort; reacquisition obeys cooldown', () => {
   const { inv, missions, track, step } = fixture();
   step(0); step(3); step(3.1, []);

@@ -84,6 +84,31 @@ def build_cases():
             frames.append({"t": t, "tracks": [asdict(tr) for tr in tracks], "beacons": [asdict(b) for b in beacons],
                            "expected": [asdict(c) for c in result], "evidence": {"opaque": est.explain("opaque")}})
         cases.append({"name": name, "policy": asdict(default_policy), "config": overrides, "verified_ids": verified_ids, "frames": frames})
+    for name in ('pursuit', 'tail', 'parallel', 'reverse_pursuit', 'crossing', 'stale_ally', 'verified_pursuer', 'breakoff'):
+        est = AutomaticEstimator(verified_ids=['ally', 'contact'] if name == 'verified_pursuer' else ['ally'])
+        frames = []
+        def wave(t):
+            return (200+8*t, 400+35*math.sin(0.55*t), 8, 19.25*math.cos(0.55*t))
+        for k in range(131):
+            t = k/2
+            own = wave(t-2 if name == 'reverse_pursuit' else t)
+            x, y, vx, vy = wave(t if name in ('parallel', 'reverse_pursuit') else t-2)
+            drift = 3 if name in ('pursuit', 'stale_ally', 'verified_pursuer', 'breakoff') else 0
+            other = (x-80+drift*t, y, vx+drift, vy)
+            if name == 'crossing':
+                own, other = (200+8*t, 500, 8, 0), (500, 200+8*t, 0, 8)
+            elif name == 'breakoff' and t >= 25:
+                old = wave(23)
+                other = (old[0]-5, old[1]+12*(t-25), 0, 12)
+            a = TrackState('ally', t, (*own[:2], 60), (*own[2:], 0), 2, observed_t=min(t, 20) if name == 'stale_ally' else t)
+            b = TrackState('contact', t, (*other[:2], 60), (*other[2:], 0), 2)
+            beacons = [Beacon('trusted', t, a.position, a.velocity, 2)] if name != 'stale_ally' or t <= 20 else []
+            if name == 'verified_pursuer':
+                beacons.append(Beacon('trusted-partner', t, b.position, b.velocity, 2))
+            found = est.update(t, [a, b], beacons)
+            frames.append({'t':t, 'tracks':[asdict(a), asdict(b)], 'beacons':[asdict(c) for c in beacons],
+                           'expected':[asdict(c) for c in found], 'evidence':{tr.track_id:est.explain(tr.track_id) for tr in (a,b)}})
+        cases.append({'name':name, 'policy':asdict(BehaviorConfig()), 'verified_ids':['ally','contact'] if name == 'verified_pursuer' else ['ally'], 'frames':frames})
     return {"estimator_config": asdict(EstimatorConfig()), "cases": cases}
 
 

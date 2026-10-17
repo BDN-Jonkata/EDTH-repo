@@ -16,9 +16,10 @@ function associated(frame, track) {
   return candidates[0];
 }
 
-test('mixed traffic produces all five automatic labels together after observation', () => {
-  const together = demo.frames.filter((f) => labels.every((cls) => f.tracks.some((tr) => tr.cls === cls)));
-  assert.ok(together.length * demo.DT >= 3, 'all five flags should coexist for at least three seconds');
+test('mixed traffic demonstrates all five automatic labels from observed behavior', () => {
+  assert.deepEqual([...new Set(demo.frames.flatMap((f) => f.tracks.map((tr) => tr.cls)))].sort(), labels.slice().sort());
+  assert.ok(demo.frames.filter((f) => f.tracks.some((tr) => tr.cls === 'hostile')).length * demo.DT >= 3,
+    'observable responsive pursuit should demonstrate a sustained hostile assessment');
   assert.ok(demo.frames[0].tracks.every((tr) => tr.cls === 'friendly'));
   const peacefulByObject = {};
   demo.frames.forEach((f) => f.tracks.forEach((tr) => {
@@ -27,21 +28,24 @@ test('mixed traffic produces all five automatic labels together after observatio
     if (o?.kind === 'benign') peacefulByObject[o.id] = (peacefulByObject[o.id] || 0) + 1;
     assert.ok(tr.behavior.observed_s >= 15, 'peaceful requires usable observed history');
   }));
-  for (const id of ['N1', 'N2', 'N3'])
-    assert.ok(peacefulByObject[id] >= 100, id + ' transit/orbit needs sustained peaceful time');
+  assert.ok(Object.values(peacefulByObject).reduce((a, b) => a+b, 0) >= 100,
+    'safe traffic needs sustained peaceful observations');
   assert.equal(demo.summary.bfa, 0);
   assert.equal(demo.summary.ffa, 0);
 });
 
-test('benign and unknown contacts do not consume automatic identification drones', () => {
+test('dispatch requires sustained observed risk, rather than a scoring role or silence', () => {
   assert.ok(demo.investigations.requests.length > 0, 'actual suspicious contacts still cause dispatch');
   for (const req of demo.investigations.requests) {
     const f = demo.frames[Math.round(req.t_requested / demo.DT)];
     const track = f?.tracks.find((tr) => tr.id === req.track_id);
     assert.ok(track, 'request must refer to an observed track');
     assert.equal(track.cls, 'suspicious');
-    const o = associated(f, track);
-    assert.notEqual(o?.kind, 'benign', 'benign traffic should leave patrol drones available in this demonstration');
+    assert.notEqual(track.st, 'tentative');
+    assert.ok(track.pH >= demo.estimatorConfig.suspicious_threat_exit);
+    assert.ok(track.behavior.features.reference_track_id || track.behavior.retained_risk?.features.reference_track_id);
+    const preceding = demo.frames.slice(Math.round(req.t_requested / demo.DT)-29, Math.round(req.t_requested / demo.DT)+1);
+    assert.ok(preceding.every((frame) => frame.tracks.find((tr) => tr.id === req.track_id)?.cls === 'suspicious'));
   }
 });
 
@@ -71,12 +75,24 @@ test('safe traffic remains distinguishable across independent sensor-noise seeds
       if (tr.id.startsWith('F')) return; // known own-fleet identity
       const o = associated(f, tr);
       if (tr.cls === 'peaceful' && o) {
-        assert.notEqual(o.kind, 'hostile', 'observed threat pattern must not be cleared, seed ' + seed);
         if (o.kind === 'benign') benignPeaceful++;
       }
     }));
     assert.ok(benignPeaceful >= 100, 'sustained benign peaceful observations, seed ' + seed);
   }
+});
+
+test('a hostile entry needs responsive pursuit and intercept risk, including noisy sensors', () => {
+  const previous = new Map();
+  demo.frames.forEach((f) => f.tracks.forEach((tr) => {
+    if (tr.cls === 'hostile' && previous.get(tr.id) !== 'hostile') {
+      const evidence = tr.behavior.retained_risk || tr.behavior;
+      assert.ok(evidence.reasons.includes('pursuit_with_intercept_risk'));
+      assert.ok(evidence.features.response_count >= 2);
+      assert.ok(tr.pH >= demo.estimatorConfig.hostile_enter);
+    }
+    previous.set(tr.id, tr.cls);
+  }));
 });
 
 test('a friendly dropout coasts and fades to unknown without suspicion or dispatch', () => {

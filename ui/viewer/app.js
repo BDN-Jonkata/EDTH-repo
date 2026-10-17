@@ -6,14 +6,16 @@
   const scen = () => (S.res && S.res.scen) || S.world; // the scenario of the current run
   const COL = { h: '#FF5A5F', f: '#5B9BFF', u: '#F5B13D', line: '#C9D1DB', cyan: '#3FC1D9' };
   const CLASS_NAME = { friendly: 'Friendly', hostile: 'Hostile', suspicious: 'Suspicious', peaceful: 'Peaceful', unknown: 'Unknown' };
-  const PATTERN_NAME = { hover: 'Hovering', transit: 'Transit', orbit: 'Orbit / survey', maneuvering: 'Maneuvering', insufficient_history: 'Collecting history' };
+  const PATTERN_NAME = { hover: 'Hovering', transit: 'Transit', orbit: 'Orbit / survey', pursuit: 'Responsive pursuit', maneuvering: 'Maneuvering', insufficient_history: 'Collecting history' };
   const REASON_NAME = { insufficient_history: 'Collecting enough observed history', ambiguous_motion: 'No clear risk pattern',
-    sustained_safe_transit: 'Sustained steady transit', protected_area_clearance: 'Keeps clear of protected areas',
-    non_converging_course: 'Course stays clear of protected areas', consistent_safe_orbit: 'Consistent survey orbit away from protected areas',
-    developing_transit_pattern: 'Transit pattern still developing', sustained_protected_entry: 'Entry into a protected area',
-    protected_loiter: 'Loitering near a protected asset', persistent_protected_loiter: 'Persistent loiter deep inside a protected area',
-    repeated_protected_intrusions: 'Repeated entries into a protected area', approaching_protected_area: 'Approaching a protected area' };
+    sustained_safe_transit: 'Sustained steady transit', consistent_orbit: 'Consistent orbit',
+    developing_transit_pattern: 'Transit pattern still developing', authorized_corridor_transit: 'Consistent authorized transit',
+    resembles_verified_patrol_only: 'Similar movement does not verify identity', converging_traffic: 'Course converges with observed traffic',
+    sustained_collision_course: 'Sustained predicted intercept with a moving ally', repeated_intercept_approaches: 'Repeated intercept approaches',
+    responsive_pursuit: 'Follows repeated course changes made by an ally', pursuit_with_intercept_risk: 'Responsive pursuit with aggressive closure / intercept risk',
+    recent_encounter_evidence: 'Earlier encounter evidence is decaying' };
   const classColor = (cls) => ({ friendly: COL.f, hostile: COL.h, suspicious: COL.u, peaceful: '#5FD0C0', unknown: '#A9B3BF' }[cls] || COL.u);
+  const percent = (value) => (Math.max(0, Math.min(1, value)) * 100).toFixed(1) + '%';
   const Y = (n) => 1000 - n; // world North -> svg y
 
   const clone = (p) => Object.assign({}, p, { assign: Object.assign({}, p.assign) });
@@ -39,7 +41,6 @@
     ['cover', 'Sensor coverage', true, '<path d="M2 12L7 2l5 10z" fill="none" stroke="#9AA4B2" stroke-width="1.2" stroke-dasharray="2 1.5"/>'],
     ['coverageAge', 'Coverage age', false, '<rect x="2" y="2" width="10" height="10" fill="#3FC1D9" opacity="0.5"/>'],
     ['missions', 'Mission destinations', true, '<path d="M1 12L12 2M7 2h5v5" fill="none" stroke="#5B9BFF"/>'],
-    ['policy', 'Protected areas / corridors', true, '<circle cx="7" cy="7" r="5" fill="none" stroke="#FF8A8D" stroke-dasharray="2 2"/>'],
     ['net', 'Network links', true, '<circle cx="2.5" cy="11.5" r="1.8" fill="#9AA4B2"/><circle cx="11.5" cy="2.5" r="1.8" fill="#9AA4B2"/><path d="M3.5 10.5l7-7" stroke="#9AA4B2" stroke-width="1.2"/>'],
   ];
 
@@ -350,12 +351,6 @@
     $('terrain').innerHTML = S.layers.terrain ? TERRAIN : '';
     $('terrain').style.display = '';
     $('cover').innerHTML = S.layers.cover ? coverageSvg(f) : '';
-    const policy = S.res.behaviorConfig;
-    $('policy').innerHTML = S.layers.policy ? policy.protected_zones.map((z) =>
-      '<circle cx="' + z.x + '" cy="' + Y(z.y) + '" r="' + z.radius_m + '" fill="#FF5A5F" fill-opacity="0.025" stroke="#FF8A8D" stroke-opacity="0.7" stroke-dasharray="6 6"/>' +
-      '<text class="t" x="' + z.x + '" y="' + (Y(z.y) - z.radius_m - 6) + '" text-anchor="middle" style="fill:#FF8A8D">PROTECTED · ' + z.radius_m + ' m</text>').join('') +
-      policy.corridors.map((c) => '<path d="M' + c.start[0] + ' ' + Y(c.start[1]) + 'L' + c.end[0] + ' ' + Y(c.end[1]) +
-        '" stroke="#5FD0C0" stroke-width="' + c.half_width_m * 2 + '" stroke-opacity="0.12" fill="none"/>').join('') : '';
     $('coverageAge').innerHTML = S.layers.coverageAge && f.coverage ? f.coverage.map((last, i) => {
       const age = last < 0 ? 1 : Math.min(1, (f.t - last) / 60);
       const color = last < 0 ? '#FF5A5F' : age > 0.5 ? '#F5B13D' : '#3FC1D9';
@@ -462,7 +457,7 @@
       const cls = { hostile: '◆ HOS', friendly: '● FRD', peaceful: '○ PCF', suspicious: '▲ SUS', unknown: '✣ UNK' }[t.cls];
       const ccol = classColor(t.cls);
       const b = { hostile: 'h', suspicious: 'u', unknown: 'n', peaceful: 'p', friendly: 'f' }[t.cls];
-      return '<tr data-id="' + t.id + '"' + (t.id === S.sel ? ' class="sel"' : '') + '><td><button class="idb ' + b + '" aria-label="Select ' + t.id + '">' + t.id + '</button></td><td style="color:' + ccol + '">' + cls + '</td><td>' + pad4(t.x) + ' ' + pad4(t.y) + '</td><td>' + spd(t.vx, t.vy).toFixed(1) + '</td><td>' + String(Math.round(hdg(t.vx, t.vy))).padStart(3, '0') + '</td><td>' + Math.min(1, t.conf).toFixed(2) + '</td><td>' + t.age.toFixed(1) + 's</td><td>' + (t.cls === 'friendly' ? 'self' : t.nodes.map((n) => n.split(' ')[0]).filter((v, i, a) => a.indexOf(v) === i).join(' ')) + '</td></tr>';
+      return '<tr data-id="' + t.id + '"' + (t.id === S.sel ? ' class="sel"' : '') + '><td><button class="idb ' + b + '" aria-label="Select ' + t.id + '">' + t.id + '</button></td><td style="color:' + ccol + '">' + cls + (t.cls === 'unknown' ? '' : ' ' + percent(t.conf)) + '</td><td data-score="identity">' + percent(t.pF) + '</td><td data-score="risk">' + percent(t.pH) + '</td><td>' + pad4(t.x) + ' ' + pad4(t.y) + '</td><td>' + spd(t.vx, t.vy).toFixed(1) + '</td><td>' + String(Math.round(hdg(t.vx, t.vy))).padStart(3, '0') + '</td><td>' + t.age.toFixed(1) + 's</td><td>' + (t.cls === 'friendly' ? 'self' : t.nodes.map((n) => n.split(' ')[0]).filter((v, i, a) => a.indexOf(v) === i).join(' ')) + '</td></tr>';
     }).join('');
 
     const al = S.res.alerts.filter((a) => a.t <= f.t + 1e-6);
@@ -528,6 +523,15 @@
     const now = t.err !== undefined ? t.err : null;
     const path = pts.map((p, i) => (i ? 'L' : 'M') + p[0].toFixed(1) + ' ' + (46 - Math.min(20, p[1]) * 2).toFixed(1)).join('');
     const sources = t.nodes.length ? t.nodes.map((n) => '<span class="tag">' + n + '</span>').join('') : '<span style="color:#8B96A5">none in last 2 s</span>';
+    const cfg = S.res.estimatorConfig;
+    const rules = [
+      ['friendly', 'Identity ≥ ' + percent(cfg.friendly_enter), 'retain ≥ ' + percent(cfg.friendly_exit)],
+      ['hostile', 'Risk ≥ ' + percent(cfg.hostile_enter), 'retain ≥ ' + percent(cfg.hostile_exit)],
+      ['peaceful', 'Risk ≤ ' + percent(cfg.peaceful_enter), 'retain ≤ ' + percent(cfg.peaceful_exit)],
+      ['suspicious', 'Identity ≤ ' + percent(cfg.suspicious_enter) + ' and risk ≥ ' + percent(cfg.suspicious_threat_enter),
+        'retain identity ≤ ' + percent(cfg.suspicious_exit) + ', risk ≥ ' + percent(cfg.suspicious_threat_exit)],
+      ['unknown', 'No decisive label / insufficient history', 'Needs fresh, usable observations'],
+    ];
     box.innerHTML =
       '<div class="row" style="align-items:center"><span class="mono" style="padding:1px 6px;font-size:12px;font-weight:600;border-radius:2px;' + b + '">' + t.id + '</span><span style="font-size:13px;font-weight:600">' + label + '</span><span class="grow"></span><button class="ibtn" id="centre" aria-label="Centre map on ' + t.id + '"><svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="5" fill="none" stroke="currentColor" stroke-width="1.4"/><circle cx="8" cy="8" r="1.5" fill="currentColor"/></svg></button></div>' +
       '<div style="display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px">' +
@@ -535,13 +539,16 @@
         .map((c) => '<div style="display:flex;flex-direction:column;gap:2px"><span style="font-size:11px;color:#8B96A5">' + c[0] + '</span><span class="mono" style="font-size:13px">' + c[1] + '</span></div>').join('') + '</div>' +
       '<div style="display:flex;flex-direction:column;gap:6px"><span style="font-size:11px;color:#8B96A5">Contributing sensors (last 2 s)</span><div class="mono" style="display:flex;flex-wrap:wrap;gap:6px;font-size:11px">' + sources + '</div></div>' +
       '<div style="display:flex;flex-direction:column;gap:6px"><span style="font-size:11px;color:#8B96A5">Automatic assessment · independent scores</span>' +
-      [['Verified identity', t.pF, '#5B9BFF'], ['Hostile behavior', t.pH, '#FF5A5F']].map(([name, value, color]) =>
+      [['Verified identity', t.pF, '#5B9BFF'], ['Behavior risk', t.pH, '#FF5A5F'], ['Peaceful evidence', 1-t.pH, '#5FD0C0'], ['Observation quality', t.behavior.quality || 0, '#A9B3BF']].map(([name, value, color]) =>
         '<div style="display:flex;justify-content:space-between;font-size:11px"><span>' + name + '</span><span class="mono">' + (value * 100).toFixed(1) + '%</span></div>' +
-        '<div style="height:7px;background:#1B222C"><div style="height:100%;width:' + value * 100 + '%;background:' + color + '"></div></div>').join('') +
+        '<div role="meter" aria-label="' + name + '" aria-valuemin="0" aria-valuemax="100" aria-valuenow="' + (value * 100).toFixed(1) + '" style="height:7px;background:#1B222C"><div style="height:100%;width:' + value * 100 + '%;background:' + color + '"></div></div>').join('') +
       '<span style="font-size:11px;color:#C9D1DB">Observed pattern: ' + (PATTERN_NAME[t.behavior.pattern] || 'Collecting history') +
       ' · ' + (t.behavior.observed_s || 0).toFixed(1) + ' s usable history</span>' +
+      (t.behavior.features?.reference_track_id ? '<span style="font-size:11px;color:#C9D1DB">Compared with ' + t.behavior.features.reference_track_id + ' · ' + t.behavior.features.response_count + ' matched responses · ' + t.behavior.features.response_lag_s + ' s response lag · ' + t.behavior.features.closing_m.toFixed(1) + ' m closed</span>' : '') +
       '<span style="font-size:11px;color:#8B96A5">' + ((t.behavior.reasons || ['insufficient_history']).map((v) => REASON_NAME[v] || v.replace(/_/g, ' ')).join(' · ')) + '</span>' +
-      '<span style="font-size:10px;color:#8B96A5">Simulation policy scores; 50% behavior means no directional evidence. Peaceful does not verify identity.</span></div>' +
+      (t.behavior.retained_risk ? '<span style="font-size:11px;color:#C9D1DB">Earlier encounter · ' + t.behavior.retained_risk.age_s.toFixed(1) + ' s ago · ' + t.behavior.retained_risk.reasons.map((v) => REASON_NAME[v] || v.replace(/_/g, ' ')).join(' · ') + ' · score decaying</span>' : '') +
+      '<div aria-label="Assessment thresholds" style="display:flex;flex-direction:column;gap:5px;font-size:11px">' + rules.map(([cls, enter, retain]) => '<div data-rule="' + cls + '" style="padding:5px;border-left:2px solid ' + classColor(cls) + ';background:' + (t.cls === cls ? '#1B2833' : '#10161D') + '"><b style="color:' + classColor(cls) + '">' + CLASS_NAME[cls] + '</b> · ' + enter + '<br><span style="color:#8B96A5">' + retain + '</span></div>').join('') + '</div>' +
+      '<span style="font-size:10px;color:#8B96A5">Independent simulation scores, not five probabilities that sum to 100%. 50% risk means no directional evidence. Verified identity takes priority; peaceful movement does not verify identity.</span></div>' +
       '<div style="display:flex;flex-direction:column;gap:4px"><div style="display:flex;justify-content:space-between;font-size:11px;color:#8B96A5"><span>Position error vs truth, last 30 s</span><span class="mono" style="color:#C9D1DB">' + (now === null ? 'no truth match' : 'now ' + now.toFixed(1) + ' m') + '</span></div>' +
       '<svg viewBox="0 0 340 56" width="100%" role="img" aria-label="Position error sparkline"><path d="M0 46H340M0 6H340" stroke="#222A35"/>' + (path ? '<path d="' + path + '" fill="none" stroke="#3FC1D9" stroke-width="1.6"/>' : '') + '<text x="0" y="55" class="mono" style="font-size:9px;fill:#8B96A5">0 m</text><text x="0" y="14" class="mono" style="font-size:9px;fill:#8B96A5">20 m</text></svg></div>';
     $('centre').addEventListener('click', () => centreOn(t));

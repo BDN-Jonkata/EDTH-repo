@@ -78,7 +78,7 @@ Clutter objects (`CLUTTER_KINDS` in [seeder/scenario.py](../seeder/scenario.py),
 | bird | erratic: random waypoints, frequent sudden turns, 8 m wobble | 6-14 m/s | 10-60 m | weak: EO 0.6, thermal 0.5, acoustic 0.3, radar 0.3 |
 | vehicle | a road across the area with one bend | 4-12 m/s | 1-2 m | strong: EO 1.3, thermal 1.5, acoustic 1.5, radar 1.5 |
 
-Neither emits RF, so RF never sees them. The system must not call them hostile; the mock baseline does, and its summary counts that as `cfa`.
+Neither emits RF, so RF never sees them. A hostile assessment on one is counted as `cfa` in the mock summary. Ordinary transit and hover alone do not justify hostility.
 
 Generated drone traffic uses `targets.count` for the total and `targets.benign_count`
 (default 0, integer from 0 to count) for non-allied benign drones. The remainder
@@ -88,11 +88,18 @@ does not move existing hostile paths or friendly starting positions. It emits no
 friendly identity beacon. Explicit `targets[]` may set `role: "benign"` or
 `role: "hostile"` (the default).
 
-`targets.behavior_demo: true` gives non-crossing threat scenarios observable
-protected-area hover/loiter, with staggered entry times. These demonstration paths
+`targets.behavior_demo: true` gives non-crossing threat scenarios scripted
+hover/loiter near C2, with staggered entry times. These baseline demonstration paths
 choose their own entry schedule rather than `enter_t`; normal generation defaults
 to `false`. Both roles use the same sensor physics. Roles and future waypoints
 are excluded from the estimator, and flipping roles cannot change its decisions.
+
+The viewer supports `traffic_behaviors: [{id, ally, mode, start_s}]` in the config
+(`mode` is `follow` or `intercept`). These physical actors react to actual allied
+flight after `start_s`, replacing the named target's scripted path. They do not
+read estimated flags and are not part of the seeder's baseline truth generation.
+The busy preset uses them for the zone-free encounter policy. Export viewer truth
+when evaluating their motion; proximity to C2 does not supply hostile evidence.
 
 Per-sensor behaviour (field of view, max range, detection probability that falls with range, noise that grows with range, false-alarm rate, missed detections, sample rate, processing delay) comes from the catalog `sim` block, not the scenario config. The radar module carries a **resolution cell** (about 15 m in range by 3 degrees); two targets inside one cell merge into a single measurement, which is what makes the crossing hard.
 
