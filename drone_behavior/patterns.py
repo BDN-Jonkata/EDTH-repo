@@ -8,10 +8,11 @@ import math
 from dataclasses import dataclass, field
 from typing import Optional
 
+from drone_behavior.encounters import assess as assess_encounter
+
 
 @dataclass
 class BehaviorConfig:
-    protected_zones: list = field(default_factory=list)  # {x, y, radius_m}
     corridors: list = field(default_factory=list)  # {start: [x,y], end: [x,y], half_width_m, max_speed_mps}
     window_s: float = 20.0
     sample_period_s: float = 0.5
@@ -23,8 +24,8 @@ class BehaviorConfig:
 
     @classmethod
     def for_area(cls, c2, **overrides):
-        """Default simulation policy: a 150 m protected radius around our known C2."""
-        return cls(**dict({"protected_zones": [{"x": c2[0], "y": c2[1], "radius_m": 150.0}]}, **overrides))
+        """Compatibility constructor; assessment no longer depends on C2 geography."""
+        return cls(**overrides)
 
     def __post_init__(self):
         for name in ("window_s", "sample_period_s", "min_history_s", "max_gap_s", "max_sigma_m", "memory_ttl_s"):
@@ -32,9 +33,6 @@ class BehaviorConfig:
                 raise ValueError(f"{name} must be finite and positive")
         if not 0 < self.min_existence <= 1 or not self.sample_period_s <= self.max_gap_s <= self.window_s:
             raise ValueError("invalid behaviour sampling or existence settings")
-        for z in self.protected_zones:
-            if not all(math.isfinite(z[k]) for k in ("x", "y", "radius_m")) or z["radius_m"] <= 0:
-                raise ValueError("invalid protected zone")
         for c in self.corridors:
             if (not all(math.isfinite(v) for v in c["start"] + c["end"]) or
                     math.dist(c["start"], c["end"]) <= 0 or
@@ -45,6 +43,16 @@ class BehaviorConfig:
 
 def _mean(values):
     return sum(values) / len(values)
+
+
+def _smooth_history(h):
+    out = [dict(h[0])]
+    for a, b in zip(h, h[1:]):
+        gain = 1 - math.exp(-(b["t"] - a["t"]) / 1.5)
+        p = out[-1]
+        out.append(dict(b, vx=p["vx"] + gain * (b["vx"] - p["vx"]),
+                        vy=p["vy"] + gain * (b["vy"] - p["vy"])))
+    return out
 
 
 def _features(h):
@@ -90,7 +98,7 @@ class BehaviorModel:
     extrapolation; otherwise TrackState.t must be the last observed state time.
     """
 
-    version = "motion-policy-v2"
+    version = "encounter-policy-v3"
 
     def __init__(self, config: Optional[BehaviorConfig] = None, threat_tau_s=20.0, max_dt_s=2.0, evidence_limit=4.0):
         self.config = config or BehaviorConfig()
@@ -102,6 +110,7 @@ class BehaviorModel:
         self.memory = {}
         self.verified = set()
         self._profiles = {}
+        self._allies = {}
 
     def begin(self, t):
         if not math.isfinite(t) or t < self.now:
@@ -109,11 +118,13 @@ class BehaviorModel:
         self.now = t
         self.memory = {k: v for k, v in self.memory.items() if t - v["seen"] <= self.config.memory_ttl_s}
         self.verified.intersection_update(self.memory)
-        # Freeze learned patrol features for this update so input track ordering
-        # cannot change which version of a friendly's history another track sees.
-        self._profiles = {k: _features(self.memory[k]["history"]) for k in self.verified
-                          if len(self.memory[k]["history"]) >= 2 and
-                          self.memory[k]["history"][-1]["t"] - self.memory[k]["history"][0]["t"] >= 10}
+        # Freeze observed ally histories before evaluating any track. Input order
+        # cannot change the reference, and stale/predicted references are excluded.
+        self._allies = {k: _smooth_history(self.memory[k]["history"]) for k in sorted(self.verified)
+                        if k in self.memory and len(self.memory[k]["history"]) >= 2 and
+                        t - self.memory[k]["history"][-1]["t"] <= self.config.max_gap_s and
+                        self.memory[k]["history"][-1]["t"] - self.memory[k]["history"][0]["t"] >= 8}
+        self._profiles = {k: _features(self.memory[k]["history"]) for k in self._allies}
 
     def __call__(self, tr):
         cfg, t = self.config, self.now
@@ -145,10 +156,24 @@ class BehaviorModel:
             score, reasons, features = self._score(tr.track_id, h)
             quality = _mean([s["existence"] for s in h]) / (1 + (_mean([s["sigma"] for s in h]) / 15) ** 2)
             target = max(-self.evidence_limit, min(self.evidence_limit, score * quality))
+            retained = None
+            # Losing one maneuver from the moving window is not a new observation
+            # that disproves an encounter. Keep that bounded evidence while it
+            # decays; a new association or sustained safe motion can clear it.
+            if (m["llr"] > max(0, target) and score > -2 and
+                    h[-1]["t"] - h[0]["t"] >= cfg.min_history_s and m.get("risk")):
+                target = m["llr"]
+                retained = dict(m["risk"], age_s=t - m["risk"]["t"])
+                reasons = reasons + ["recent_encounter_evidence"]
+            elif target > 0:
+                m["risk"] = {"t": t, "reasons": list(reasons), "features": dict(features)}
+            else:
+                m.pop("risk", None)
             increment = target - m["llr"]
             m["llr"] = target
             m["result"] = {"quality": quality, "observed_s": h[-1]["t"] - h[0]["t"],
                            "reasons": reasons, "features": features, "last_observed_t": t,
+                           "retained_risk": retained,
                            "pattern": self._pattern(features) if len(h) >= 2 else "insufficient_history"}
         m["result"] = dict(m["result"], llr=m["llr"], increment=increment, model_version=self.version)
         return increment
@@ -162,75 +187,33 @@ class BehaviorModel:
         f = _features(h)
         if span < cfg.min_history_s - 1e-8:
             return 0.0, ["insufficient_history"], f
-        risk, reasons = 0.0, []
-        outside_all, safe_course = True, True
-        for zone in cfg.protected_zones:
-            radius = zone["radius_m"]
-            ds = [math.hypot(s["x"] - zone["x"], s["y"] - zone["y"]) for s in h]
-            inside = [d + 2 * s["sigma"] < radius for d, s in zip(ds, h)]
-            outside = [d - 2 * s["sigma"] > radius for d, s in zip(ds, h)]
-            outside_all = outside_all and all(d - 2 * s["sigma"] > radius + 40 for d, s in zip(ds, h))
-            last = h[-1]
-            dwell_start = len(h) - 1
-            while dwell_start > 0 and inside[dwell_start - 1]:
-                dwell_start -= 1
-            dwell = last["t"] - h[dwell_start]["t"] if inside[-1] else 0
-            entered = inside[-1] and any(outside[:dwell_start])
-            if entered and dwell >= 2 - 1e-8:
-                risk = max(risk, 1.5)
-                reasons.append("sustained_protected_entry")
-            loiter = f["mean_speed_mps"] < 2 or (f["path_m"] >= 30 and
-                     f["displacement_m"] / max(1, f["path_m"]) < 0.6 and f["turn_coherence"] > 0.65)
-            if inside[-1] and span >= 8 and sum(inside) / len(h) >= 0.6 and loiter:
-                risk = max(risk, 1.8)
-                reasons.append("protected_loiter")
-                if span >= 18 and sum(inside) / len(h) >= 0.85 and ds[-1] + 2 * last["sigma"] < 0.7 * radius:
-                    risk = max(risk, 3.4)
-                    reasons.append("persistent_protected_loiter")
-            entries, last_side = [], None
-            for i, sample in enumerate(h):
-                if outside[i]:
-                    last_side = "outside"
-                elif inside[i] and last_side == "outside":
-                    if not entries or sample["t"] - entries[-1] >= 4:
-                        entries.append(sample["t"])
-                    last_side = "inside"
-            if len(entries) >= 2:
-                risk = max(risk, 3.4)
-                reasons.append("repeated_protected_intrusions")
-            dx, dy = last["x"] - zone["x"], last["y"] - zone["y"]
-            vx, vy = f["course_vx_mps"], f["course_vy_mps"]
-            speed2 = vx ** 2 + vy ** 2
-            ahead = max(0, min(8, -(dx * vx + dy * vy) / max(speed2, 1)))
-            miss = math.hypot(dx + vx * ahead, dy + vy * ahead)
-            closing = -(dx * vx + dy * vy) / max(ds[-1], 1)
-            closest_t = max(0, -(dx * vx + dy * vy) / max(speed2, 1))
-            future_miss = math.hypot(dx + vx * closest_t, dy + vy * closest_t)
-            omega = f["signed_turn_rad_s"]
-            orbit_safe = False
-            if f["total_turn_rad"] >= math.pi / 2 and f["turn_coherence"] > 0.75 and abs(omega) >= 0.04:
-                cx, cy = last["x"] - vy / omega, last["y"] + vx / omega
-                orbit_safe = math.hypot(cx - zone["x"], cy - zone["y"]) - math.sqrt(speed2) / abs(omega) - 2 * last["sigma"] > radius + 40
-            if not orbit_safe and closest_t <= 60 and future_miss - 2 * last["sigma"] <= radius + 40:
-                safe_course = False
-            if (closing > 2 and ds[0] - ds[-1] > max(20, 4 * last["sigma"]) and
-                    ds[-1] < radius + 150 and miss + 2 * last["sigma"] < radius):
-                risk = max(risk, 1.2)
-                reasons.append("approaching_protected_area")
+        risk, reasons, converging = 0.0, [], False
+        motion = _smooth_history(h)
+        for ally_id, history in self._allies.items():
+            if ally_id == track_id:
+                continue
+            score, cues, details, blocked = assess_encounter(motion, history)
+            converging = converging or blocked
+            quality = _mean([s["existence"] for s in history]) / (1 + (_mean([s["sigma"] for s in history]) / 15) ** 2)
+            if score * quality > risk:
+                risk, reasons = score * quality, cues
+                f.update(details, reference_track_id=ally_id)
         if risk:
-            return risk, sorted(set(reasons)), f  # correlated approach/entry cues are not added together
-        if outside_all and safe_course and span >= 10:
+            return risk, reasons, f
+        if converging:
+            return 0.0, ["converging_traffic"], f
+        if span >= 10:
             if any(self._in_corridor(h, c) for c in cfg.corridors):
                 return -3.2, ["authorized_corridor_transit"], f
             if (span >= 15 and f["speed_cv"] < 0.35 and f["mean_speed_mps"] > 2 and
                     f["displacement_m"] > max(60, 0.85 * f["path_m"]) and f["velocity_consistency"] > 0.75 and
                     f["mean_turn_rad_s"] < 0.15):
                 strength = 3.4 * min(1, (span - 10) / 8)
-                return -strength, ["sustained_safe_transit", "protected_area_clearance", "non_converging_course"], f
+                return -strength, ["sustained_safe_transit"], f
             if (span >= 18 and f["path_m"] >= 100 and f["speed_cv"] < 0.3 and
                     f["total_turn_rad"] >= math.pi / 2 and f["turn_coherence"] > 0.75 and
                     0.04 <= f["mean_turn_rad_s"] <= 0.4 and f["velocity_consistency"] > 0.75):
-                return -3.3, ["consistent_safe_orbit", "protected_area_clearance"], f
+                return -3.3, ["consistent_orbit"], f
             if f["speed_cv"] < 0.35 and f["mean_speed_mps"] > 2 and f["displacement_m"] > 0.85 * f["path_m"]:
                 return -0.7, ["developing_transit_pattern"], f
             for friend_id in sorted(self._profiles.keys() - {track_id}):
@@ -242,6 +225,8 @@ class BehaviorModel:
 
     @staticmethod
     def _pattern(f):
+        if f.get("response_count", 0) >= 2:
+            return "pursuit"
         if f["mean_speed_mps"] < 2:
             return "hover"
         if f["total_turn_rad"] >= math.pi / 2 and f["turn_coherence"] > 0.65:

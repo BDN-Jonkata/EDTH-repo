@@ -95,7 +95,6 @@
     <rect width="1000" height="1000" fill="none" stroke="#3A4553" stroke-width="1.5" stroke-dasharray="8 6"/>
     <text class="t" x="8" y="-8" style="fill:#6F7B89">AREA OF OPERATIONS · 1 km²</text>
     <g id="cover"></g>
-    <g id="policy" pointer-events="none"></g>
     <g id="jam"></g>
     <g id="links"></g>
     <g id="raw"></g>
@@ -137,10 +136,11 @@
     <div id="assessmentCounts" style="display:flex;flex-wrap:wrap;gap:6px;font-size:11px" aria-label="Current assessments"></div>
     <div style="overflow-x:auto;margin:0 -6px">
       <table class="tbl mono">
-        <thead><tr><th>ID</th><th>Class</th><th>Pos E/N</th><th>Spd</th><th>Hdg</th><th>Conf</th><th>Age</th><th>Nodes</th></tr></thead>
+        <thead><tr><th>ID</th><th>Class / score</th><th title="Verified identity score from fleet identity and trusted beacons">Identity</th><th title="Observed behavior risk; 50% is neutral evidence">Risk</th><th>Pos E/N</th><th>Spd</th><th>Hdg</th><th>Age</th><th>Nodes</th></tr></thead>
         <tbody id="trkBody"></tbody>
       </table>
     </div>
+    <p class="note">Select a track for its assessment evidence and percentage thresholds.</p>
   </div>
   <div class="sec" style="gap:6px">
     <p class="h">Drone missions</p>
@@ -223,7 +223,9 @@
 <script src="linkcap.js"></script>
 <script src="storefwd.js"></script>
 <script src="drones.js"></script>
+<script src="encounters.js"></script>
 <script src="behavior.js"></script>
+<script src="traffic.js"></script>
 <script src="friend-foe.js"></script>
 <script src="investigations.js"></script>
 <script src="sim.js"></script>

@@ -49,7 +49,7 @@
       this.received = this.received * forget + friendly.filter((v) => matches.get(v.track_id)?.fresh).length;
       this.expected = this.expected * forget + friendly.length * c.beacon_rate_hz * dt;
       this.memory.forEach((m, id) => { if (t - m.lastT > c.memory_ttl_s) this.memory.delete(id); });
-      this.behavior.verified = new Set(out.filter((v) => v.cls === 'friendly' && v.matched_beacon !== null).map((v) => v.track_id));
+      this.behavior.verified = new Set(out.filter((v) => v.cls === 'friendly').map((v) => v.track_id));
       this.lastT = t; this.lastResult = out;
       return out;
     }

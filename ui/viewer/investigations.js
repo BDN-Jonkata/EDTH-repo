@@ -58,6 +58,11 @@
     geometry(tr, drone, t) {
       const task = tr.investigation;
       if (!task) return null;
+      // The ally being approached keeps its mission. A different observer must
+      // identify the contact; turning the approached ally into its follower
+      // would reverse the encounter and compromise the motion evidence.
+      const references = [tr.behavior?.features?.reference_track_id, tr.behavior?.retained_risk?.features?.reference_track_id];
+      if (references.includes(drone.id)) return null;
       // Re-evaluate along the actual line of sight, including local weather events.
       const choices = this.sensors.filter((s) => s.node === drone.id).map((s) => {
         if (s.kind === 'RF' && !Object.entries(tr.srcs).some(([key, seen]) => key.endsWith(' RF') && t - seen <= 3))

@@ -18,9 +18,9 @@ class AutomaticEstimator:
 
     @classmethod
     def for_scenario(cls, scenario, config=None):
-        # Own C2 and policy configuration are public inputs. Targets/clutter/roles are never read.
+        # Policy and the own-fleet roster are public inputs. Targets/clutter/roles are never read.
         policy = scenario.get("config", {}).get("drone_behavior", {})
-        return cls(BehaviorConfig.for_area(scenario["c2"], **policy), for_scenario(scenario, config),
+        return cls(BehaviorConfig(**policy), for_scenario(scenario, config),
                    [f["id"] for f in scenario["friendlies"]])
 
     def update(self, t, tracks, beacons):
@@ -29,7 +29,7 @@ class AutomaticEstimator:
         if self._last_t is not None and t <= self._last_t:
             return list(self._last_result)
         result = self.estimator.update(t, tracks, beacons)
-        self.behavior.verified = {c.track_id for c in result if c.cls == "friendly" and c.matched_beacon is not None}
+        self.behavior.verified = {c.track_id for c in result if c.cls == "friendly"}
         self._last_t, self._last_result = t, result
         return result
 

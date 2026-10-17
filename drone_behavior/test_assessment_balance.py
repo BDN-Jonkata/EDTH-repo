@@ -30,9 +30,9 @@ def test_sustained_safe_transit_can_be_peaceful_without_an_authorized_corridor()
     assert 'sustained_safe_transit' in model.explain('opaque')['reasons']
 
 
-def test_a_single_protected_area_crossing_does_not_establish_hostile_intent():
+def test_transit_through_the_old_zone_is_location_independent():
     _, found = simulate(lambda t: (200 + 10 * t, 500, 10, 0), duration=60)
-    assert 'suspicious' in {c.cls for c in found}
+    assert found[-1].cls == 'peaceful'
     assert all(c.cls != 'hostile' for c in found)
 
 
@@ -41,13 +41,12 @@ def test_low_quality_motion_stays_unknown_instead_of_accusing_a_silent_object():
     assert all(c.cls == 'unknown' for c in found)
 
 
-def test_persistent_loiter_is_different_from_an_ordinary_crossing():
+def test_hovering_near_c2_alone_does_not_establish_hostility():
     _, loiter = simulate(lambda t: (500, 500, 0, 0))
-    assert loiter[-1].cls == 'hostile'
-    assert all(c.cls != 'hostile' for c in loiter if c.t < 18)
+    assert {c.cls for c in loiter} == {'unknown'}
 
 
-def test_sustained_history_is_required_before_peaceful_and_new_risk_revokes_it():
+def test_sustained_history_is_required_and_hovering_removes_transit_evidence():
     def path(t):
         if t < 25:
             return (250 + 10 * t, 100, 10, 0)
@@ -56,8 +55,8 @@ def test_sustained_history_is_required_before_peaceful_and_new_risk_revokes_it()
         return (500, 500, 0, 0)
     _, found = simulate(path, duration=95)
     assert any(c.cls == 'peaceful' for c in found if c.t < 25)
-    assert all(c.cls != 'peaceful' for c in found if 60 <= c.t <= 65)
-    assert found[-1].cls == 'hostile'
+    assert all(c.cls == 'unknown' for c in found if c.t < 15)
+    assert found[-1].cls == 'unknown'
 
 
 def test_velocity_noise_does_not_make_a_consistent_transit_erratic():
@@ -79,17 +78,12 @@ def test_consistent_offsite_orbit_is_peaceful_throughout_its_cycle(noisy):
     model, found = simulate(path, duration=65)
     assert all(c.cls == 'peaceful' for c in found if c.t >= 25)
     assert model.explain('opaque')['pattern'] == 'orbit'
-    assert 'consistent_safe_orbit' in model.explain('opaque')['reasons']
+    assert 'consistent_orbit' in model.explain('opaque')['reasons']
 
 
-def test_repeated_boundary_intrusions_need_multiple_observed_entries():
-    def path(t):
-        return (650 + 35 * math.cos(t / 2), 500, -17.5 * math.sin(t / 2), 0)
-    model, found = simulate(path, duration=20)
-    assert any(c.cls == 'suspicious' for c in found)
-    first_hostile = next(c for c in found if c.cls == 'hostile')
-    assert first_hostile.t >= 15  # a second complete outside-to-inside entry
-    assert 'repeated_protected_intrusions' in model.explain('opaque')['reasons']
+def test_repeated_motion_across_a_fixed_boundary_is_not_enemy_evidence():
+    _, found = simulate(lambda t: (650+35*math.cos(t/2), 500, -17.5*math.sin(t/2), 0))
+    assert all(c.cls not in ('suspicious', 'hostile') for c in found)
 
 
 def test_association_jump_discards_the_previous_objects_peaceful_history():

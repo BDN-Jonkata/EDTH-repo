@@ -8,7 +8,10 @@ Status: done and tested for the central baseline. See [tracker](../tracker/track
 |------|----------|
 | [run.py](run.py) | `Pipeline(scenario, seed).step(t)`, `run(scenario, seed)` (frames of confirmed tracks), `scored_frames(scenario, seed)` (the tracks with the estimator's classes, ready for `scoring.metrics.score`) |
 | [sweep.py](sweep.py) | `python -m pipeline.sweep --set test --seeds 20 [--weather fog+wind] [--birds 2 --vehicles 2] [--csv file]`: the metrics over message loss |
+| [nodes.py](nodes.py) | `NodeTrackers`: the distributed mode, a tracker per node on its own readings that shares `local_track` messages; the merger is in [fusion/](../fusion/fusion.md). Switch it on with `--distributed` |
 | `test_run.py` | End-to-end tests |
+
+Sweep options: `--investigate`, `--keep-identity` (the [predictor](../predictor/predictor.md)'s identity keeper), `--distributed`, and `--paired investigate|identity|distributed` to compare with and without one on the same seeds. All are off by default.
 
 ```
 sensors/observe.py + sensors/beacons.py    what the nodes sense and send (needs the true positions)

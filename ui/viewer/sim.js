@@ -24,6 +24,7 @@
   const LinkCap = typeof window !== 'undefined' ? window.LinkCap : require('./linkcap.js');
   const StoreFwd = typeof window !== 'undefined' ? window.StoreFwd : require('./storefwd.js');
   const Behavior = typeof window !== 'undefined' ? window.Behavior : require('./behavior.js');
+  const Traffic = typeof window !== 'undefined' ? window.Traffic : require('./traffic.js');
   const FriendFoe = typeof window !== 'undefined' ? window.FriendFoe : require('./friend-foe.js');
   const Investigations = typeof window !== 'undefined' ? window.Investigations : require('./investigations.js');
   const CAT = typeof CATALOG !== 'undefined' ? CATALOG : require('./catalog.js'); // eslint-disable-line no-undef
@@ -338,6 +339,7 @@
       c.alerts.push({ t, text, sev: 'info' }); c.timeline.push({ t, label: text, color: 'amber' });
     }, { requireInvestigation: true, geometry: (tr, d, t) => c.investigations.geometry(tr, d, t) });
     const policy = c.P.behavior || (c.P.scenario?.config?.drone_behavior) || {};
+    c.traffic = new Traffic(c.P.traffic || c.P.scenario?.config?.traffic_behaviors, world.targets, world.friendlies, DT);
     c.classifier = new FriendFoe.AutomaticEstimator(Behavior.configFor([world.c2.x, world.c2.y], policy),
       { beacon_rate_hz: world.beacon.rate_hz || 2 }, fleet.map((f) => f.id));
   }
@@ -368,6 +370,7 @@
     c.missions.observe(t, k, (id) => alive(c, id, t), (s, sp, tg) => sensorAt(c, s, t, sp, tg));
     stepDrones(c, t);
     issueCommands(c, t);
+    c.traffic.step(t, (id, at) => friendlyState(c, c.world.friendlies.find((f) => f.id === id), at));
     const truth = truthAt(c, t);
     sendAll(c, k, t, sense(c, k, t, truth));
     drainLinks(c, t);
@@ -405,6 +408,7 @@
       missionConfig: { cellSize: Mission.CELL, areaSize: Mission.SIZE, separation: Mission.SEP,
         patrolSpacing: Mission.COMFORT, maxAcceleration: Mission.ACCEL, maxYawDegSec: Mission.YAW_RATE * RAD2DEG },
       behaviorConfig: c.classifier.behavior.config,
+      estimatorConfig: { ...c.classifier.config },
       investigations: { requests: c.investigations.requests, statuses: c.investigations.statuses },
     });
   }
@@ -440,7 +444,7 @@
     const truth = [];
     c.world.friendlies.forEach((f) => truth.push(Object.assign({ id: f.id, kind: 'friendly' }, friendlyState(c, f, t))));
     c.world.targets.forEach((h) => {
-      const st = hoState(h, t);
+      const st = c.traffic.actors.has(h.id) ? c.traffic.state(h.id, t) : hoState(h, t);
       if (st) truth.push(Object.assign({ id: h.id, kind: h.role === 'benign' ? 'benign' : 'hostile' }, st));
     });
     c.world.clutter.forEach((o) => {
@@ -451,6 +455,7 @@
   }
   function targetAt(c, obj, t) {
     if (obj.kind === 'friendly') return friendlyState(c, c.world.friendlies.find((f) => f.id === obj.id), t);
+    if (c.traffic.actors.has(obj.id)) return c.traffic.state(obj.id, t);
     return hoState(c.pathById[obj.id], t);
   }
 

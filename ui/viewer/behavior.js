@@ -2,11 +2,20 @@
  * Keep these implementations in step with test-behavior.js shared cases. */
 (function (global) {
   'use strict';
+  const Encounters = typeof window !== 'undefined' ? window.Encounters : require('./encounters.js');
   const mean = (a) => a.reduce((s, v) => s + v, 0) / a.length;
-  const defaults = { protected_zones: [], corridors: [], window_s: 20, sample_period_s: 0.5,
+  const defaults = { corridors: [], window_s: 20, sample_period_s: 0.5,
     min_history_s: 4, max_gap_s: 2, max_sigma_m: 25, min_existence: 0.6, memory_ttl_s: 30 };
   function configFor(c2, overrides) {
-    return Object.assign({}, defaults, { protected_zones: [{ x: c2[0], y: c2[1], radius_m: 150 }] }, overrides || {});
+    return Object.assign({}, defaults, overrides || {});
+  }
+  function smoothHistory(h) {
+    const out = [{ ...h[0] }];
+    for (let i = 1; i < h.length; i++) {
+      const a = h[i - 1], b = h[i], gain = 1 - Math.exp(-(b.t - a.t) / 1.5), p = out.at(-1);
+      out.push({ ...b, vx: p.vx + gain * (b.vx - p.vx), vy: p.vy + gain * (b.vy - p.vy) });
+    }
+    return out;
   }
   function features(h) {
     const motion = [[h[0].vx, h[0].vy]], angles = [];
@@ -42,26 +51,26 @@
         if (!Number.isFinite(c[k]) || c[k] <= 0) throw new Error(k + ' must be finite and positive');
       if (!(c.min_existence > 0 && c.min_existence <= 1 && c.sample_period_s <= c.max_gap_s && c.max_gap_s <= c.window_s))
         throw new Error('invalid behaviour sampling or existence settings');
-      c.protected_zones.forEach((z) => {
-        if (![z.x, z.y, z.radius_m].every(Number.isFinite) || z.radius_m <= 0) throw new Error('invalid protected zone');
-      });
       c.corridors.forEach((q) => {
         if (!q.start.concat(q.end, [q.half_width_m, q.max_speed_mps ?? 30]).every(Number.isFinite) ||
             Math.hypot(q.end[0] - q.start[0], q.end[1] - q.start[1]) <= 0 || q.half_width_m <= 0 || (q.max_speed_mps ?? 30) <= 0)
           throw new Error('invalid authorized corridor');
       });
-      this.now = 0; this.memory = new Map(); this.verified = new Set(); this.profiles = new Map();
+      this.now = 0; this.memory = new Map(); this.verified = new Set(); this.profiles = new Map(); this.allies = new Map();
     }
     begin(t) {
       if (!Number.isFinite(t) || t < this.now) throw new Error('behaviour time must be finite and monotonic');
       this.now = t;
       this.memory.forEach((m, id) => { if (t - m.seen > this.config.memory_ttl_s) { this.memory.delete(id); this.verified.delete(id); } });
-      this.profiles = new Map();
-      this.verified.forEach((id) => {
+      this.profiles = new Map(); this.allies = new Map();
+      [...this.verified].sort().forEach((id) => {
         const h = this.memory.get(id)?.history || [];
-        if (h.length >= 2 && h.at(-1).t - h[0].t >= 10) this.profiles.set(id, features(h));
+        if (h.length >= 2 && t - h.at(-1).t <= this.config.max_gap_s && h.at(-1).t - h[0].t >= 8) {
+          this.profiles.set(id, features(h)); this.allies.set(id, smoothHistory(h));
+        }
       });
     }
+
     evidence(tr) {
       const c = this.config, t = this.now;
       if (!this.memory.has(tr.track_id)) this.memory.set(tr.track_id, {
@@ -85,87 +94,55 @@
         m.obs = obs; m.eval = t;
         h.push({ t, x: tr.position[0], y: tr.position[1], vx: tr.velocity[0], vy: tr.velocity[1], sigma: tr.pos_sigma, existence: tr.existence_prob });
         m.history = h = h.filter((s) => t - s.t <= c.window_s + 1e-8);
-        const [score, reasons, f] = this.score(tr.track_id, h);
+        let [score, reasons, f] = this.score(tr.track_id, h);
         const quality = mean(h.map((s) => s.existence)) / (1 + (mean(h.map((s) => s.sigma)) / 15) ** 2);
-        const target = Math.max(-this.evidenceLimit, Math.min(this.evidenceLimit, score * quality));
+        let target = Math.max(-this.evidenceLimit, Math.min(this.evidenceLimit, score * quality)), retained = null;
+        if (m.llr > Math.max(0, target) && score > -2 && h.at(-1).t - h[0].t >= c.min_history_s && m.risk) {
+          target = m.llr; retained = { ...m.risk, age_s: t - m.risk.t };
+          reasons = reasons.concat('recent_encounter_evidence');
+        } else if (target > 0) m.risk = { t, reasons: reasons.slice(), features: { ...f } };
+        else delete m.risk;
         increment = target - m.llr; m.llr = target;
         m.result = { quality, observed_s: h.at(-1).t - h[0].t, reasons, features: f, last_observed_t: t,
+          retained_risk: retained,
           pattern: h.length >= 2 ? Model.pattern(f) : 'insufficient_history' };
       }
-      m.result = Object.assign({}, m.result, { llr: m.llr, increment, model_version: 'motion-policy-v2' });
+      m.result = Object.assign({}, m.result, { llr: m.llr, increment, model_version: 'encounter-policy-v3' });
       return increment;
     }
     explain(id) { return Object.assign({}, this.memory.get(id)?.result || {}); }
     score(id, h) {
       const c = this.config, span = h.at(-1).t - h[0].t, f = features(h);
       if (span < c.min_history_s - 1e-8) return [0, ['insufficient_history'], f];
-      let risk = 0, outsideAll = true, safeCourse = true;
-      const reasons = [];
-      c.protected_zones.forEach((z) => {
-        const radius = z.radius_m, ds = h.map((s) => Math.hypot(s.x - z.x, s.y - z.y));
-        const inside = ds.map((d, i) => d + 2 * h[i].sigma < radius), outside = ds.map((d, i) => d - 2 * h[i].sigma > radius);
-        outsideAll = outsideAll && ds.every((d, i) => d - 2 * h[i].sigma > radius + 40);
-        const last = h.at(-1);
-        let start = h.length - 1;
-        while (start > 0 && inside[start - 1]) start--;
-        const dwell = inside.at(-1) ? last.t - h[start].t : 0;
-        if (inside.at(-1) && outside.slice(0, start).some(Boolean) && dwell >= 2 - 1e-8) {
-          risk = Math.max(risk, 1.5); reasons.push('sustained_protected_entry');
-        }
-        const loiter = f.mean_speed_mps < 2 || (f.path_m >= 30 && f.displacement_m / Math.max(1, f.path_m) < 0.6 && f.turn_coherence > 0.65);
-        if (inside.at(-1) && span >= 8 && inside.filter(Boolean).length / h.length >= 0.6 && loiter) {
-          risk = Math.max(risk, 1.8); reasons.push('protected_loiter');
-          if (span >= 18 && inside.filter(Boolean).length / h.length >= 0.85 && ds.at(-1) + 2 * last.sigma < 0.7 * radius) {
-            risk = Math.max(risk, 3.4); reasons.push('persistent_protected_loiter');
-          }
-        }
-        const entries = [];
-        let lastSide = null;
-        h.forEach((s, i) => {
-          if (outside[i]) lastSide = 'outside';
-          else if (inside[i] && lastSide === 'outside') {
-            if (!entries.length || s.t - entries.at(-1) >= 4) entries.push(s.t);
-            lastSide = 'inside';
-          }
-        });
-        if (entries.length >= 2) {
-          risk = Math.max(risk, 3.4); reasons.push('repeated_protected_intrusions');
-        }
-        const dx = last.x - z.x, dy = last.y - z.y, vx = f.course_vx_mps, vy = f.course_vy_mps, speed2 = vx ** 2 + vy ** 2;
-        const ahead = Math.max(0, Math.min(8, -(dx * vx + dy * vy) / Math.max(speed2, 1)));
-        const miss = Math.hypot(dx + vx * ahead, dy + vy * ahead);
-        const closing = -(dx * vx + dy * vy) / Math.max(ds.at(-1), 1);
-        const closestT = Math.max(0, -(dx * vx + dy * vy) / Math.max(speed2, 1));
-        const futureMiss = Math.hypot(dx + vx * closestT, dy + vy * closestT);
-        const omega = f.signed_turn_rad_s;
-        let orbitSafe = false;
-        if (f.total_turn_rad >= Math.PI / 2 && f.turn_coherence > 0.75 && Math.abs(omega) >= 0.04) {
-          const cx = last.x - vy / omega, cy = last.y + vx / omega;
-          orbitSafe = Math.hypot(cx - z.x, cy - z.y) - Math.sqrt(speed2) / Math.abs(omega) - 2 * last.sigma > radius + 40;
-        }
-        if (!orbitSafe && closestT <= 60 && futureMiss - 2 * last.sigma <= radius + 40) safeCourse = false;
-        if (closing > 2 && ds[0] - ds.at(-1) > Math.max(20, 4 * last.sigma) && ds.at(-1) < radius + 150 && miss + 2 * last.sigma < radius) {
-          risk = Math.max(risk, 1.2); reasons.push('approaching_protected_area');
-        }
+      let risk = 0, reasons = [], converging = false;
+      const motion = smoothHistory(h);
+      this.allies.forEach((history, allyId) => {
+        if (allyId === id) return;
+        const [score, cues, details, blocked] = Encounters.assess(motion, history);
+        converging ||= blocked;
+        const quality = mean(history.map((s) => s.existence)) / (1 + (mean(history.map((s) => s.sigma)) / 15) ** 2);
+        if (score * quality > risk) { risk = score * quality; reasons = cues; Object.assign(f, details, { reference_track_id: allyId }); }
       });
-      if (risk) return [risk, Array.from(new Set(reasons)).sort(), f];
-      if (outsideAll && safeCourse && span >= 10) {
+      if (risk) return [risk, reasons, f];
+      if (converging) return [0, ['converging_traffic'], f];
+      if (span >= 10) {
         if (c.corridors.some((q) => Model.inCorridor(h, q))) return [-3.2, ['authorized_corridor_transit'], f];
         if (span >= 15 && f.speed_cv < 0.35 && f.mean_speed_mps > 2 && f.displacement_m > Math.max(60, 0.85 * f.path_m) && f.velocity_consistency > 0.75 && f.mean_turn_rad_s < 0.15)
-          return [-3.4 * Math.min(1, (span - 10) / 8), ['sustained_safe_transit', 'protected_area_clearance', 'non_converging_course'], f];
+          return [-3.4 * Math.min(1, (span - 10) / 8), ['sustained_safe_transit'], f];
         if (span >= 18 && f.path_m >= 100 && f.speed_cv < 0.3 && f.total_turn_rad >= Math.PI / 2 && f.turn_coherence > 0.75 && f.mean_turn_rad_s >= 0.04 && f.mean_turn_rad_s <= 0.4 && f.velocity_consistency > 0.75)
-          return [-3.3, ['consistent_safe_orbit', 'protected_area_clearance'], f];
-        if (f.speed_cv < 0.35 && f.mean_speed_mps > 2 && f.displacement_m > 0.85 * f.path_m)
-          return [-0.7, ['developing_transit_pattern'], f];
-        for (const otherId of Array.from(this.profiles.keys()).filter((k) => k !== id).sort()) {
-          const pf = this.profiles.get(otherId);
+          return [-3.3, ['consistent_orbit'], f];
+        if (f.speed_cv < 0.35 && f.mean_speed_mps > 2 && f.displacement_m > 0.85 * f.path_m) return [-0.7, ['developing_transit_pattern'], f];
+        for (const friendId of [...this.profiles.keys()].filter((k) => k !== id).sort()) {
+          const pf = this.profiles.get(friendId);
           if (Math.abs(pf.mean_speed_mps - f.mean_speed_mps) < 2 && Math.abs(pf.mean_turn_rad_s - f.mean_turn_rad_s) < 0.05)
             return [-0.5, ['resembles_verified_patrol_only'], f];
         }
       }
       return [0, ['ambiguous_motion'], f];
     }
+
     static pattern(f) {
+      if ((f.response_count || 0) >= 2) return 'pursuit';
       if (f.mean_speed_mps < 2) return 'hover';
       if (f.total_turn_rad >= Math.PI / 2 && f.turn_coherence > 0.65) return 'orbit';
       if (f.displacement_m > 0.85 * f.path_m && f.speed_cv < 0.35) return 'transit';

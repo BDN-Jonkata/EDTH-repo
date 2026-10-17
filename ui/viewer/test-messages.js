@@ -3,6 +3,8 @@ const assert = require('assert');
 const Sim = require('./sim.js');
 const Messages = require('./messages.js');
 const SCENARIOS = require('./scenarios.js');
+const Investigations = require('./investigations.js');
+const Weather = require('./weather.js');
 
 const TASKS = [{ t: 10, drone_id: 'F2', command: 'goto', target: [500, 500, 60] }, { t: 40, drone_id: 'F2', command: 'return_to_patrol' }];
 // every message sent in a run, lost or not
@@ -17,6 +19,20 @@ const isSquare = (M, n) => M.length === n && M.every((row) => row.length === n);
 const tests = [];
 const test = (name, fn) => tests.push([name, fn]);
 
+// A format test should exercise the contract even when a scenario correctly has
+// no dispatch. Classification behavior is covered by test-assessments.js.
+function investigationMessages() {
+  const out = [], mod = Sim.MODULES.eo_visible_mini4;
+  const sensors = [{ node: 'F1', module: mod.id, mod, sm: mod.sim, kind: 'EO', minRange: mod.sim.min_range_m }];
+  const inv = new Investigations.Controller(sensors, ['F1'], Weather.providerFor({}, 'clear', null).provider,
+    () => ({ pd: 1, range: mod.sim.range_m }), (m) => out.push(m), {});
+  const tr = { id: 'U1', cls: 'suspicious', status: 'confirmed', s: [500, 500, 0, 0],
+    P: [4, 0, 0, 0, 0, 4], srcs: {}, classification: { class_prob: 0.8, p_friendly: 0.2 } };
+  inv.update(0, [tr]); inv.update(3, [tr]);
+  inv.sync(3, [{ id: 'F1', mode: 'follow', target: tr, x: 400, y: 500 }]);
+  return out;
+}
+
 test('makeHeader: msg_id, per-source seq, schema_version', () => {
   const seqs = {};
   const a = Messages.makeHeader(seqs, 'C2', 1.5), b = Messages.makeHeader(seqs, 'C2', 2), c = Messages.makeHeader(seqs, 'F1', 2);
@@ -26,15 +42,17 @@ test('makeHeader: msg_id, per-source seq, schema_version', () => {
 });
 
 test('every message has a type and the full header, and msg_id is unique', () => {
-  const msgs = sent({});
-  const types = new Set(msgs.map((m) => m.type));
+  const runs = [sent({}), investigationMessages()];
+  const types = new Set(runs.flat().map((m) => m.type));
   assert.deepStrictEqual([...types].sort(), ['drone_command', 'drone_state', 'friendly_beacon', 'investigation_request', 'investigation_status', 'observation']);
-  msgs.forEach((m) => assert.deepStrictEqual(Object.keys(m.header), Messages.HEADER_FIELDS, m.type));
-  assert.strictEqual(new Set(msgs.map((m) => m.header.msg_id)).size, msgs.length, 'msg_id repeats');
-  const last = {};
-  msgs.forEach((m) => { // seq counts up by one per source
-    assert.strictEqual(m.header.seq, (last[m.header.source_id] || 0) + 1, m.header.msg_id);
-    last[m.header.source_id] = m.header.seq;
+  runs.forEach((msgs) => {
+    msgs.forEach((m) => assert.deepStrictEqual(Object.keys(m.header), Messages.HEADER_FIELDS, m.type));
+    assert.strictEqual(new Set(msgs.map((m) => m.header.msg_id)).size, msgs.length, 'msg_id repeats');
+    const last = {};
+    msgs.forEach((m) => { // seq counts up by one per source within a run
+      assert.strictEqual(m.header.seq, (last[m.header.source_id] || 0) + 1, m.header.msg_id);
+      last[m.header.source_id] = m.header.seq;
+    });
   });
 });
 
