@@ -10,7 +10,7 @@ Every scenario is fully defined by **one JSON config plus a seed**, so any run c
 
 - **Reproducible:** same config + same seed = identical run. Sensor noise, network and clutter use separate random streams so changing one does not change the others.
 - **Ground truth is a separate file** (`truth.json`) that the tracker and fusion never read. Only scoring reads it.
-- **Separate seed sets:** tuning seeds 1-99, final-test seeds 1000-1099. Never tune on the test seeds.
+- **Separate seed sets:** tuning seeds 1-99, final-test seeds 1000-1099. Never tune on the test seeds. `generate.py --sweep tuning|test` generates every seed of a set (layout in [data-formats.md](data-formats.md)).
 - **Plain JSON out:** scenario, truth and results are JSON, so the same files drive the simulation, the scoring and the demo, and can be stored as JSONB in PostgreSQL.
 - **Platforms come from the catalog** (`seeder/catalog/`): a config names a platform id and gets its sensor modules.
 

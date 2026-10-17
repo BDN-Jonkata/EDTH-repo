@@ -148,9 +148,13 @@ def with_clutter(name, birds=3, vehicles=2):
 
 
 class Clutter(unittest.TestCase):
-    def test_none_by_default(self):
+    def test_none_unless_the_preset_asks_for_them(self):
         for p in PRESETS:
-            scenario, truth = sc.generate(json.loads(p.read_text(encoding="utf-8")))
+            config = json.loads(p.read_text(encoding="utf-8"))
+            asked = config.get("environment", {}).get("clutter", {})
+            if asked.get("birds") or asked.get("vehicles"):
+                continue
+            scenario, truth = sc.generate(config)
             self.assertEqual(scenario["clutter"], [], p.stem)
             self.assertFalse([o for o in truth["objects"] if o["kind"] == "clutter"], p.stem)
 
@@ -183,6 +187,30 @@ class Clutter(unittest.TestCase):
         self.assertFalse([e for e in truth["events"] if e.get("id", "").startswith(("B", "V"))], "events are about hostiles only")
         first = clutter[0]["samples"][0]
         self.assertEqual(first[1:3], [round(v, 1) for v in sc._target_pos(scenario["clutter"][0], first[0])], "same motion as hostiles")
+
+
+class NewFeaturePresets(unittest.TestCase):
+    def test_dusk_has_a_sky_with_a_sunset_and_a_fog_event(self):
+        env = sc.generate(load("dusk"), truth_dt=5.0)[0]["environment"]
+        self.assertEqual(env["sky"]["time_scale"], 60)
+        self.assertTrue(env["weather_events"][0]["zone"])
+        self.assertGreater(env["clutter"]["birds"], 0)
+
+    def test_jammed_has_zones_and_a_bandwidth_cap(self):
+        net = sc.generate(load("jammed"), truth_dt=5.0)[0]["degradations"]["network"]
+        self.assertEqual(net["bandwidth_kbps"], 32)
+        self.assertEqual(len(net["jamming_zones"]), 2)
+
+
+class VerificationWorksheet(unittest.TestCase):
+    def test_lists_exactly_the_unverified_entries(self):
+        import unverified
+        catalog = cat.load_catalog()
+        text = unverified.worksheet(catalog)
+        for m in catalog["modules"]:
+            self.assertEqual("### %s (" % m["id"] in text, not m.get("verified"), m["id"])
+        for p in catalog["platforms"]:
+            self.assertEqual("### %s" % p["id"] + chr(10) in text, not p.get("verified"), p["id"])
 
 
 class Validation(unittest.TestCase):

@@ -2,7 +2,7 @@
 
 What is left on the seeder, in the order to do it. Each task says why, what changes, how it is tested and what could go wrong. Update the status column as tasks finish; do not start a task without its plan being agreed. Config keys referred to here are in [seeder-config.md](seeder-config.md), file formats in [data-formats.md](data-formats.md).
 
-Done so far: catalog and PostgreSQL storage, scenario generator with four presets, seed sets, compact saved runs and shared DB dump, commanded drone motion (mock), flight limits.
+Done so far: catalog and PostgreSQL storage, scenario generator with seven presets, seed sets, compact saved runs and shared DB dump, commanded drone motion (mock), flight limits.
 
 | # | Task | Why | Status |
 |---|------|-----|--------|
@@ -10,7 +10,7 @@ Done so far: catalog and PostgreSQL storage, scenario generator with four preset
 | 2 | Clutter objects (birds, vehicles) | The tracker and friend/foe must not call them hostile; today there is only a false-alarm rate | done |
 | 3 | Jamming zones | Graceful degradation under electronic warfare is the point of the task | done |
 | 4 | Bandwidth limits | Link capacity makes "share compact tracks, not raw observations" matter | done |
-| 5 | Scenario sweeps | A table of results over many seeds for tuning and the final test | blocked by scoring |
+| 5 | Scenario sweeps | A table of results over many seeds for tuning and the final test | done |
 | 6 | Moving ground units | Only if the mentor says ground units move | blocked by mentor |
 | 7 | Terrain and line of sight | Only if the mentor confirms terrain matters; the largest piece | blocked by mentor |
 | 8 | Catalog verification | Replace assumed numbers with datasheet values | needs people |
@@ -60,15 +60,17 @@ Done so far: catalog and PostgreSQL storage, scenario generator with four preset
 
 **Change:** `python seeder/generate.py scenarios/hard.json --sweep tuning` (or `test`) generates all seeds of a set and writes one summary file per run for scoring to read. The final test set is run once, at the end.
 
-**Blocked by:** the scoring module. Until then it only produces the files.
+**Done:** `seeder/sweep.py` (`sweep()`, `write_run()`) and `generate.py --sweep tuning|test [--count N]`. One folder per seed with `scenario.json`, `truth.json` and a small `run.json`, plus an `index.json`; layout in [data-formats.md](data-formats.md). It refuses to be mixed with `--seed`, `--seed-set` or `--save-db`, and prints a reminder that the test set is run once. It does not run the simulation or the scoring: Kris's `scoring/sweep.py` scores the friend/foe adapter's tracks, and `python -m scoring.run` scores one run from its `truth.json`. Verified: single-run output of `hard` and `challenge` byte-identical to before; 7 new tests (49 in total); a 3-seed sweep scored through the scoring module's truth loader. The layout is my proposal: Kris has not confirmed that it is what he wants to read.
 
 ## 6 and 7. Moving ground units, terrain
 
-Do not plan in detail before the mentor answers what ground units are and whether terrain blocks sight. If yes: ground units reuse the waypoint motion of hostiles plus a platform with sensors; terrain adds a height map and a visibility test for every sensor-target pair (the hot spot for performance).
+Do not plan in detail before the mentor answers what ground units are and whether terrain blocks sight.
+
+**Questions for the mentor (one go):** (1) Are ground units vehicles that move, or only fixed sensors like today? (2) If they move, do they carry sensors, or are they targets, friendlies or neutral traffic? (3) Does terrain (hills, buildings, trees) block sight or radio between a sensor and a target? (4) If yes, do we get a height map or only a description, and how large is the area? (5) Where is the village (the sky's latitude and longitude)? If yes: ground units reuse the waypoint motion of hostiles plus a platform with sensors; terrain adds a height map and a visibility test for every sensor-target pair (the hot spot for performance).
 
 ## 8. Catalog verification
 
-Check each unverified module against its datasheet, set `verified: true` with the source, and replace the assumed numbers. Add the platforms' real speed and acceleration limits. This is reading work, not code.
+Check each unverified module against its datasheet, set `verified: true` with the source, and replace the assumed numbers. Add the platforms' real speed and acceleration limits. This is reading work, not code. **Prepared:** `python seeder/unverified.py [--out file.md]` prints a worksheet with every unverified module and platform, each assumed number and its current source, and empty columns for the datasheet value and source. Fill it in, then set `verified: true` and `source` in `seeder/catalog/` and run `python seeder/seed_catalog.py --check`.
 
 ## 9. Weather combinations, weather events, seasonal sky
 

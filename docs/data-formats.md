@@ -18,6 +18,7 @@ The JSON that the seeder produces and the other modules read. If you are an agen
 | Scenario configs (presets) | hand-edited | [scenarios/](../scenarios/) |
 | `scenario.json` (what the system may read) | `python seeder/generate.py scenarios/hard.json --seed 3` | `out/<id>/scenario.json`, or `seeder/scenario.py` `generate(config)` |
 | `truth.json` (scoring only) | same command | `out/<id>/truth.json` |
+| Every seed of a set (a sweep) | `python seeder/generate.py scenarios/hard.json --sweep tuning` | `out/<preset>-sweep-tuning/`, see "Sweep folders" below |
 | A saved simulation run | `node ui/viewer/export-run.js` | PostgreSQL table `simulations`, or `seeder/data/db-dump.json.gz` |
 | Track, beacon and investigation messages | the tracker, the beacon source and `friend_foe/` (hand-made example in [friend_foe/data/local_tracks.jsonl](../friend_foe/data/local_tracks.jsonl)) | JSON Lines, see "Track and investigation messages" below |
 
@@ -84,6 +85,21 @@ Why it matters: `seed_catalog.py --check` tests single weathers only. In combina
 ```
 
 Positions are rounded to 0.1 m, velocities to 0.01 m/s. A hostile or clutter object has samples only while it is inside the area. Events are about hostiles only. Scoring: a hostile track on a clutter object is a false alarm, not a missed hostile.
+
+## Sweep folders
+
+`--sweep tuning` (seeds 1 to 99) or `--sweep test` (seeds 1000 to 1099) generates every seed of a set from one config. `--count N` limits it to the first N seeds for a quick check. It writes:
+
+```
+out/<preset>-sweep-<set>/
+  index.json          { "seed_set": "tuning", "runs": [ <run.json of every seed> ] }
+  <seed>/
+    scenario.json     what the system may read (the same file a single run makes)
+    truth.json        for scoring only
+    run.json          { "scenario_id", "seed", "seed_set", "index", "hostiles", "crossings" }
+```
+
+A run is scored from its `truth.json` and the track messages the system produced for that scenario, for example `python -m scoring.run out/<preset>-sweep-tuning/1/truth.json tracks.jsonl`. The simulation and scoring are not run by the sweep. About 0.3 s and 0.3 MB per seed at the default 0.1 s truth step, so a full set is about 30 MB (the `out/` folder is git-ignored). The test set is run once, at the end: never tune on it.
 
 ## Catalog
 

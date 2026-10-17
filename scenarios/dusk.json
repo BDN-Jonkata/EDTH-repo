@@ -1,0 +1,36 @@
+{
+  "name": "dusk",
+  "preset": "dusk",
+  "seed": 5,
+  "seed_set": "tuning",
+  "description": "Four hostiles while the sun sets (one simulated minute per second, so the run goes from daylight to near night), a fog patch over the middle of the map for part of the run, birds and a vehicle.",
+  "targets": {
+    "count": 4,
+    "motion": "mixed",
+    "speed_mps": [7, 14]
+  },
+  "environment": {
+    "weather": "clear",
+    "sky": {
+      "date": "2026-06-21",
+      "hour": 20.0,
+      "lat": 42.7,
+      "lon": 23.3,
+      "utc_offset_h": 3,
+      "time_scale": 60
+    },
+    "weather_events": [
+      {
+        "weather": "fog:0.8",
+        "t_start": 30,
+        "t_end": 100,
+        "zone": {"x": 500, "y": 500, "radius_m": 250}
+      }
+    ],
+    "clutter": {
+      "false_alarms_per_min": 3,
+      "birds": 2,
+      "vehicles": 1
+    }
+  }
+}

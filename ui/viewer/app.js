@@ -86,6 +86,7 @@
   // ------------------------------------------------------------- run / apply
   function runSim(p) {
     S.applied = clone(p);
+    S.wx = Weather.providerFor(S.scenario.environment, p.weather, p.sky !== undefined ? p.sky : S.scenario.environment.sky).provider; // as in Sim.run
     S.res = Sim.run({ seed: p.seed, mode: p.mode, weather: p.weather, sky: p.sky, loss: p.loss, delayMs: p.delayMs, driftMs: p.driftMs, bandwidthKbps: p.bandwidthKbps, assign: p.assign, scenario: S.scenario });
     S.deg = null; S.idx = 0; S.acc = 0; S.last = 0; S.playing = true; S.sel = null; S.userSel = false;
     $('runTitle').textContent = scen().id + ' · ' + p.name + ' · seed ' + p.seed;
@@ -94,7 +95,6 @@
     $('modeChip').textContent = p.mode.toUpperCase();
     $('modeChip').className = 'chip ' + (p.mode === 'optimistic' ? 'cyan' : 'amber');
     buildTimeline();
-    buildLimits();
     render();
   }
   function degradation() {
@@ -247,7 +247,7 @@
     S.res.sensors.forEach((s) => {
       const n = nodeState(f, s.node);
       if (!n) return;
-      const col = KCOL[s.kind], r = s.range;
+      const col = KCOL[s.kind], r = Math.round(rangeNow(s, f));
       const common = 'fill="' + col + '" fill-opacity="0.045" stroke="' + col + '" stroke-opacity="0.45" stroke-dasharray="' + KDASH[s.kind] + '" stroke-width="1.2"';
       let labelAt;
       if (s.fovDeg >= 360) {
@@ -485,11 +485,18 @@
       '<div style="display:flex;gap:8px"><span style="color:#8B96A5;flex:none">' + fmtT(m.t).slice(0, 7) + '</span><span style="flex:none;width:76px;color:' + KCOL[m.k] + '">' + m.node + ' ' + m.k + '</span><span style="color:#D5DBE3">' + fieldText(m) + (m.merged ? ' (2 merged)' : '') + (m.clutter ? ' (clutter)' : '') + '</span></div>').join('')
       : '<div style="color:#8B96A5">Nothing detected in the last 2 s.</div>';
   }
-  function buildLimits() {
-    $('limits').innerHTML = S.res.sensors.map((s) => {
-      const nominal = Sim.MODULES[s.module].sim.range_m, weak = s.range < nominal * 0.999;
-      return '<tr><td>' + s.node + '</td><td style="color:' + KCOL[s.kind] + '">' + s.kind + '</td><td' + (weak ? ' style="color:#F5B13D"' : '') + '>' + Math.round(s.minRange) + '–' + Math.round(s.range) + (weak ? ' ▼' : '') + '</td><td>' + (s.fovDeg >= 360 ? '360°' : s.fovDeg + '°') + '</td><td>' + (s.pointing === 'omni' ? 'all' : 'ahead') + '</td><td>' + s.rateHz + '</td><td style="white-space:normal">' + s.fields.map((n) => SHORT[n] === undefined ? n : (SHORT[n] || 'class')).join(' ') + '</td></tr>';
+  // a sensor's range in the weather at its own position now: weather events and the sky move it during the run
+  function rangeNow(s, f) {
+    const n = nodeState(f, s.node), m = Sim.MODULES[s.module];
+    if (!n) return s.range;
+    return m.sim.range_m * Weather.sensorQuality(m, Weather.activeEffects(S.wx.at([n.x, n.y], f.t))).range;
+  }
+  function buildLimits(f) {
+    const html = S.res.sensors.map((s) => {
+      const range = rangeNow(s, f), nominal = Sim.MODULES[s.module].sim.range_m, weak = range < nominal * 0.999;
+      return '<tr><td>' + s.node + '</td><td style="color:' + KCOL[s.kind] + '">' + s.kind + '</td><td' + (weak ? ' style="color:#F5B13D"' : '') + '>' + Math.round(s.minRange) + '–' + Math.round(range) + (weak ? ' ▼' : '') + '</td><td>' + (s.fovDeg >= 360 ? '360°' : s.fovDeg + '°') + '</td><td>' + (s.pointing === 'omni' ? 'all' : 'ahead') + '</td><td>' + s.rateHz + '</td><td style="white-space:normal">' + s.fields.map((n) => SHORT[n] === undefined ? n : (SHORT[n] || 'class')).join(' ') + '</td></tr>';
     }).join('');
+    if (html !== S.limitsHtml) $('limits').innerHTML = S.limitsHtml = html; // rows change only when the weather does
   }
   function renderDetail(f) {
     const box = $('detail');
@@ -608,6 +615,7 @@
     renderRight(f); // first: it settles the selected track the map highlights
     renderMap(f);
     renderFooter(f);
+    buildLimits(f);
     applyView();
   }
 
