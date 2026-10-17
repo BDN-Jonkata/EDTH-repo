@@ -5,6 +5,8 @@
   const NS = 'http://www.w3.org/2000/svg';
   const scen = () => (S.res && S.res.scen) || S.world; // the scenario of the current run
   const COL = { h: '#FF5A5F', f: '#5B9BFF', u: '#F5B13D', line: '#C9D1DB', cyan: '#3FC1D9' };
+  const CLASS_NAME = { friendly: 'Friendly', hostile: 'Hostile', suspicious: 'Suspicious', peaceful: 'Peaceful', unknown: 'Unknown' };
+  const classColor = (cls) => ({ friendly: COL.f, hostile: COL.h, suspicious: COL.u, peaceful: '#5FD0C0', unknown: '#A9B3BF' }[cls] || COL.u);
   const Y = (n) => 1000 - n; // world North -> svg y
 
   const clone = (p) => Object.assign({}, p, { assign: Object.assign({}, p.assign) });
@@ -28,6 +30,9 @@
     ['pred', 'Predictions', true, '<path d="M1 7h12" stroke="#C9D1DB" stroke-width="1.4" stroke-dasharray="1.5 2"/>'],
     ['raw', 'Raw observations', false, '<path d="M1 13L13 3M1 13L13 8" stroke="#C9D1DB" stroke-width="1"/>'],
     ['cover', 'Sensor coverage', true, '<path d="M2 12L7 2l5 10z" fill="none" stroke="#9AA4B2" stroke-width="1.2" stroke-dasharray="2 1.5"/>'],
+    ['coverageAge', 'Coverage age', false, '<rect x="2" y="2" width="10" height="10" fill="#3FC1D9" opacity="0.5"/>'],
+    ['missions', 'Mission destinations', true, '<path d="M1 12L12 2M7 2h5v5" fill="none" stroke="#5B9BFF"/>'],
+    ['policy', 'Protected areas / corridors', true, '<circle cx="7" cy="7" r="5" fill="none" stroke="#FF8A8D" stroke-dasharray="2 2"/>'],
     ['net', 'Network links', true, '<circle cx="2.5" cy="11.5" r="1.8" fill="#9AA4B2"/><circle cx="11.5" cy="2.5" r="1.8" fill="#9AA4B2"/><path d="M3.5 10.5l7-7" stroke="#9AA4B2" stroke-width="1.2"/>'],
   ];
 
@@ -82,7 +87,7 @@
   function runSim(p) {
     S.applied = clone(p);
     S.res = Sim.run({ seed: p.seed, mode: p.mode, weather: p.weather, sky: p.sky, loss: p.loss, delayMs: p.delayMs, driftMs: p.driftMs, assign: p.assign, scenario: S.scenario });
-    S.deg = null; S.idx = 0; S.acc = 0; S.playing = true; S.sel = null; S.userSel = false;
+    S.deg = null; S.idx = 0; S.acc = 0; S.last = 0; S.playing = true; S.sel = null; S.userSel = false;
     $('runTitle').textContent = scen().id + ' · ' + p.name + ' · seed ' + p.seed;
     $('tTotal').textContent = fmtT(S.res.T_END);
     $('scrub').max = S.res.NF;
@@ -228,12 +233,12 @@
   // --------------------------------------------------------------- map layers
   const KCOL = { EO: '#C9D1DB', IR: '#E58C5B', MIC: '#F5B13D', RAD: '#3FC1D9', RF: '#B58CFF' };
   const KDASH = { EO: '5 4', IR: '4 3', MIC: '1 4', RAD: '8 3', RF: '2 5' };
-  // where a node is and which way it faces (drones face along their flight path, ground sensors along their mast)
+  // Patrol drones face their motion; followers and searchers can yaw to observe.
   function nodeState(f, id) {
     const g = scen().ground.find((q) => q.id === id);
     if (g) return { x: g.x, y: g.y, heading: g.heading };
     const o = f.truth.find((q) => q.id === id);
-    return o ? { x: o.x, y: o.y, heading: Math.atan2(o.vy, o.vx) } : null;
+    return o ? { x: o.x, y: o.y, heading: o.heading === undefined ? Math.atan2(o.vy, o.vx) : o.heading } : null;
   }
   // each sensor's real coverage: a wedge for pointed sensors, a ring for 360-degree ones
   function coverageSvg(f) {
@@ -275,7 +280,7 @@
   }
   function trackSvg(t, f, sel) {
     const x = t.x, y = Y(t.y);
-    const col = t.cls === 'hostile' ? COL.h : t.cls === 'friendly' ? COL.f : COL.u;
+    const col = classColor(t.cls);
     const sp = spd(t.vx, t.vy);
     const coast = t.st === 'coasting';
     const o = ['<g' + (coast ? ' opacity="0.55"' : '') + '>'];
@@ -329,13 +334,36 @@
       return '<rect x="' + (x - 13) + '" y="' + (y - 38) + '" width="26" height="16" rx="2" fill="' + col + '"' + (sel ? ' stroke="#E6EAF0" stroke-width="1.5"' : '') + '/><text class="tb" x="' + x + '" y="' + (y - 26) + '" text-anchor="middle" fill="#14080A">' + t.id + '</text>' +
         '<text class="t" x="' + (x + 17) + '" y="' + (y - 26) + '">' + sp.toFixed(0) + ' m/s</text>';
     }
-    return '<rect x="' + (x - 13) + '" y="' + (y - 34) + '" width="26" height="16" rx="2" fill="#0D1318" stroke="' + col + '" stroke-dasharray="3 2"/><text class="tb" x="' + x + '" y="' + (y - 22) + '" text-anchor="middle" fill="' + col + '">' + t.id + '</text><text class="t" x="' + (x + 17) + '" y="' + (y - 22) + '" style="fill:' + col + '">TENT</text>';
+    return '<rect x="' + (x - 13) + '" y="' + (y - 34) + '" width="26" height="16" rx="2" fill="#0D1318" stroke="' + col + '" stroke-dasharray="3 2"/><text class="tb" x="' + x + '" y="' + (y - 22) + '" text-anchor="middle" fill="' + col + '">' + t.id + '</text><text class="t" x="' + (x + 17) + '" y="' + (y - 22) + '" style="fill:' + col + '">' + t.cls.toUpperCase() + '</text>';
   }
 
   function renderMap(f) {
     $('terrain').innerHTML = S.layers.terrain ? TERRAIN : '';
     $('terrain').style.display = '';
     $('cover').innerHTML = S.layers.cover ? coverageSvg(f) : '';
+    const policy = S.res.behaviorConfig;
+    $('policy').innerHTML = S.layers.policy ? policy.protected_zones.map((z) =>
+      '<circle cx="' + z.x + '" cy="' + Y(z.y) + '" r="' + z.radius_m + '" fill="#FF5A5F" fill-opacity="0.025" stroke="#FF8A8D" stroke-opacity="0.7" stroke-dasharray="6 6"/>' +
+      '<text class="t" x="' + z.x + '" y="' + (Y(z.y) - z.radius_m - 6) + '" text-anchor="middle" style="fill:#FF8A8D">PROTECTED · ' + z.radius_m + ' m</text>').join('') +
+      policy.corridors.map((c) => '<path d="M' + c.start[0] + ' ' + Y(c.start[1]) + 'L' + c.end[0] + ' ' + Y(c.end[1]) +
+        '" stroke="#5FD0C0" stroke-width="' + c.half_width_m * 2 + '" stroke-opacity="0.12" fill="none"/>').join('') : '';
+    $('coverageAge').innerHTML = S.layers.coverageAge && f.coverage ? f.coverage.map((last, i) => {
+      const age = last < 0 ? 1 : Math.min(1, (f.t - last) / 60);
+      const color = last < 0 ? '#FF5A5F' : age > 0.5 ? '#F5B13D' : '#3FC1D9';
+      return '<rect x="' + (i % 40 * 25) + '" y="' + (975 - Math.floor(i / 40) * 25) + '" width="25" height="25" fill="' + color + '" opacity="' + (0.08 + age * 0.22) + '"/>';
+    }).join('') : '';
+    $('missions').innerHTML = S.layers.missions ? (f.missions || []).map((m) => {
+      const d = f.truth.find((q) => q.id === m.id);
+      if (!d || !m.destination) return '';
+      const g = m.destination, color = m.mode === 'follow' ? '#F5B13D' : m.mode === 'search' ? '#B58CFF' : '#5B9BFF';
+      return '<path d="M' + d.x + ' ' + Y(d.y) + 'L' + g.x + ' ' + Y(g.y) + '" fill="none" stroke="' + color + '" stroke-dasharray="3 5" stroke-opacity="0.6"/><circle cx="' + g.x + '" cy="' + Y(g.y) + '" r="4" fill="none" stroke="' + color + '"/><text class="t" x="' + (d.x + 12) + '" y="' + (Y(d.y) + 18) + '" style="fill:' + color + '">' + m.id + ' ' + m.mode.toUpperCase() + (m.target ? ' → ' + m.target : '') + '</text>';
+    }).join('') : '';
+    $('missionStatus').innerHTML = (f.missions || []).map((m) => '<div><b>' + m.id + '</b> · ' + m.mode.toUpperCase() +
+      (m.target ? ' → ' + m.target : '') + (m.destination ? ' · E' + pad4(m.destination.x) + ' N' + pad4(m.destination.y) : '') +
+      (m.blocked ? ' · yielding' : '') + '</div>').join('');
+    const observed = f.coverage ? f.coverage.filter((last) => last >= 0).length : 0;
+    $('coverageStatus').textContent = (observed / 16).toFixed(1) + '% observed · ' + S.res.missionConfig.separation + ' m minimum separation' +
+      (S.layers.coverageAge ? ' · red: unvisited · amber: older · cyan: recent (60 s scale)' : '');
     $('jam').innerHTML = S.layers.net ? jammingSvg(f) : '';
     const links = [];
     if (S.layers.net) drawLinks(f, links);
@@ -399,7 +427,7 @@
     return '<circle class="pulse" cx="' + cross.x + '" cy="' + Y(cross.y) + '" r="48" fill="#F5B13D" fill-opacity="0.07" stroke="#F5B13D" stroke-width="1.6" stroke-dasharray="6 4"/><text class="t" x="' + cross.x + '" y="' + (Y(cross.y) + 66) + '" text-anchor="middle" style="fill:#F5B13D">PRED. CROSSING T−' + cross.tca.toFixed(1) + ' s</text>';
   }
   function tracksSvg(f) {
-    const order = { friendly: 0, peaceful: 1, unknown: 1, hostile: 2 };
+    const order = { friendly: 0, peaceful: 1, unknown: 2, suspicious: 3, hostile: 4 };
     return f.tracks.slice().sort((a, b) => order[a.cls] - order[b.cls]).map((t) => trackSvg(t, f, t.id === S.sel)).join('');
   }
 
@@ -411,7 +439,7 @@
     chip.className = 'chip ' + (ok ? 'cyan' : 'amber');
     chip.textContent = ok ? '✓ MATCH' : '▲ MISMATCH ' + (f.m.countErr > 0 ? '+' : '') + f.m.countErr;
 
-    const order = { hostile: 0, unknown: 1, peaceful: 1, friendly: 2 };
+    const order = { hostile: 0, suspicious: 1, unknown: 2, peaceful: 3, friendly: 4 };
     const list = f.tracks.slice().sort((a, b) => order[a.cls] - order[b.cls] || a.id.localeCompare(b.id, undefined, { numeric: true }));
     const cur = list.find((t) => t.id === S.sel);
     const firstHostile = list.find((t) => t.cls === 'hostile');
@@ -419,9 +447,9 @@
     if (!cur || (!S.userSel && firstHostile && cur.cls !== 'hostile')) S.sel = (list.find((t) => t.cls === 'hostile') || list[0] || {}).id || null;
     $('trkCount').textContent = list.length + ' active';
     $('trkBody').innerHTML = list.map((t) => {
-      const cls = t.cls === 'hostile' ? '◆ HOS' : t.cls === 'friendly' ? '● FRD' : t.cls === 'peaceful' ? '○ PCF' : '✣ UNK·T';
-      const ccol = t.cls === 'friendly' ? '#8DB8FF' : t.cls === 'peaceful' ? '#5FD0C0' : t.cls === 'unknown' ? '#F5B13D' : '#D5DBE3';
-      const b = t.cls === 'hostile' ? 'h' : t.cls === 'unknown' ? 'u' : 'f';
+      const cls = { hostile: '◆ HOS', friendly: '● FRD', peaceful: '○ PCF', suspicious: '▲ SUS', unknown: '✣ UNK' }[t.cls];
+      const ccol = classColor(t.cls);
+      const b = t.cls === 'hostile' ? 'h' : ['unknown', 'suspicious'].includes(t.cls) ? 'u' : 'f';
       return '<tr data-id="' + t.id + '"' + (t.id === S.sel ? ' class="sel"' : '') + '><td><button class="idb ' + b + '" aria-label="Select ' + t.id + '">' + t.id + '</button></td><td style="color:' + ccol + '">' + cls + '</td><td>' + pad4(t.x) + ' ' + pad4(t.y) + '</td><td>' + spd(t.vx, t.vy).toFixed(1) + '</td><td>' + String(Math.round(hdg(t.vx, t.vy))).padStart(3, '0') + '</td><td>' + Math.min(1, t.conf).toFixed(2) + '</td><td>' + t.age.toFixed(1) + 's</td><td>' + (t.cls === 'friendly' ? 'self' : t.nodes.map((n) => n.split(' ')[0]).filter((v, i, a) => a.indexOf(v) === i).join(' ')) + '</td></tr>';
     }).join('');
 
@@ -468,7 +496,7 @@
     if (!t) { box.innerHTML = '<div class="empty">No track selected.</div>'; return; }
     const e = eig(t.pxx, t.pyy, t.pxy);
     const rho = t.pxy / Math.sqrt(t.pxx * t.pyy);
-    const label = t.cls === 'hostile' ? 'Hostile · ' + (t.st === 'coasting' ? 'coasting' : 'confirmed') : t.cls === 'friendly' ? 'Friendly · ' + ((Sim.PLATFORMS[S.applied.assign[t.id]] || {}).name || 'beacon') : 'Unknown · tentative';
+    const label = CLASS_NAME[t.cls] + ' · ' + (t.cls === 'friendly' ? ((Sim.PLATFORMS[S.applied.assign[t.id]] || {}).name || 'verified identity') : t.st);
     const b = t.cls === 'hostile' ? 'background:#FF5A5F;color:#14080A' : t.cls === 'friendly' ? 'background:#5B9BFF;color:#06101F' : 'border:1px dashed #F5B13D;color:#F5B13D';
     // position error sparkline over last 30 s
     const pts = [];
@@ -487,9 +515,12 @@
       [['σ east', Math.sqrt(t.pxx).toFixed(1) + ' m'], ['σ north', Math.sqrt(t.pyy).toFixed(1) + ' m'], ['ρ', rho.toFixed(2)], ['95% ellipse', (e.a * 2.45).toFixed(0) + '×' + (e.b * 2.45).toFixed(0) + ' m']]
         .map((c) => '<div style="display:flex;flex-direction:column;gap:2px"><span style="font-size:11px;color:#8B96A5">' + c[0] + '</span><span class="mono" style="font-size:13px">' + c[1] + '</span></div>').join('') + '</div>' +
       '<div style="display:flex;flex-direction:column;gap:6px"><span style="font-size:11px;color:#8B96A5">Contributing sensors (last 2 s)</span><div class="mono" style="display:flex;flex-wrap:wrap;gap:6px;font-size:11px">' + sources + '</div></div>' +
-      '<div style="display:flex;flex-direction:column;gap:6px"><div style="display:flex;justify-content:space-between;font-size:11px;color:#8B96A5"><span>Friend / foe presumption</span><span class="mono" style="color:#FF8A8D">P(hostile) ' + t.pH.toFixed(2) + '</span></div>' +
-      '<div style="display:flex;height:10px;border-radius:2px;overflow:hidden;background:#1B222C"><div style="width:' + t.pH * 100 + '%;background:#FF5A5F"></div><div style="width:' + t.pU * 100 + '%;background:#F5B13D"></div><div style="width:' + t.pF * 100 + '%;background:#5B9BFF"></div></div>' +
-      '<div class="mono" style="display:flex;justify-content:space-between;font-size:10px;color:#8B96A5"><span>◆ hostile ' + t.pH.toFixed(2) + '</span><span>✣ unknown ' + t.pU.toFixed(2) + '</span><span>● friend ' + t.pF.toFixed(2) + '</span></div></div>' +
+      '<div style="display:flex;flex-direction:column;gap:6px"><span style="font-size:11px;color:#8B96A5">Automatic assessment · independent scores</span>' +
+      [['Verified identity', t.pF, '#5B9BFF'], ['Hostile behavior', t.pH, '#FF5A5F']].map(([name, value, color]) =>
+        '<div style="display:flex;justify-content:space-between;font-size:11px"><span>' + name + '</span><span class="mono">' + (value * 100).toFixed(1) + '%</span></div>' +
+        '<div style="height:7px;background:#1B222C"><div style="height:100%;width:' + value * 100 + '%;background:' + color + '"></div></div>').join('') +
+      '<span style="font-size:11px;color:#8B96A5">' + ((t.behavior.reasons || ['insufficient_history']).map((v) => v.replace(/_/g, ' ')).join(' · ')) + '</span>' +
+      '<span style="font-size:10px;color:#8B96A5">Simulation policy scores; 50% behavior means no directional evidence. Peaceful does not verify identity.</span></div>' +
       '<div style="display:flex;flex-direction:column;gap:4px"><div style="display:flex;justify-content:space-between;font-size:11px;color:#8B96A5"><span>Position error vs truth, last 30 s</span><span class="mono" style="color:#C9D1DB">' + (now === null ? 'no truth match' : 'now ' + now.toFixed(1) + ' m') + '</span></div>' +
       '<svg viewBox="0 0 340 56" width="100%" role="img" aria-label="Position error sparkline"><path d="M0 46H340M0 6H340" stroke="#222A35"/>' + (path ? '<path d="' + path + '" fill="none" stroke="#3FC1D9" stroke-width="1.6"/>' : '') + '<text x="0" y="55" class="mono" style="font-size:9px;fill:#8B96A5">0 m</text><text x="0" y="14" class="mono" style="font-size:9px;fill:#8B96A5">20 m</text></svg></div>';
     $('centre').addEventListener('click', () => centreOn(t));
@@ -502,10 +533,14 @@
     const marks = r.timeline.filter((m, i, a) => a.findIndex((q) => q.label === m.label && Math.abs(q.t - m.t) < 1) === i);
     S.marks = marks;
     const col = { red: '#FF5A5F', amber: '#F5B13D' };
+    const labels = [];
+    marks.slice().sort((a, b) => a.t - b.t).forEach((m) => {
+      if (!/^H\d seen$/.test(m.label) && labels.every((q) => Math.abs(q.t - m.t) >= 15)) labels.push(m);
+    });
     $('tlSvg').innerHTML = '<rect x="0" y="22" width="1000" height="6" rx="3" fill="#1B222C"/><rect id="tlFill" x="0" y="22" width="0" height="6" rx="3" fill="#1D6A79"/>' +
-      marks.map((m) => '<path d="M' + x(m.t) + ' 14V28" stroke="' + col[m.color] + '" stroke-width="2"' + (m.dashed ? ' stroke-dasharray="2 2"' : '') + '/>').join('') +
+      marks.map((m) => '<path d="M' + x(m.t) + ' 14V28" stroke="' + col[m.color] + '" stroke-width="2"' + (m.dashed ? ' stroke-dasharray="2 2"' : '') + '><title>' + m.label + '</title></path>').join('') +
       '<path id="tlHead" d="M0 6V36" stroke="#E6EAF0" stroke-width="2"/>';
-    $('tlLabels').innerHTML = marks.filter((m) => !/^H\d seen$/.test(m.label)).slice(0, 8).map((m) => '<span style="position:absolute;left:' + (m.t / r.T_END * 100) + '%;transform:translateX(-50%);color:' + (m.color === 'amber' ? '#F5B13D' : '#8B96A5') + '">' + m.label + '</span>').join('');
+    $('tlLabels').innerHTML = labels.map((m) => '<span style="position:absolute;left:' + (m.t / r.T_END * 100) + '%;transform:translateX(-50%);color:' + (m.color === 'amber' ? '#F5B13D' : '#8B96A5') + '">' + m.label + '</span>').join('');
   }
   function renderFooter(f) {
     const r = S.res;
@@ -632,6 +667,9 @@
       else if (e.key === 'ArrowRight') { S.playing = false; setIdx(S.idx + (e.shiftKey ? 10 : 1)); }
     });
     function tick(ts) {
+      // A queued animation-frame timestamp can predate synchronous simulation
+      // computation. Start timing after that work so reset does not skip ahead.
+      ts = performance.now();
       if (S.playing && S.res) {
         if (S.last) {
           S.acc += ((ts - S.last) / 1000) * S.speed * 10;

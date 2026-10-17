@@ -115,9 +115,16 @@ def evaluate(
     dt: float = 0.5,
     warmup_s: float = 10.0,
     threat_llr: Optional[Callable[[TrackState], float]] = None,
+    automatic: bool = False,
 ) -> RunMetrics:
     """`threat_llr` is the behaviour hook (see estimator.py); without one, no track is ever hostile or peaceful."""
-    estimator = FriendFoeEstimator(for_scenario(scenario, config), threat_llr)
+    if automatic:
+        if threat_llr is not None:
+            raise ValueError("automatic behaviour and an external threat hook are mutually exclusive")
+        from friend_foe.automatic import AutomaticEstimator
+        estimator = AutomaticEstimator.for_scenario(scenario, config)
+    else:
+        estimator = FriendFoeEstimator(for_scenario(scenario, config), threat_llr)
     trigger = InvestigationTrigger(weather_from_scenario(scenario), modules_in_scenario(scenario))
     tally, requests = _Tally(roles_of(scenario), warmup_s), []
     for t, tracks, beacons in frames_from_scenario(scenario, dt=dt, seed=seed):

@@ -1,0 +1,28 @@
+{
+  "name": "busy",
+  "preset": "busy",
+  "seed": 3,
+  "seed_set": "tuning",
+  "description": "Eight staggered drone entries: crossings, straight flights, hovering, loitering and turns. Clear weather and ideal communications make automatic assessments and investigations easier to watch.",
+  "targets": {
+    "count": 8,
+    "motion": "mixed",
+    "enter_t": [2, 45],
+    "speed_mps": [7, 13],
+    "hover_prob": 0.15,
+    "sudden_turn_prob": 0.1,
+    "crossing": {
+      "enabled": true,
+      "t": 55
+    }
+  },
+  "environment": {
+    "weather": "clear",
+    "time_of_day": "day",
+    "clutter": {
+      "false_alarms_per_min": 1,
+      "birds": 0,
+      "vehicles": 0
+    }
+  }
+}

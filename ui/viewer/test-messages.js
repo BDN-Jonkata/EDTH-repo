@@ -28,7 +28,7 @@ test('makeHeader: msg_id, per-source seq, schema_version', () => {
 test('every message has a type and the full header, and msg_id is unique', () => {
   const msgs = sent({});
   const types = new Set(msgs.map((m) => m.type));
-  assert.deepStrictEqual([...types].sort(), ['drone_command', 'drone_state', 'friendly_beacon', 'observation']);
+  assert.deepStrictEqual([...types].sort(), ['drone_command', 'drone_state', 'friendly_beacon', 'investigation_request', 'investigation_status', 'observation']);
   msgs.forEach((m) => assert.deepStrictEqual(Object.keys(m.header), Messages.HEADER_FIELDS, m.type));
   assert.strictEqual(new Set(msgs.map((m) => m.header.msg_id)).size, msgs.length, 'msg_id repeats');
   const last = {};

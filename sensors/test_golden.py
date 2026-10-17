@@ -10,7 +10,22 @@ POS = (0.0, 0.0, 0.0)
 
 def test_the_shared_cases_file_matches_the_code():
     """Fails when the weather code changes without `python -m sensors.golden` being run."""
-    assert json.loads(PATH.read_text(encoding="utf-8")) == json.loads(json.dumps(build_cases()))
+    def same(actual, expected):
+        if isinstance(expected, float):
+            assert actual == pytest.approx(expected, rel=1e-9, abs=1e-12)
+        elif isinstance(expected, dict):
+            assert actual.keys() == expected.keys()
+            for key in expected:
+                same(actual[key], expected[key])
+        elif isinstance(expected, list):
+            assert len(actual) == len(expected)
+            for a, b in zip(actual, expected):
+                same(a, b)
+        else:
+            assert actual == expected
+    # libm implementations differ in their final bits; use the shared 1e-9
+    # float tolerance already required of the JavaScript implementation.
+    same(json.loads(PATH.read_text(encoding="utf-8")), json.loads(json.dumps(build_cases())))
 
 
 def test_the_cases_cover_what_a_second_implementation_must_get_right():

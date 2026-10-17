@@ -32,6 +32,7 @@ Run the tests (Python 3.11+): `python -m pip install pytest`, then `python -m py
 | [tracker/](tracker/) | Multi-target tracker (a central baseline now; per-node trackers later) |
 | [pipeline/](pipeline/) | The whole chain on one scenario: sensors, lossy network, tracker, friend/foe, scoring |
 | [friend_foe/](friend_foe/) | Friendly beacon matching and drone behaviour pattern |
+| [drone_behavior/](drone_behavior/drone_behavior.md) | Automatic observed-motion evidence, policy configuration and reference tests |
 | [fusion/](fusion/) | Cross-node track merge, global IDs, COP |
 | [predictor/](predictor/) | Optional short-horizon prediction |
 | [scoring/](scoring/) | Metrics harness |
