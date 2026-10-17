@@ -86,5 +86,39 @@ class TestOutOfSequence(unittest.TestCase):
         self.assertEqual(a, b)
 
 
+class TestClocks(unittest.TestCase):
+    """`clocks` stamps readings by the node's own clock; `timesync` estimates those clocks back (tracker/timesync.py)."""
+
+    def clock_error_ms(self, pipeline, t):
+        return [abs(pipeline.sync.offset(n) - (c.offset_s + c.drift * t)) * 1000 for n, c in pipeline.observations.clocks.items()
+                if n in pipeline.sync._low]
+
+    def test_readings_carry_the_node_clock_only_when_asked(self):
+        sc, _ = scenario_and_truth("hard")
+        plain, stamped = Pipeline(sc, sc["seed"]), Pipeline(sc, sc["seed"], clocks=True)
+        self.assertEqual(plain.observations.clocks, {})
+        a = [o["t_obs"] for k in range(20) for o in plain.observations.at(round(k * 0.1, 6))]
+        b = [o["t_obs"] for k in range(20) for o in stamped.observations.at(round(k * 0.1, 6))]
+        self.assertEqual(len(a), len(b))
+        self.assertNotEqual(a, b)
+        self.assertEqual(set(stamped.observations.clocks), {"F1", "F2", "F3", "F4", "F5", "GS1", "GS2"})
+
+    def test_the_clocks_are_found_within_a_few_milliseconds(self):
+        sc, _ = scenario_and_truth("hard")
+        pipeline = Pipeline(sc, sc["seed"], timesync=True)
+        for k in range(301):
+            pipeline.step(round(k * 0.1, 6))
+        errors = self.clock_error_ms(pipeline, 30.0)
+        self.assertGreaterEqual(len(errors), 6)
+        self.assertLess(max(errors), 12.0)
+        self.assertGreater(max(abs(c.offset_s) for c in pipeline.observations.clocks.values()), 0.05)   # the error was real
+
+    def test_the_distributed_mode_ignores_both(self):
+        sc, _ = scenario_and_truth("medium")
+        pipeline = Pipeline(sc, sc["seed"], distributed=True, clocks=True, timesync=True)
+        self.assertIsNone(pipeline.sync)
+        self.assertEqual(pipeline.observations.clocks, {})
+
+
 if __name__ == "__main__":
     unittest.main()

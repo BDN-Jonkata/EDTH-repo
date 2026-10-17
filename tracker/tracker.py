@@ -53,6 +53,7 @@ class TrackerConfig:
     duplicate_speed_mps: float = 6.0       # "alike in velocity": within this
     oosm: bool = False                     # apply a late reading at the time it was taken (tracker/oosm.py); off: at arrival
     oosm_min_age_s: float = 1.0            # ASSUMED: a reading at least this old on arrival is out of sequence; younger ones are on time
+    oosm_start_max_age_s: float = 1.0      # ASSUMED: a late reading no track explains may still start one if younger than this
     oosm_window_s: float = 15.0            # ASSUMED: how far back a track can be replayed; older readings are dropped
 
 
@@ -94,9 +95,8 @@ class Tracker:
         for b in beacons:
             self._beacon(t, b)
         late, on_time = self._split_late(t, measurements)
-        leftovers = self._associate(t, on_time)
+        leftovers = self._associate(t, on_time) + self._late_readings(t, late)
         self._initiate(t, leftovers)
-        self._late_readings(t, late)
         self._life_cycle(t)
         self._drop_duplicates()
         return [tr for tr in self.tracks if tr.confirmed]
@@ -161,17 +161,23 @@ class Tracker:
         late = [m for m in measurements if t - m.t >= self.config.oosm_min_age_s]
         return late, [m for m in measurements if t - m.t < self.config.oosm_min_age_s]
 
-    def _late_readings(self, t: float, late: List[Measurement]) -> None:
+    def _late_readings(self, t: float, late: List[Measurement]) -> List[Measurement]:
         """Match each late scan to the tracks as they were when it was taken and replay the matched tracks with the
-        reading in. A late reading starts no track (what it saw has moved on) and a friendly's is only absorbed."""
+        reading in. A friendly's is only absorbed. A late reading no track explains starts no track (what it saw has
+        moved on) unless it is younger than `oosm_start_max_age_s`: those are returned for the usual initiation."""
         scans: Dict[tuple, List[Measurement]] = {}
         for m in late:
             scans.setdefault(m.scan, []).append(m)
+        unmatched = []
         for scan in scans.values():
             cost = [[self._late_cost(tr, m, t) for m in scan] for tr in self.tracks]
-            for i, j in (assign(cost, BIG_GATE) if self.tracks else []):
+            pairs = assign(cost, BIG_GATE) if self.tracks else []
+            for i, j in pairs:
                 if self.tracks[i].friend_id is None:
                     self._replay_with(self.tracks[i], scan[j], t)
+            matched = {j for _, j in pairs}
+            unmatched += [m for j, m in enumerate(scan) if j not in matched and t - m.t < self.config.oosm_start_max_age_s]
+        return unmatched
 
     def _late_cost(self, tr: Track, m: Measurement, t: float) -> float:
         accel = self.config.friend_accel_noise_mps2 if tr.friend_id else self.config.accel_noise_mps2
@@ -180,8 +186,7 @@ class Tracker:
         return NO_MATCH if c is None else c
 
     def _replay_with(self, tr: Track, m: Measurement, t: float) -> None:
-        tr.state, tr.cov = oosm.replay(tr, self.config.accel_noise_mps2, t, extra=m)
-        oosm.insert(tr, m)
+        tr.state, tr.cov = oosm.insert(tr, self.config.accel_noise_mps2, m, t)
         tr.last_update = max(tr.last_update, m.t)      # it proves the target was there then, not that it is there now
         tr.update_times.append(m.t)
         tr.node_times[m.node] = max(tr.node_times.get(m.node, -math.inf), m.t)
@@ -238,7 +243,7 @@ class Tracker:
         keep = []
         for tr in self.tracks:
             if tr.checkpoint is not None:
-                oosm.fold_old(tr, t, self.config.oosm_window_s, self.config.accel_noise_mps2)
+                oosm.fold_old(tr, t, self.config.oosm_window_s)
             if tr.friend_id is None:
                 self._confirm_or_demote(tr, t)
             ttl = self.config.confirmed_ttl_s if tr.confirmed else self.config.tentative_ttl_s
