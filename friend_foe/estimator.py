@@ -19,7 +19,7 @@ Inputs are plain dataclasses that mirror the draft `LocalTrack` and
 """
 
 import math
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Callable, Dict, List, Optional, Sequence, Tuple
 
 Vec3 = Tuple[float, float, float]
@@ -57,13 +57,20 @@ class Classification:
 @dataclass
 class EstimatorConfig:
     beacon_max_age_s: float = 2.0       # older beacons are ignored
+    beacon_clock_tolerance_s: float = 0.5   # a beacon stamped this far in the future is a clock offset, not an error
     gate_sigmas: float = 3.0            # gate size in combined sigmas
     gate_min_m: float = 5.0             # gate never smaller than this
     min_existence: float = 0.3          # ignore weaker tracks
     min_updates: int = 5                # updates before leaving `unknown`
     match_step: float = 1.0             # llr gain per matched beacon
-    no_beacon_step: float = 0.1         # llr loss per update without a match
+    no_beacon_per_s: float = 0.2        # llr lost per second of silence on a perfect link; scaled by the delivery rate
     no_beacon_floor: float = -1.5       # silence alone never goes below this
+    beacon_rate_hz: float = 2.0         # how often each friendly broadcasts (scenario `beacon.rate_hz`)
+    delivery_prior: float = 0.8         # assumed share of beacons that arrive, until measured
+    delivery_prior_n: float = 10.0      # how many expected beacons the prior is worth
+    delivery_tau_s: float = 30.0        # the measured delivery rate forgets over this time
+    delivery_min: float = 0.05
+    max_dt_s: float = 2.0               # a longer gap between updates counts as this much silence
     llr_limit: float = 4.0              # evidence is clipped to +/- this
     friendly_enter: float = 0.9
     friendly_exit: float = 0.7
@@ -72,6 +79,11 @@ class EstimatorConfig:
     suspicious_enter: float = 0.3
     suspicious_exit: float = 0.4
     memory_ttl_s: float = 30.0          # forget tracks not seen for this long
+
+
+def for_scenario(scenario: dict, config: Optional[EstimatorConfig] = None) -> EstimatorConfig:
+    """The config with the scenario's beacon rate, which the delivery-rate estimate needs."""
+    return replace(config or EstimatorConfig(), beacon_rate_hz=scenario["beacon"]["rate_hz"])
 
 
 @dataclass
@@ -95,35 +107,60 @@ class FriendFoeEstimator:
         self.config = config or EstimatorConfig()
         self.behaviour_llr = behaviour_llr
         self._memory: Dict[str, _Memory] = {}
+        self._last_t: Optional[float] = None
+        # beacons received and expected from friendly tracks, both forgetting over delivery_tau_s
+        self._received = self.config.delivery_prior * self.config.delivery_prior_n
+        self._expected = self.config.delivery_prior_n
+
+    @property
+    def delivery_rate(self) -> float:
+        """Share of expected beacons that arrive, measured on tracks currently called friendly."""
+        return max(self.config.delivery_min, min(1.0, self._received / self._expected))
 
     def update(
         self, t: float, tracks: Sequence[TrackState], beacons: Sequence[Beacon]
     ) -> List[Classification]:
-        cfg = self.config
-        usable = [tr for tr in tracks if tr.existence_prob >= cfg.min_existence]
+        dt = self._frame_dt(t)
+        usable = [tr for tr in tracks if tr.existence_prob >= self.config.min_existence]
         matches = self._match(t, usable, beacons)
-
-        out = []
-        for tr in usable:
-            mem = self._memory.setdefault(tr.track_id, _Memory())
-            matched = matches.get(tr.track_id)
-            if matched is not None:
-                mem.llr += cfg.match_step
-            elif mem.llr > cfg.no_beacon_floor:
-                mem.llr = max(mem.llr - cfg.no_beacon_step, cfg.no_beacon_floor)
-            if self.behaviour_llr is not None:
-                mem.llr += self.behaviour_llr(tr)
-            mem.llr = max(-cfg.llr_limit, min(cfg.llr_limit, mem.llr))
-            mem.n_updates += 1
-            mem.last_t = t
-            p = 1.0 / (1.0 + math.exp(-mem.llr))
-            mem.cls = self._classify(mem, p)
-            out.append(Classification(tr.track_id, t, mem.cls, self._class_prob(mem.cls, p), p, matched))
-
-        stale = [k for k, m in self._memory.items() if t - m.last_t > cfg.memory_ttl_s]
-        for k in stale:
-            del self._memory[k]
+        out = [self._update_track(t, dt, tr, matches.get(tr.track_id)) for tr in usable]
+        self._learn_delivery(dt, out)
+        self._forget_stale(t)
+        self._last_t = t
         return out
+
+    def _frame_dt(self, t: float) -> float:
+        if self._last_t is None:
+            return 0.5   # nominal tracker period for the first update
+        return max(0.0, min(t - self._last_t, self.config.max_dt_s))
+
+    def _update_track(self, t: float, dt: float, tr: TrackState, matched: Optional[str]) -> Classification:
+        cfg = self.config
+        mem = self._memory.setdefault(tr.track_id, _Memory())
+        if matched is not None:
+            mem.llr += cfg.match_step
+        elif mem.llr > cfg.no_beacon_floor:
+            # silence is weaker evidence on a lossy link, where a friendly's beacons are missing too
+            mem.llr = max(mem.llr - cfg.no_beacon_per_s * dt * self.delivery_rate, cfg.no_beacon_floor)
+        if self.behaviour_llr is not None:
+            mem.llr += self.behaviour_llr(tr)
+        mem.llr = max(-cfg.llr_limit, min(cfg.llr_limit, mem.llr))
+        mem.n_updates += 1
+        mem.last_t = t
+        p = 1.0 / (1.0 + math.exp(-mem.llr))
+        mem.cls = self._classify(mem, p)
+        return Classification(tr.track_id, t, mem.cls, self._class_prob(mem.cls, p), p, matched)
+
+    def _learn_delivery(self, dt: float, found: Sequence[Classification]) -> None:
+        cfg = self.config
+        forget = math.exp(-dt / cfg.delivery_tau_s)
+        friendly = [c for c in found if c.cls == "friendly"]
+        self._received = self._received * forget + sum(c.matched_beacon is not None for c in friendly)
+        self._expected = self._expected * forget + len(friendly) * cfg.beacon_rate_hz * dt
+
+    def _forget_stale(self, t: float) -> None:
+        for k in [k for k, m in self._memory.items() if t - m.last_t > self.config.memory_ttl_s]:
+            del self._memory[k]
 
     def _match(self, t, tracks, beacons) -> Dict[str, str]:
         """One-to-one nearest match of fresh beacons to tracks (greedy)."""
@@ -132,8 +169,9 @@ class FriendFoeEstimator:
         for i, tr in enumerate(tracks):
             for j, b in enumerate(beacons):
                 age = t - b.t
-                if age < -1e-9 or age > cfg.beacon_max_age_s:
+                if age < -cfg.beacon_clock_tolerance_s or age > cfg.beacon_max_age_s:
                     continue
+                age = max(age, 0.0)
                 pred = tuple(p + v * age for p, v in zip(b.position, b.velocity))
                 gate = max(cfg.gate_min_m, cfg.gate_sigmas * math.hypot(tr.pos_sigma, b.pos_sigma))
                 d = _dist(tr.position, pred)

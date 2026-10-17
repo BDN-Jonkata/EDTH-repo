@@ -104,14 +104,79 @@ def test_packet_loss_does_not_make_friendly_flicker():
 
 
 def test_jammed_beacon_friend_holds_then_degrades():
+    # B keeps broadcasting, so the link is known to work and A's silence means something
     _, history = run(
         FriendFoeEstimator(), 200,
-        lambda t: [track("A", t, (0, 0, 0))],
-        lambda t: [beacon("A", t, (0, 0, 0))] if t < 10 else [],
+        lambda t: [track("A", t, (0, 0, 0)), track("B", t, (200, 0, 0))],
+        lambda t: [beacon("B", t, (200, 0, 0))] + ([beacon("A", t, (0, 0, 0))] if t < 10 else []),
     )
     h = history["A"]
     assert h[int(12 / DT)] == "friendly"        # still trusted shortly after jamming starts
     assert h[-1] == "suspicious"                # but not forever
+    assert set(history["B"][10:]) == {"friendly"}
+
+
+def test_everyone_silent_is_never_hostile_and_fades_slowly():
+    # all beacons lost: cannot tell a jam from a dead link, so no one is condemned
+    _, history = run(
+        FriendFoeEstimator(), 400,
+        lambda t: [track("A", t, (0, 0, 0)), track("B", t, (200, 0, 0))],
+        lambda t: [beacon("A", t, (0, 0, 0)), beacon("B", t, (200, 0, 0))] if t < 10 else [],
+    )
+    assert "hostile" not in history["A"] + history["B"]
+    assert history["A"][int(20 / DT)] == "friendly"
+
+
+def lossy_beacons(loss, seed, ids_pos):
+    rng = random.Random(seed)
+    return lambda t: [beacon(i, t, p) for i, p in ids_pos.items() if rng.random() >= loss]
+
+
+FRIENDS = {"A": (0, 0, 0), "B": (200, 0, 0), "C": (400, 0, 0), "D": (600, 0, 0)}
+
+
+def test_friends_stay_friendly_under_heavy_beacon_loss():
+    est = FriendFoeEstimator()
+    flagged = total = 0
+    beacons_at = lossy_beacons(0.85, 3, FRIENDS)
+    for k in range(600):
+        t = k * DT
+        found = est.update(t, [track(i, t, p) for i, p in FRIENDS.items()], beacons_at(t))
+        if t >= 30:
+            total += len(found)
+            flagged += sum(c.cls in ("suspicious", "hostile") for c in found)
+    assert flagged / total < 0.05
+
+
+def first_flag_time(loss, seed):
+    est, beacons_at = FriendFoeEstimator(), lossy_beacons(loss, seed, FRIENDS)
+    for k in range(400):
+        t = k * DT
+        tracks = [track(i, t, p) for i, p in FRIENDS.items()] + [track("X", t, (300, 300, 0))]
+        for c in est.update(t, tracks, beacons_at(t)):
+            if c.track_id == "X" and c.cls == "suspicious":
+                return t
+    return None
+
+
+def test_silent_intruder_is_flagged_slower_when_links_are_lossy_but_still_flagged():
+    clean, lossy = first_flag_time(0.0, 1), first_flag_time(0.85, 1)
+    assert clean is not None and lossy is not None
+    assert lossy > clean
+
+
+def test_delivery_rate_follows_the_measured_loss():
+    est = FriendFoeEstimator()
+    beacons_at = lossy_beacons(0.5, 5, FRIENDS)
+    for k in range(400):
+        t = k * DT
+        est.update(t, [track(i, t, p) for i, p in FRIENDS.items()], beacons_at(t))
+    assert 0.35 < est.delivery_rate < 0.65
+
+
+def test_for_scenario_sets_the_beacon_rate():
+    from friend_foe.estimator import for_scenario
+    assert for_scenario({"beacon": {"rate_hz": 5}}).beacon_rate_hz == 5
 
 
 def make_trigger(weather=CLEAR, **kw):
