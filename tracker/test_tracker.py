@@ -221,6 +221,81 @@ class TestDuplicateTracks(unittest.TestCase):
         self.assertEqual(len(tracker.tracks), 2)
 
 
+class TestOutOfSequence(unittest.TestCase):
+    """A reading that arrives late is applied at the time it was taken (tracker/oosm.py)."""
+
+    SPEED = 10.0
+
+    @staticmethod
+    def reading(t, offset=0.0):
+        x = 100.0 + TestOutOfSequence.SPEED * t + offset      # a target flying east at 10 m/s, seen by a radar at the origin
+        return radar(t, x, 50.0, TestOutOfSequence.SPEED, 0.0, sigma_r=2.0, sigma_b=0.005)
+
+    def run_track(self, config, delayed=(), delay_s=3.0, until=6.0, offset=0.0):
+        """Drive one tracker every 0.1 s; the readings taken at the times in `delayed` arrive `delay_s` later.
+        `offset` shifts the delayed readings along the track, so only a tracker that uses them at their own time agrees."""
+        tracker, backlog, k = Tracker(config), [], 0
+        while k * 0.1 <= until + 1e-9:
+            t = round(k * 0.1, 6)
+            arrived = [m for due, m in backlog if due <= t + 1e-9]
+            backlog = [(due, m) for due, m in backlog if due > t + 1e-9]
+            if any(abs(t - d) < 1e-6 for d in delayed):
+                backlog.append((round(t + delay_s, 6), self.reading(t, offset)))
+            else:
+                arrived.append(self.reading(t))
+            tracker.step(t, arrived)
+            k += 1
+        return tracker
+
+    def only_track(self, tracker):
+        self.assertEqual(len(tracker.tracks), 1)
+        return tracker.tracks[0]
+
+    def test_a_late_reading_gives_the_state_it_would_have_given_on_time(self):
+        """Four readings 3 m off the track, young track: taken at 0.3 to 0.6 s, arriving 1.5 s late."""
+        kwargs = dict(delayed=[0.3, 0.4, 0.5, 0.6], until=2.5, offset=3.0)
+        on_time = self.only_track(self.run_track(TrackerConfig(oosm=True), delay_s=0.0, **kwargs))
+        late = self.only_track(self.run_track(TrackerConfig(oosm=True), delay_s=1.5, **kwargs))
+        at_arrival = self.only_track(self.run_track(TrackerConfig(), delay_s=1.5, **kwargs))
+        self.assertAlmostEqual(late.state[0], on_time.state[0], delta=0.3)
+        self.assertGreater(abs(at_arrival.state[0] - on_time.state[0]), abs(late.state[0] - on_time.state[0]))
+        self.assertGreater(abs(on_time.state[0] - 125.0), 0.1)     # the readings did move the track, so the test can tell
+
+    def test_stale_readings_used_at_arrival_start_a_ghost_track_and_replayed_ones_do_not(self):
+        kwargs = dict(delayed=[x / 10 for x in range(20, 40)], delay_s=3.0, until=6.0)
+        self.assertEqual(len(self.run_track(TrackerConfig(), **kwargs).tracks), 2)
+        tracker = self.run_track(TrackerConfig(oosm=True), **kwargs)
+        self.assertEqual(len(tracker.tracks), 1)
+        self.assertAlmostEqual(tracker.tracks[0].state[0], 160.0, delta=1.0)
+
+    def test_a_reading_older_than_the_window_is_dropped(self):
+        tracker = self.run_track(TrackerConfig(oosm=True, oosm_window_s=2.0), until=8.0)
+        before = list(tracker.tracks[0].state)
+        tracker.step(8.1, [self.reading(1.0, offset=200.0)])      # taken 7 s ago: outside the 2 s window
+        self.assertAlmostEqual(tracker.tracks[0].state[0], before[0] + self.SPEED * 0.1, delta=0.5)
+
+    def test_a_late_reading_starts_no_track(self):
+        tracker = Tracker(TrackerConfig(oosm=True))
+        tracker.step(5.0, [self.reading(2.0)])
+        self.assertEqual(tracker.tracks, [])
+
+    def test_a_late_reading_does_not_keep_a_dead_track_alive(self):
+        tracker = self.run_track(TrackerConfig(oosm=True), until=3.0)
+        tracker.step(3.0 + 14.0, [])
+        tracker.step(3.1 + 14.0, [self.reading(3.0)])
+        self.assertEqual(tracker.tracks, [])      # confirmed_ttl_s (10 s) has passed since the last update
+
+    def test_the_log_is_folded_into_the_checkpoint_so_it_stays_short(self):
+        tr = self.only_track(self.run_track(TrackerConfig(oosm=True, oosm_window_s=2.0), until=10.0))
+        self.assertLessEqual(len(tr.log), 2.0 / 0.1 + 2)
+        self.assertGreater(tr.checkpoint[0], 7.0)
+
+    def test_off_by_default_nothing_is_logged(self):
+        tr = self.only_track(self.run_track(TrackerConfig()))
+        self.assertIsNone(tr.checkpoint)
+        self.assertEqual(tr.log, [])
+
+
 if __name__ == "__main__":
     unittest.main()
 

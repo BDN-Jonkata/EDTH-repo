@@ -2,7 +2,7 @@
 
 Multi-target tracker: Kalman filter on native sensor readings, gated association, track management.
 
-Status: a **central baseline** is done and tested (one tracker on all delivered readings, constant-velocity motion). Not done: per-node trackers sharing compact tracks, covariance intersection, out-of-order and latency handling, the close-crossing hold from a predictor. See [system design](../docs/system-design.md).
+Status: a **central baseline** is done and tested (one tracker on all delivered readings, constant-velocity motion). Not done: per-node trackers sharing compact tracks, covariance intersection, out-of-order handling in the distributed mode, the close-crossing hold from a predictor. See [system design](../docs/system-design.md).
 
 ## What exists
 
@@ -11,6 +11,7 @@ Status: a **central baseline** is done and tested (one tracker on all delivered 
 | [tracker.py](tracker.py) | `Tracker(config).step(t, readings, beacons)` returns the confirmed `Track`s; `TrackerConfig` |
 | [ekf.py](ekf.py) | Kalman filter for `[x, y, vx, vy]` in plain lists: `predict`, `scalar_update` (no matrix is inverted) |
 | [measurement.py](measurement.py) | `from_observation(obs, pose, module)`: an `observation` message plus where the sensor was becomes a `Measurement` (bearing, range, or range and bearing with Doppler); compass degrees become maths radians here only |
+| [oosm.py](oosm.py) | Out-of-sequence readings: a checkpoint and a log of applied readings per track, `replay` with a late reading inserted by its own time, `fold_old` to keep the log short. Off unless `TrackerConfig.oosm` |
 | [models.py](models.py) | Measurement models, the gate, a fix from one radar reading, triangulation of two bearings |
 | [poses.py](poses.py) | `PoseBook`: where each node is **and how well**: ground sensors from the scenario; each drone from a small Kalman filter over its beacons (a beacon is noisy and arrives at 2 Hz), extrapolated to the time of a reading; else the planned patrol loop with a wide uncertainty. `Pose2D.sigma` is added to the noise of every reading from a sensor on that drone |
 | `test_tracker.py` | Tests |
@@ -25,6 +26,27 @@ Run the chain end to end with [pipeline/](../pipeline/pipeline.md).
 - **The sensor's own position is uncertain.** A drone's position comes from its noisy beacons; a 4 m error moves a bearing at 100 m range by 2.3 degrees, more than a camera's own noise. So the pose book smooths the beacons and gives the tracker the pose's 1-sigma, which widens each reading's noise. Using beacon positions as if exact was the largest source of ghost tracks and ID swaps.
 - **Starting a track.** From one radar reading (a fix), or from two bearings from different nodes that cross at 15 degrees or more. A bearing alone never starts one. No new track within 25 m of a living one.
 - **Confirmation and support.** A track is confirmed after 5 readings within 4 s, only while its position is pinned down (1-sigma under 30 m) **and supported**: a range reading (radar, microphone level) within 3 s, or readings from at least 2 different nodes. A confirmed track that loses support for 4 s goes back to tentative; one unseen for 6 s (2 s if tentative) is dropped. Without the support rule, bearings of other objects along the same line kept wandering ghost tracks alive.
+
+## Late readings (`TrackerConfig.oosm`, off by default)
+
+By default a reading is used at its arrival time, so a reading delayed by seconds (a delay burst) either pulls a track back by what the target has moved since, or, when it no longer fits, starts a ghost track. With `oosm` on:
+
+- A reading at least `oosm_min_age_s` (1 s, assumed) old on arrival is out of sequence; younger ones take the normal path.
+- Each track keeps a checkpoint (its state some time ago) and a log of the readings applied since, for `oosm_window_s` (15 s, assumed). A late scan is matched to the tracks **as they were when it was taken**, and each matched track is replayed from the checkpoint with the reading inserted by its own time, so the track ends as if the reading had come on time. Replay is exact for this filter; a one-step-lag method is cheaper but only good for short delays.
+- A late reading starts no track (what it saw has moved on), is only absorbed by a friendly's track, and does not keep a track alive beyond the time it was taken (`last_update` becomes the reading's time).
+- A reading older than the window is dropped. Beacon tracks are not replayed.
+- In the pipeline, `--oosm` turns it on for the central tracker; with `--trust` a late reading is weighted by link health and age (half-life 10 s) instead of being left out.
+
+Measured on the `outage` preset (its own faults: F2 cut, GS2 delayed 4 s from 70 to 85 s, F4 dead from 100 s), 4 tuning seeds, 10 % loss, 10 s warmup, `python -m pipeline.sweep --preset outage --seeds 4 --losses 0.1 --paired oosm` (on minus off, ± standard error). Baseline without trust: hostile tracked 0.59, false tracks 1.00, ID swaps 2.5, position RMSE 14.2 m, OSPA 67.1 m, count error 1.33.
+
+| Variant | Hostile tracked | False tracks | ID swaps | Position RMSE | OSPA | Count error |
+|---------|-----------------|--------------|----------|---------------|------|-------------|
+| `--oosm` against nothing | 0.00 | -0.62±0.05 | -1.25±0.48 | -2.0±0.8 m | -4.8±3.7 m | -0.23±0.23 |
+| `--oosm` on top of `--trust` | +0.01±0.01 | -0.03±0.02 | 0.00 | -0.7±1.3 m | +0.0±0.5 m | 0.00 |
+
+Reading it: **without trust, replaying late readings removes the ghost tracks a stale reading starts** (false tracks 1.00 to 0.38, ID swaps 2.5 to 1.25). `--trust` already gets the same cleaning by leaving late readings out, so on top of it `oosm` changes almost nothing: **it did not win back the 5 points of hostiles tracked** that dropping late readings costs. Why not: a delay burst delays every reading of a node by the same time, so the backlog arrives 4 s late and the tracks it would update are still alive but already held by other sensors; the information is real but adds little to a track that other nodes feed. Only 4 seeds and one preset; the test seeds are not used.
+
+Not done: store-and-forward in the Python channel, so a link outage still loses its messages for good here (the viewer's mock resends them). The distributed mode does not use it.
 
 ## Results (`python -m pipeline.sweep --set test --seeds 20`, `medium` preset, clear weather, 10 s warmup)
 
