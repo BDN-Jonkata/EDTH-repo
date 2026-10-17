@@ -107,14 +107,17 @@ class Investigator:
 
 class Dispatcher:
     def __init__(self, fleet: Fleet, scenario: dict, sequencers: Dict[str, Sequencer],
-                 max_active: int = 2, dwell_s: float = 6.0, lost_s: float = 10.0):
+                 max_active: int = 2, dwell_s: float = 6.0, lost_s: float = 10.0, ground_first: bool = False):
+        """`ground_first`: a track that a ground sensor can already identify from where it stands gets no drone,
+        so no drone leaves its sector for what a fixed sensor can do."""
         self.fleet, self.seq = fleet, sequencers
+        self.ground = scenario["ground"] if ground_first else []
         self.modules_of = {f["id"]: [s["module"] for s in f["sensors"]] for f in scenario["friendlies"]}
         self.max_active, self.dwell_s, self.lost_s = max_active, dwell_s, lost_s
         self.tasks: Dict[str, Task] = {}
         self.log: List[dict] = []      # one entry per finished investigation, for analysis
         self.stats = {"requests": 0, "dispatched": 0, "no_drone": 0, "on_station": 0, "done": 0, "aborted": 0,
-                      "cues": 0, "cue_dispatched": 0}
+                      "cues": 0, "cue_dispatched": 0, "by_ground": 0}
 
     # ------------------------------------------------------------------ requests
     def handle(self, t: float, requests: List[dict]) -> List[dict]:
@@ -122,6 +125,9 @@ class Dispatcher:
         for r in requests:
             self.stats["requests"] += 1
             if r["track_id"] in self.tasks or len(self.tasks) >= self.max_active:
+                continue
+            if self._ground_can_identify(r):
+                self.stats["by_ground"] += 1
                 continue
             pick = self._choose(r)
             if pick is None:
@@ -133,6 +139,16 @@ class Dispatcher:
             self.stats["dispatched"] += 1
             statuses.append(self._status(r["track_id"], drone, "assigned", t))
         return statuses
+
+    def _ground_can_identify(self, request: dict) -> bool:
+        x, y = request["position"][0], request["position"][1]
+        for g in self.ground:
+            distance = math.hypot(g["position"][0] - x, g["position"][1] - y)
+            for s in g["sensors"]:
+                info = request["standoff_by_module"].get(s["module"])
+                if info and info["feasible"] and distance <= info["recommended_m"]:
+                    return True
+        return False
 
     def cue(self, t: float, xy: Tuple[float, float], track_id: str = "") -> bool:
         """Send the closest free drone, the one that saw it included, to identify what is at `xy` (see
