@@ -42,11 +42,14 @@ class Body:
 
 
 class World:
-    def __init__(self, scenario: dict):
+    def __init__(self, scenario: dict, fleet=None):
+        """`fleet` (see `pipeline/fleet.py`) moves the friendly drones when they are commanded; without it they
+        fly their scenario patrol loop. It must be stepped to the current time before the world is queried."""
         self.friendlies = {f["id"]: f for f in scenario["friendlies"]}
         self.ground = {g["id"]: g for g in scenario["ground"]}
         self.targets = scenario["targets"]
         self.clutter = scenario.get("clutter", [])
+        self.fleet = fleet
 
     def node_pose(self, node: str, t: float) -> Pose:
         if node in self.ground:
@@ -54,14 +57,16 @@ class World:
             return Pose(g["position"][0], g["position"][1], 0.0, 0.0, GROUND_SENSOR_ALTITUDE_M,
                         math.radians(90.0 - g["heading_deg"]))
         f = self.friendlies[node]
+        if self.fleet is not None:
+            return self.fleet.pose(node, f["altitude_m"])
         s = seeder_scenario.friendly_state(f, t)
         return Pose(s["x"], s["y"], s["vx"], s["vy"], f["altitude_m"], math.atan2(s["vy"], s["vx"]))
 
     def bodies_at(self, t: float) -> List[Body]:
         bodies = []
         for f in self.friendlies.values():
-            s = seeder_scenario.friendly_state(f, t)
-            bodies.append(Body(f["id"], "friendly", s["x"], s["y"], s["vx"], s["vy"], f["altitude_m"], {}, True))
+            p = self.node_pose(f["id"], t)
+            bodies.append(Body(f["id"], "friendly", p.x, p.y, p.vx, p.vy, f["altitude_m"], {}, True))
         for role, objects in (("hostile", self.targets), ("clutter", self.clutter)):
             for o in objects:
                 s = seeder_scenario.target_state(o, t)

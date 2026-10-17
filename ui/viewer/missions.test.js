@@ -216,7 +216,8 @@ test('patrol destinations reserve space around neighbouring drones and goals', (
 });
 
 test('seeded simulation is repeatable, lite agrees, actual routes remain separated', () => {
-  const params = { seed: 4127, mode: 'optimistic', weather: 'clear' };
+  const params = { seed: 5, mode: 'optimistic', weather: 'clear', scenario: require('./scenarios.js').busy };
+  const world = Sim.prepare(params.scenario);
   const a = Sim.run(params), b = Sim.run(params), lite = Sim.run(params, { lite: true });
   assertFlight(a);
   assert.deepEqual(a, b);
@@ -236,7 +237,7 @@ test('seeded simulation is repeatable, lite agrees, actual routes remain separat
       assert.ok(d.x >= 0 && d.x <= 1000 && d.y >= 0 && d.y <= 1000);
       if (k) {
         const prev = a.frames[k - 1].truth.filter((o) => o.kind === 'friendly');
-        assert.ok(Math.hypot(d.x - prev[i].x, d.y - prev[i].y) <= Sim.SCEN.friendlies[i].v * dt + 1e-8);
+        assert.ok(Math.hypot(d.x - prev[i].x, d.y - prev[i].y) <= world.friendlies[i].v * dt + 1e-8);
         for (let j = 0; j < i; j++) assert.ok(closest(prev[i], d, prev[j], friends[j], dt) >= SEP - 1e-7);
       }
     });

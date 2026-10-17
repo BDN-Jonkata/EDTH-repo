@@ -47,6 +47,13 @@ One config plus a seed gives the same scenario every time. [scenario.py](scenari
 
 What it generates: friendly patrol loops, hostile paths (`straight`, `waypoints`, `loiter`, `hover`, `mixed`, sudden turns, entry and exit times), and a planned close crossing between the first two hostiles at a chosen time and separation. Targets, friendlies and ground sensors use separate random streams, so changing one does not move the others. The config is validated (platforms must exist and be the right type, seeds must belong to the named seed set, loss between 0 and 1, and so on).
 
+`targets.benign_count` reserves part of the total for non-allied benign drones on
+an independent random stream. They fly transits, off-site orbits or hover without
+friendly beacons. The busy preset mixes four of these with four threat scenarios;
+`targets.behavior_demo` gives its non-crossing threats protected-area loiter/hover.
+These are physical paths and scoring roles, never forced estimated flags. See
+[config options](../docs/seeder-config.md) and [behavior rules](../drone_behavior/drone_behavior.md).
+
 ```
 python seeder/generate.py scenarios/hard.json --seed 7        # -> out/hard-s7/
 python seeder/generate.py scenarios/hard.json --sweep tuning    # every seed of a set -> out/<preset>-sweep-tuning/<seed>/

@@ -121,6 +121,15 @@ class TestScore(unittest.TestCase):
         self.assertEqual((quiet.clutter_flagged_frac, loud.clutter_flagged_frac), (0.0, 1.0))
         self.assertEqual(loud.count_error_bias, 1.0)    # the operator counts one hostile too many
 
+    def test_benign_drone_has_its_own_false_flag_metric_and_never_counts_as_true_hostile(self):
+        drone = moving("opaque", "benign", 0, 100, 8, 0)
+        peaceful = score(truth_of(drone), perfect_frames([drone], cls={"opaque": "peaceful"}))
+        flagged = score(truth_of(drone), perfect_frames([drone], cls={"opaque": "hostile"}))
+        self.assertEqual((peaceful.benign_flag_frac, flagged.benign_flag_frac), (0.0, 1.0))
+        self.assertEqual((peaceful.count_error_bias, flagged.count_error_bias), (0.0, 1.0))
+        self.assertEqual(flagged.friendly_flag_frac, 0.0)
+        self.assertEqual(flagged.clutter_flagged_frac, 0.0)
+
     def test_ghost_track_far_from_everything(self):
         frames = [(t, [est("ghost", t, 5000.0, 5000.0)]) for t in TIMES]
         s = score(truth_of(self.h1), frames)

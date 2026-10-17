@@ -84,6 +84,9 @@ class EstimatorConfig:
     friendly_exit: float = 0.7
     suspicious_enter: float = 0.3       # on p_friendly: low means not friendly
     suspicious_exit: float = 0.4
+    suspicious_requires_behavior: bool = False  # beacon-only baseline compatibility; automatic pipeline enables this
+    suspicious_threat_enter: float = 0.65
+    suspicious_threat_exit: float = 0.55
     hostile_enter: float = 0.9          # on p_hostile (behaviour axis)
     hostile_exit: float = 0.7
     peaceful_enter: float = 0.1         # on p_hostile: low means peaceful-like
@@ -252,12 +255,13 @@ class FriendFoeEstimator:
             return "hostile"
         if q <= (cfg.peaceful_exit if prev == "peaceful" else cfg.peaceful_enter):
             return "peaceful"
-        if p <= (cfg.suspicious_exit if prev == "suspicious" else cfg.suspicious_enter):
+        risk_supported = (not cfg.suspicious_requires_behavior or
+                          q >= (cfg.suspicious_threat_exit if prev == "suspicious" else cfg.suspicious_threat_enter))
+        if risk_supported and p <= (cfg.suspicious_exit if prev == "suspicious" else cfg.suspicious_enter):
             return "suspicious"
         return "unknown"
 
-    @staticmethod
-    def _class_prob(cls: str, p: float, q: float) -> float:
+    def _class_prob(self, cls: str, p: float, q: float) -> float:
         if cls == "friendly":
             return p
         if cls == "hostile":
@@ -265,5 +269,5 @@ class FriendFoeEstimator:
         if cls == "peaceful":
             return 1.0 - q
         if cls == "suspicious":
-            return 1.0 - p
+            return q if self.config.suspicious_requires_behavior else 1.0 - p
         return max(p, 1.0 - p)

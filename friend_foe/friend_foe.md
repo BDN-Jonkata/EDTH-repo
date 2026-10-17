@@ -25,11 +25,11 @@ Message formats are in [data-formats.md](../docs/data-formats.md).
 ## Rules
 
 - A fresh beacon consistent with a track pushes it toward friendly. Each beacon matches only its nearest track.
-- Silence lowers confidence slowly, per second, to a floor. Silence alone makes a track suspicious, never hostile, because beacons can be jammed.
+- Silence lowers identity confidence slowly, per second, to a floor. In `AutomaticEstimator` silence alone leaves a contact **unknown**. Suspicion also needs observed behavior risk (`p_hostile` at least 0.65, exit 0.55). The raw `FriendFoeEstimator` keeps the older silence-to-suspicious rule for beacon-only baseline comparisons (`suspicious_requires_behavior=False`).
 - **Silence counts for less on a lossy link.** The estimator measures what share of the expected beacons arrive from tracks it already calls friendly (`delivery_rate`, forgetting over 30 s) and scales the silence penalty by it. At 90 % loss a friendly's missing beacons say little, so friendlies are not flagged; the price is that a silent intruder is flagged later. If every beacon is lost, the estimator cannot tell a jam from a dead link, so nobody is condemned and friendlies fade slowly.
 - A beacon stamped slightly in the future is treated as clock offset (`beacon_clock_tolerance_s`), not discarded.
 - **Two kinds of evidence.** The beacon axis (friendly or not) is moved by beacons and silence. The behaviour axis (hostile-like or peaceful-like, `p_hostile`) is moved **only** by the `threat_llr` hook, which the drone-behaviour module is meant to provide: per update, a positive number is hostile-like and a negative one peaceful-like. It forgets over 20 s, so a track that changes behaviour changes class.
-- **Hostile and peaceful both need that positive evidence.** Silence alone gives `suspicious`, never `hostile` and never `peaceful`, because beacons can be jammed. Without a hook neither class ever appears. A beacon match is primary: a friendly stays friendly whatever its behaviour looks like. Otherwise behaviour (hostile or peaceful) wins over silence (suspicious).
+- **Hostile and peaceful both need behavior evidence.** Silence establishes neither. A beacon match is primary: a friendly stays friendly whatever its behaviour looks like. See [the automatic rules](../drone_behavior/drone_behavior.md#evidence-rules) for sustained safe transit, safe orbit, protected entry and persistent loiter. Behavior never establishes ally identity.
 - Only suspicious tracks are investigated, one request per track at a time, with a cooldown. A peaceful track is still tracked and counted but never sent a drone; a hostile one needs no identification.
 - The hook changed: it was `behaviour_llr` on the beacon scale (negative = hostile-like). It is now `threat_llr` on its own scale (positive = hostile-like). Nobody has built against the old one.
 
@@ -39,7 +39,7 @@ All thresholds are in `EstimatorConfig` and are placeholders. Inputs are datacla
 
 `frames_from_scenario` produces tracks for every friendly, hostile and clutter object (birds and vehicles, which never send beacons) from the motion formulas in `scenario.json` plus position noise, and beacons from the scenario's `beacon` settings. It applies the scenario's `degradations`, each only when its `enabled` is true: network (loss, bursty loss, delay from `latency_ms`), clock (per-node offset and drift stamp the beacon) and pose (position error added, reported as honest sigma). Assumptions where the scenario only gives ranges: bursts have a mean length of 5 messages with the configured average loss; offset and drift get a random sign. **Not modelled:** jamming zones, node dropout, topology. It never reads `truth.json`. A real tracker would not have clean tracks or know the ids, so results on it show the estimator's logic, not the real system's accuracy. Replace the adapter with the real tracker output once it exists.
 
-## Results (adapter, `medium` preset, 20 test seeds, clear weather)
+## Beacon-only baseline results (adapter, `medium` preset, 20 test seeds, clear weather)
 
 Run `python -m friend_foe.sweep --set test --seeds 20`. Tuned on the tuning seeds only; no number below was fitted to the test seeds.
 
@@ -56,7 +56,7 @@ Bursty loss with the same averages gives the same picture (at 90 %: 1.7 friendli
 
 ## Drones wasted on clutter (adapter, `medium` preset, 20 test seeds, 15 % beacon loss, clear weather)
 
-Birds and vehicles have no beacons, so without behaviour evidence they look exactly like hostiles: `suspicious`, and each one is sent a drone. Mean investigation requests per 120 s run (the trigger repeats a request after 30 s when no drone answers, so these include repeats):
+In the raw beacon-only baseline, birds and vehicles have no beacons, so they look exactly like silent hostiles: `suspicious`, and each one is sent a drone. The automatic pipeline requires behavioral risk before dispatching. Historical baseline mean investigation requests per 120 s run (the trigger repeats a request after 30 s when no drone answers, so these include repeats):
 
 | Clutter objects | No behaviour module: requests in total | of which on clutter | Perfect behaviour module (oracle, upper bound) |
 |-----------------|----------------------------------------|---------------------|-----------------------------------------------|

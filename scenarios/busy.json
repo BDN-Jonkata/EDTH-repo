@@ -3,9 +3,11 @@
   "preset": "busy",
   "seed": 3,
   "seed_set": "tuning",
-  "description": "Eight staggered drone entries: crossings, straight flights, hovering, loitering and turns. Clear weather and ideal communications make automatic assessments and investigations easier to watch.",
+  "description": "Mixed traffic: four non-allied benign drones and four threat scenarios, including transit, survey orbit, uncertain hover, protected-area loiter and crossings. The app estimates all five flags from observed behavior.",
   "targets": {
     "count": 8,
+    "benign_count": 4,
+    "behavior_demo": true,
     "motion": "mixed",
     "enter_t": [2, 45],
     "speed_mps": [7, 13],

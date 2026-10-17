@@ -56,10 +56,11 @@ def mounts_of(scenario: dict, modules: Dict[str, dict]) -> List[Mount]:
 
 class ObservationSource:
     def __init__(self, scenario: dict, seed: int = 0, modules: Optional[Dict[str, dict]] = None,
-                 sequencers: Optional[Dict[str, Sequencer]] = None):
-        """`sequencers` lets the beacon source share one message counter per node, as the header rules say."""
+                 sequencers: Optional[Dict[str, Sequencer]] = None, world: Optional[World] = None):
+        """`sequencers` lets the beacon source share one message counter per node, as the header rules say;
+        `world` lets the sources share one world, for example one whose drones can be commanded."""
         self.scenario, self.rng = scenario, random.Random(seed)
-        self.world, self.weather = World(scenario), weather_from_scenario(scenario)
+        self.world, self.weather = world or World(scenario), weather_from_scenario(scenario)
         self.mounts = mounts_of(scenario, modules or load_modules())
         self.seq = sequencers if sequencers is not None else {}
         self.false_alarms_per_s = scenario["environment"].get("clutter", {}).get("false_alarms_per_min", 0.0) / 60.0
