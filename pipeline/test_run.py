@@ -120,5 +120,41 @@ class TestClocks(unittest.TestCase):
         self.assertEqual(pipeline.observations.clocks, {})
 
 
+class TestStoreForward(unittest.TestCase):
+    """`storefwd`: nodes keep what they sent and resend it after an outage (pipeline/storefwd.py)."""
+
+    def pipeline(self, **options):
+        sc, _ = scenario_and_truth("outage", loss=0.1)
+        sc["duration_s"] = 90
+        return Pipeline(sc, sc["seed"], **options)
+
+    def held(self, pipeline, node, until):
+        sizes = {}
+        for k in range(int(until * 10) + 1):
+            t = round(k * 0.1, 6)
+            pipeline.step(t)
+            sizes[round(t)] = len(pipeline.storefwd.nodes[node].store)
+        return sizes
+
+    def test_it_is_off_unless_asked_and_unless_the_scenario_has_it(self):
+        self.assertIsNone(self.pipeline().storefwd)
+        sc, _ = scenario_and_truth("medium")
+        self.assertIsNone(Pipeline(sc, sc["seed"], storefwd=True).storefwd)
+        self.assertIsNone(self.pipeline(storefwd=True, distributed=True).storefwd)
+
+    def test_a_node_cut_off_for_45_seconds_holds_its_messages_and_hands_them_over_afterwards(self):
+        held = self.held(self.pipeline(storefwd=True, oosm=True), "F2", 85)
+        self.assertGreater(held[64], 100)          # nothing was acknowledged since 20 s
+        self.assertLess(held[80], 20)              # resent after the link came back, then acknowledged
+        self.assertLess(held[10], 20)              # a healthy node keeps little
+
+    def test_the_resent_readings_reach_the_tracker_only_when_it_can_replay_them(self):
+        def used_after_outage(**options):
+            p = self.pipeline(storefwd=True, **options)
+            counts = [p.step(round(k * 0.1, 6)).readings_used for k in range(761)]
+            return sum(counts[650:])             # the 11 s after the link came back
+        self.assertGreater(used_after_outage(oosm=True), used_after_outage())
+
+
 if __name__ == "__main__":
     unittest.main()

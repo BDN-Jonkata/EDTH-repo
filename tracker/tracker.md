@@ -64,7 +64,7 @@ Measured on `hard`, 8 tuning seeds, 0 % and 30 % loss, 10 s warmup (`--paired`, 
 
 Reading it: with the default tracker **clock error on readings costs nothing measurable and time-sync gains nothing**, because the tracker never uses a reading's own time; with the clocks at 100 to 200 ms and 20 to 50 ppm the effect is below what 8 seeds can see. **Replaying fresh readings at the time they were taken does help a little**: false tracks fall by 0.3 to 0.4 per step (about 4 standard errors) and ID swaps by 1 to 2.6 per run (1.5 to 2 standard errors), while position error and OSPA stay within noise and the hostiles tracked are at most 2 points lower (about 1 to 2 standard errors). **Time-sync adds nothing on top of that either**: the clock offsets (up to 200 ms, 4 m at 20 m/s) are small next to the position noise of the sensors. The estimator works (a few ms), but on these presets there is no error for it to remove; it would matter with larger offsets or sensors with tighter noise. The Python pipeline's step is 0.1 s, so offsets under 100 ms are below the time resolution anyway.
 
-Not done: store-and-forward in the Python channel, so a link outage still loses its messages for good here (the viewer's mock resends them). The distributed mode does not use it.
+Store-and-forward is in the Python pipeline now (`--storefwd`, [pipeline.md](../pipeline/pipeline.md)), so an outage's backlog arrives late and `--oosm` replays it. The distributed mode does not use either.
 
 ## Results (`python -m pipeline.sweep --set test --seeds 20`, `medium` preset, clear weather, 10 s warmup)
 
