@@ -108,15 +108,16 @@ class TestWeighted(unittest.TestCase):
 
 
 class TestEstimatorUsesIt(unittest.TestCase):
-    def run_outage(self, explained):
+    def run_outage(self, explained, jump_at=None):
         """F1's beacons stop at 5 s; F2 keeps sending, so the delivery rate the estimator measures stays high."""
         est = FriendFoeEstimator(EstimatorConfig(min_updates=2))
         if explained is not None:
             est.silence_explained = lambda friend_id, t: explained
         cls = None
-        for k in range(80):
+        for k in range(160):
             t = k * 0.5
-            t1 = TrackState("T1", t, (100.0 + 10 * t, 100.0, 60.0), (10.0, 0.0, 0.0), 3.0, observed_t=t)
+            y = 100.0 + (200.0 if jump_at is not None and t >= jump_at else 0.0)     # the track jumps onto something else
+            t1 = TrackState("T1", t, (100.0 + 10 * t, y, 60.0), (10.0, 0.0, 0.0), 3.0, observed_t=t)
             t2 = TrackState("T2", t, (100.0 + 10 * t, 400.0, 60.0), (10.0, 0.0, 0.0), 3.0, observed_t=t)
             beacons = [Beacon("F2", t, t2.position, t2.velocity, 3.0)]
             if t < 5.0:
@@ -128,6 +129,11 @@ class TestEstimatorUsesIt(unittest.TestCase):
 
     def test_while_its_link_is_known_to_be_down_it_stays_friendly(self):
         self.assertEqual(self.run_outage(1.0), "friendly")
+
+    def test_a_track_that_jumps_away_from_where_its_beacon_put_it_holds_no_identity(self):
+        """The safety case: the link is down, the track is swapped onto another object; the friendly status must not carry over."""
+        self.assertEqual(self.run_outage(1.0), "friendly")
+        self.assertNotEqual(self.run_outage(1.0, jump_at=15.0), "friendly")
 
     def test_an_unexplained_silence_fades_it_like_before(self):
         self.assertNotEqual(self.run_outage(0.0), "friendly")
