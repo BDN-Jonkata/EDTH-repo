@@ -11,7 +11,7 @@ channel delivered. Run `python -m pipeline.sweep` for the metrics over message l
 """
 
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Dict, Iterator, List, Optional
 
 from common.channel import Channel
@@ -20,6 +20,7 @@ from friend_foe.estimator import Beacon, FriendFoeEstimator, TrackState, for_sce
 from pipeline.dispatch import Investigator
 from fusion.hub import BearingHub
 from fusion.merger import Merger
+from pipeline.cueing import Cueing
 from pipeline.fleet import Fleet
 from pipeline.nodes import NodeTrackers
 from predictor.identity import IdentityKeeper
@@ -42,23 +43,27 @@ class Frame:
     tracks: List[Track]          # confirmed tracks
     beacons: List[dict]          # friendly_beacon messages delivered this step
     readings_used: int           # delivered observations the tracker could use
+    readings: list = field(default_factory=list)   # those readings, for the cueing
 
 
 class Pipeline:
     def __init__(self, scenario: dict, seed: int = 0, tracker_config: Optional[TrackerConfig] = None,
-                 investigate: bool = False, distributed: bool = False):
+                 investigate: bool = False, distributed: bool = False, cue: bool = False):
         """`investigate` lets the drones be commanded (`pipeline/fleet.py`) and adds the investigator that
         commands them (`pipeline/dispatch.py`); without it every drone flies its patrol loop. `distributed`
-        replaces the one central tracker by a tracker per node and a merger (`pipeline/nodes.py`)."""
+        replaces the one central tracker by a tracker per node and a merger (`pipeline/nodes.py`). `cue` also
+        sends the closest other drone at a bearing nothing explains (`pipeline/cueing.py`); it implies the
+        commanded drones and the investigator."""
         sequencers: Dict[str, Sequencer] = {}
         self.modules = load_modules()
-        self.fleet = Fleet(scenario) if investigate else None
+        commanded = investigate or cue
+        self.fleet = Fleet(scenario) if commanded else None
         world = World(scenario, self.fleet)
         self.observations = ObservationSource(scenario, seed, self.modules, sequencers, world)
         self.beacons = BeaconSource(scenario, seed + 1, sequencers, world)
         self.channel = Channel(scenario, seed + 2)
         self.poses, self.tracker = PoseBook(scenario), Tracker(tracker_config)
-        self.investigator = Investigator(scenario, self.fleet, sequencers) if investigate else None
+        self.investigator = Investigator(scenario, self.fleet, sequencers, cueing=Cueing() if cue else None) if commanded else None
         self.nodes = NodeTrackers(tracker_config, sequencers) if distributed else None
         self.merger = Merger() if distributed else None
         self.hub = BearingHub(tracker_config) if distributed else None
@@ -81,7 +86,7 @@ class Pipeline:
             return self._distributed_step(t, observations, beacons, delivered)
         readings = self._readings([m for m in delivered if m["type"] == "observation"])
         tracks = self.tracker.step(t, readings, beacons)
-        return Frame(t, tracks, beacons, len(readings))
+        return Frame(t, tracks, beacons, len(readings), readings)
 
     def _distributed_step(self, t: float, observations: List[dict], beacons: List[dict], delivered: List[dict]) -> Frame:
         """Each node tracks its own readings; only the tracks it shares cross the lossy channel to the merger."""
@@ -89,7 +94,7 @@ class Pipeline:
         for message in self.nodes.step(t, readings, beacons):
             self.channel.send(message, t)
         self.merger.ingest(delivered + self.hub.step(t, delivered))
-        return Frame(t, self.merger.step(t), beacons, len(readings))
+        return Frame(t, self.merger.step(t), beacons, len(readings), readings)
 
     def _readings(self, observations: List[dict]) -> list:
         out = []
@@ -128,7 +133,7 @@ def _beacon(m: dict) -> Beacon:
 def scored_frames(scenario: dict, seed: int = 0, tracker_config: Optional[TrackerConfig] = None,
                   estimator: Optional[FriendFoeEstimator] = None, investigate: bool = False,
                   stats: Optional[dict] = None, recorded: Optional[dict] = None,
-                  keep_identity: bool = False, distributed: bool = False) -> Iterator[tuple]:
+                  keep_identity: bool = False, distributed: bool = False, cue: bool = False) -> Iterator[tuple]:
     """(t, [Estimate]) for the scoring module: the tracker's confirmed tracks with the estimator's class.
 
     With `investigate`, suspicious tracks send drones out; when the run ends `stats` (if given) is filled with
@@ -137,7 +142,7 @@ def scored_frames(scenario: dict, seed: int = 0, tracker_config: Optional[Tracke
     the scripted patrol in `truth.json` (see `scoring.truth.with_recorded_samples`). `keep_identity` runs the
     predictor's identity keeper (`predictor/identity.py`) on the tracks, so a re-acquired target keeps its ID."""
     estimator = estimator or FriendFoeEstimator(for_scenario(scenario))
-    pipeline = Pipeline(scenario, seed, tracker_config, investigate, distributed)
+    pipeline = Pipeline(scenario, seed, tracker_config, investigate, distributed, cue)
     keeper = IdentityKeeper() if keep_identity else None
     pending: List[Beacon] = []
     classes: Dict[str, str] = {}
@@ -156,6 +161,7 @@ def scored_frames(scenario: dict, seed: int = 0, tracker_config: Optional[Tracke
             if pipeline.investigator:
                 pipeline.investigator.on_classification(frame.t, found, states, {tr.track_id: tr for tr in frame.tracks})
         if pipeline.investigator:
+            pipeline.investigator.on_readings(frame.t, frame.readings, frame.tracks)
             pipeline.investigator.step(frame.t, {tr.track_id: (tr.state[0], tr.state[1]) for tr in frame.tracks})
         yield frame.t, [Estimate(tr.track_id, frame.t, tr.state[0], tr.state[1], tr.state[2], tr.state[3],
                                  classes.get(tr.track_id)) for tr in frame.tracks]

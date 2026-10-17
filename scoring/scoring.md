@@ -14,7 +14,8 @@ Status: scoring of one run is done and tested (hand-made cases and one seeder ru
 | [tracks.py](tracks.py) | `frames_from_local_tracks` (the `local_track` messages in [data-formats.md](../docs/data-formats.md)) and `frames_from_estimator` (the friend/foe test adapter) |
 | [run.py](run.py) | `python -m scoring.run truth.json tracks.jsonl [--gate 50] [--warmup 10]` |
 | [sweep.py](sweep.py) | `python -m scoring.sweep --set test --seeds 20 [--birds N --vehicles N] [--csv file]`: the friend/foe estimator on generated scenarios over beacon loss, scored with these metrics |
-| `test_scoring.py` | Tests |
+| [identification.py](identification.py) | `identification(truth, ranges, warmup_s)`: how well the friendly drones are placed to identify the hostiles. `ident_covered_frac` is the share of hostile-present steps with a friendly drone within its best module's identification range (the catalog's `sim.ident_range_m`, assumed, clear weather); `ident_delay_s` is, per hostile, the time from first present to the first step a drone is in range (never covered counts as the whole time present), averaged. The pipeline's observations carry no class cues, so identification itself is not simulated; this measures what a hand-off to the closest drone is for. Only drones count; the fixed ground sensors are not included |
+| `test_scoring.py`, `test_identification.py` | Tests |
 
 ## How a step is scored
 

@@ -57,6 +57,8 @@ class RunScore:
     clutter_flagged_frac: float             # clutter object-steps matched to a counted track
     false_tracks_mean: float                # counted tracks matching no object, per step
     benign_flag_frac: float = 0.0           # non-allied benign drone object-steps matched to a counted track
+    ident_covered_frac: float = 0.0         # hostile-present steps with a drone in identification range (scoring/identification.py)
+    ident_delay_s: float = 0.0              # mean time from a hostile first present to the first drone in range
 
 
 def _dist(est: Estimate, state: State) -> float:
