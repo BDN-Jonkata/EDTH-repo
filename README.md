@@ -82,12 +82,12 @@ Phased, starting from the optimistic case. Status legend: ⬜ not started · �
 |--------|------|
 | ⬜ | Per-node local trackers sharing compact tracks |
 | ⬜ | Track merge with covariance intersection |
-| ⬜ | Drone Behaviour module: friendly pattern + hostile presumption |
+| ✅ | Drone Behaviour module (`drone_behavior/`, Emkata): automatic observed-motion evidence for the estimator's `threat_llr` hook, policy configuration, parity with the viewer's JavaScript. On the pipeline's tracks it calls some hostiles but **no clutter peaceful** (birds and vehicles stay suspicious), so it does not yet save the wasted dispatches: [pipeline.md](pipeline/pipeline.md) |
 | ✅ | Weather model (`sensors/`): several anomalies at once, anomalies that start, end and cover a zone, seasonal sun for day and night, per-module quality and sensor hierarchy from the catalog's `weather_effects`, shared golden cases for the JS port; tested |
 | ✅ | Weather applied to simulated observations: the Python observation models and the viewer's mock simulation both look up sensor quality per detection from the weather at the sensor and at the target (combinations, events and sky are accepted by the seeder and the viewer); standoff uses the catalog's `sim.ident_range_m` |
 | ✅ | Suspicious class, investigation trigger and weather-based standoff per catalog module; reads drone acks through `DroneStatusMapper`; tested |
-| 🟨 | Connect the trigger to the real tracker (the estimator runs on it in `pipeline/`; the trigger is not wired in yet) and to the drone-behaviour module |
-| 🟨 | Closest-drone investigation of suspicious tracks: commanded drone motion with ack and retry exists in the mock simulation (`goto`, `hold`, `return_to_patrol`, flight limits); the drone-behaviour module that picks the drone is not started |
+| 🟨 | Connect the trigger to the real tracker in Python: the estimator and the behaviour module run on it in `pipeline/` (`python -m pipeline.sweep --behaviour`); the trigger is not wired in |
+| ✅ | Closest-drone investigation of suspicious tracks in the viewer's mock simulation (Emkata, `ui/viewer/investigations.js`): closest drone with a feasible sensor, standoff from `ident_range_m` and weather, commanded motion with ack and retry, release on a final class, cooldown |
 
 ### Phase 3 - Prediction
 
