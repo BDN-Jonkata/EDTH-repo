@@ -19,7 +19,7 @@ function same(a, b, what) {
 
 test('agreed estimator configuration matches Python exactly', () => assert.deepEqual(DEFAULTS, reference.estimator_config));
 reference.cases.forEach((c) => test('Python/JS flags, scores and explanations: ' + c.name, () => {
-  const est = new AutomaticEstimator(c.policy, {}, c.verified_ids);
+  const est = new AutomaticEstimator(c.policy, c.config || {}, c.verified_ids);
   c.frames.forEach((f) => {
     same(est.update(f.t, f.tracks, f.beacons), f.expected, c.name + ' t=' + f.t);
     f.tracks.forEach((tr) => same(est.explain(tr.track_id), f.evidence[tr.track_id], c.name + ' ' + tr.track_id + ' t=' + f.t));
