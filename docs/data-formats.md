@@ -40,7 +40,7 @@ Top level: `schema`, `id` (for example `hard-s3`), `name`, `seed`, `preset`, `de
 | `beacon` | friendly position beacons: `enabled`, `rate_hz`, `pos_sigma_m` |
 | `sensor_set.enabled_kinds` | which sensor kinds exist in this run |
 | `environment` | `weather` (`clear`, `fog`, `rain`, `wind`, `night`, or a combination, see [Weather combinations](#weather-combinations-and-weather-events)), `time_of_day`, optional `weather_events[]` and `sky`, `clutter` = `{false_alarms_per_min, birds, vehicles}` (the last two are object counts, 0 to 10) |
-| `degradations` | `clock`, `pose`, `network` (`loss`, `burst`, `latency_ms`, `out_of_order`, `topology`, `bandwidth_kbps`, see [Bandwidth limits](#bandwidth-limits), `jamming_zones[]`, see [Jamming zones](#jamming-zones)), `dropout[]` = `{node, t}` |
+| `degradations` | `clock`, `pose`, `network` (`loss`, `burst`, `latency_ms`, `out_of_order`, `topology`, `bandwidth_kbps`, see [Bandwidth limits](#bandwidth-limits), `jamming_zones[]`, see [Jamming zones](#jamming-zones)), `dropout[]` = `{node, t}`, `sensor_faults[]` and `store_forward`, see [Sensor faults and store-and-forward](#sensor-faults-and-store-and-forward) |
 | `config` | the config that produced it |
 
 A hostile's (or clutter object's) position at time `t`: walk the waypoints linearly, then add a sideways wobble of amplitude `wobble_m` that fades to zero near each waypoint. The exact formula is `target_state` in [seeder/scenario.py](../seeder/scenario.py); do not rewrite it, import it.
@@ -52,6 +52,22 @@ A hostile's (or clutter object's) position at time `t`: walk the waypoints linea
 ### Jamming zones
 
 `degradations.network.jamming_zones[]` = `{x, y, radius_m, loss, t_start?, t_end?, rf_noise_mult?}`: a circle of the map (metres) where, while active, the messages **sent by or to a node inside** lose more often. `loss` is the share lost, 0 to 1, and a message uses the higher of the base `network.loss` and the loss of every active zone the node is in (overlapping zones: the highest). `t_start` defaults to 0 and `t_end` to the end of the run (`t_end` must be after `t_start`). `rf_noise_mult` (at least 1, default 1) multiplies the noise of RF receivers inside the zone. Membership uses the node's true position and the true time, not its drifted clock, so a drone that flies in and out is jammed only while inside; for a command from C2 the node is the receiving drone. Beacons are lost like every other message, which is what friend/foe must survive: silence alone is not proof of hostility. The seeder only checks and passes the zones on (they do not change any path); the mock simulation applies them in Realistic mode only, since they are a comms degradation. The numbers are assumptions.
+
+### Sensor faults and store-and-forward
+
+`degradations.sensor_faults[]` = `{node, kind, t_start, t_end?, extra_ms?}`: data loss injected on purpose. `node` is `F1`..`F5` or a ground sensor id. Kinds:
+
+| `kind` | What happens | Fields |
+|--------|--------------|--------|
+| `dropout` | the node dies at `t_start` and never sends again (same as `dropout[]`) | no `t_end` |
+| `link_outage` | the node is alive and keeps sensing, but nothing it sends, and nothing sent to it, gets through | `t_end` |
+| `delay_burst` | everything the node sends arrives `extra_ms` later than usual | `t_end`, `extra_ms` > 0 |
+
+`t_end` must be after `t_start`. Each fault adds a `fault_start` (and, with `t_end`, a `fault_end`) event to `truth.json`, so scoring can measure how fast the system noticed.
+
+`degradations.store_forward` = `{enabled, buffer_s?, resend_share?}` (default: absent, off). When on, every node keeps a copy of each message it sends until C2 acknowledges it, for at most `buffer_s` seconds (default 60, the oldest expire first). C2 sends a [`c2_ack`](#store-and-forward-messages) once a second; after hearing one, a node resends what C2 is missing, oldest first, using at most `resend_share` (default 0.5) of its bandwidth cap per second (no cap: no limit). A message is resent with its original header, so `seq` and `t_sent` show it is old. A node that hears no ack for 3 s counts itself offline. A message the bandwidth cap drops is still in the node's store, so it is resent like a lost one. The numbers are assumptions.
+
+The seeder only checks and passes both on; the mock simulation applies them in Realistic mode only (the rules are in [ui/viewer/storefwd.js](../ui/viewer/storefwd.js)).
 
 ### Weather combinations and weather events
 
@@ -81,10 +97,11 @@ Why it matters: `seed_catalog.py --check` tests single weathers only. In combina
   "objects": [ { "id": "H1", "kind": "hostile|friendly|benign|clutter", "altitude_m": 45.0,
                  "samples": [[t, x, y, vx, vy], ...] } ],   -- a clutter object also has "type": "bird|vehicle"
   "events":  [ {"type": "enter|exit", "id", "t"},
-               {"type": "crossing", "a", "b", "t", "sep_m", "x", "y"} ] }
+               {"type": "crossing", "a", "b", "t", "sep_m", "x", "y"},
+               {"type": "fault_start|fault_end", "node", "kind", "t"} ] }
 ```
 
-Positions are rounded to 0.1 m, velocities to 0.01 m/s. A hostile or clutter object has samples only while it is inside the area. Events are about hostiles only. Scoring: a hostile track on a clutter object is a false alarm, not a missed hostile.
+Positions are rounded to 0.1 m, velocities to 0.01 m/s. A hostile or clutter object has samples only while it is inside the area. Events are about hostiles only, except `fault_start` and `fault_end`, which say when an injected [sensor fault](#sensor-faults-and-store-and-forward) starts and ends. Scoring: a hostile track on a clutter object is a false alarm, not a missed hostile.
 
 ## Sweep folders
 
@@ -158,6 +175,17 @@ Everything that crosses the channel is a message with a top-level `type` and a `
 | `position` | `[x, y, z]` metres, with the beacon noise (`beacon.pos_sigma_m`); taken at the drone's own clock, so drift shows up as a position error |
 | `velocity` | `[vx, vy, vz]` m/s |
 | `covariance` | 3 × 3 position covariance |
+| `status` | only with store-and-forward on: `{offline, buffered_s, oldest_seq}`, see below |
+
+### Store-and-forward messages
+
+Sent only when the scenario turns `degradations.store_forward` on.
+
+`c2_ack` (from `C2`, once a second, heard by every node over its own link): `acks` = `{node: {upto, max, missing}}`. `upto`: every `seq` up to here arrived (or the node no longer holds it); `max`: the highest `seq` that arrived; `missing`: up to 32 ranges `[from, to]` between them that did not arrive.
+
+`node_status` (from a ground sensor, once a second; a drone puts the same thing in its beacon's `status`): `node_id` and `status` = `{offline, buffered_s, oldest_seq}`. `offline`: the node heard no ack for 3 s; `buffered_s`: how many seconds of unacknowledged messages it holds; `oldest_seq`: the oldest one it still holds (`null` when none), so C2 stops asking for older ones.
+
+C2 treats a message as a duplicate when its `seq` already arrived, and as late when it arrives more than 3 s after its `t_sent`. Late messages go to history, not to the live picture (except `drone_state`).
 
 ## Drone commands
 
@@ -194,7 +222,7 @@ Today the mock simulation ([ui/viewer/sim.js](../ui/viewer/sim.js), header in [m
 
 ## Saved simulation run (`simulations` table, `export-run.js` output)
 
-`{ params, scenario, result }`, where `result` has `frames`, `alerts`, `timeline`, `summary`, `sensors`. Frames are one per 0.1 s (`k`, `t`, `meas`, `tracks`, `truth`, `links`, `m` = metrics). `summary` = `{rmse, countErr, swaps, ffa}` (`ffa` = friendlies flagged hostile), plus `cfa` (clutter objects tracked as hostile) when the scenario has clutter. In `meas`, `clutter: true` marks a random false alarm, not a detection of a clutter object.
+`{ params, scenario, result }`, where `result` has `frames`, `alerts`, `timeline`, `summary`, `sensors`. Frames are one per 0.1 s (`k`, `t`, `meas`, `tracks`, `truth`, `links`, `m` = metrics). `summary` = `{rmse, countErr, swaps, ffa}` (`ffa` = friendlies flagged hostile), plus `cfa` (clutter objects tracked as hostile) when the scenario has clutter. With store-and-forward on, the result also has `storeForward` = `{nodes: {node: {stored, resent, expired, late_arrivals, still_held}}, duplicates, outages: [{node, kind, t_start, t_end, catch_up_s}]}` (`catch_up_s`: from the end of a fault until the node holds nothing from before it), and each frame has `health` = `{node: {state, silent_s, loss, offline, buffered_s}}`. `state` is C2's view: `ok`, `degraded` (at least 30 % of the recent `seq` numbers missing, ok again below 20 %; at least 20 numbers needed), `offline` (nothing heard for 4 s) or `presumed_dead` (15 s; C2 cannot tell a dead node from a jammed one). The thresholds are assumptions. In `meas`, `clutter: true` marks a random false alarm, not a detection of a clutter object.
 
 To save space, numbers are rounded and a list of same-shaped objects is stored as `{"cols": [...], "rows": [[...]]}`. Read it back with `unpack()` from [seeder/tables.py](../seeder/tables.py):
 
