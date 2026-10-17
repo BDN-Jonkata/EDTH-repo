@@ -50,6 +50,11 @@ def load_preset(name: str) -> dict:
 
 
 def make_scenario(setup: Setup, index: int, weather: str, loss: float, burst: bool) -> dict:
+    return make_scenario_and_truth(setup, index, weather, loss, burst)[0]
+
+
+def make_scenario_and_truth(setup: Setup, index: int, weather: str, loss: float, burst: bool):
+    """The scenario and its `truth.json`; only the scoring module may read the second."""
     config = copy.deepcopy(setup.preset)
     config["seed_set"], config["seed"] = setup.seed_set, seeder_scenario.seed_for(setup.seed_set, index)
     env = config.setdefault("environment", {})
@@ -58,9 +63,9 @@ def make_scenario(setup: Setup, index: int, weather: str, loss: float, burst: bo
         env["clutter"] = {**env.get("clutter", {}), "birds": setup.birds, "vehicles": setup.vehicles}
     net = config.setdefault("degradations", {}).setdefault("network", {})
     net.update({"enabled": True, "loss": loss, "burst": burst})
-    scenario, _truth = seeder_scenario.generate(config)
+    scenario, truth = seeder_scenario.generate(config)
     scenario["environment"]["weather"] = weather
-    return scenario
+    return scenario, truth
 
 
 def average(runs: List[RunMetrics]) -> Dict[str, Optional[float]]:
