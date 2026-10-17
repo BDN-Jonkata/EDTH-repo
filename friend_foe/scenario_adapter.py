@@ -2,7 +2,7 @@
 
 TEST STAND-IN for the real pipeline, until the simulation and tracker exist:
 
-* tracks: every friendly and every hostile, from the motion formulas in
+* tracks: every friendly, hostile and clutter object (birds, vehicles), from the motion formulas in
   `scenario.json` (`friendly_state`, `target_state` from the seeder) plus
   position noise. A real tracker would not know the ids or have clean tracks.
 * beacons: each friendly broadcasts at `beacon.rate_hz` with `beacon.pos_sigma_m`
@@ -86,10 +86,10 @@ class _Feed:
             state = seeder_scenario.friendly_state(f, t)
             tracks.append(self._track(f["id"], t, state, f["altitude_m"]))
             self._send_beacon(f, state, t)
-        for tg in self.s["targets"]:
-            state = seeder_scenario.target_state(tg, t)
+        for obj in self.s["targets"] + self.s.get("clutter", []):   # clutter: birds and vehicles, never beacons
+            state = seeder_scenario.target_state(obj, t)
             if state is not None:
-                tracks.append(self._track(tg["id"], t, state, tg["altitude_m"]))
+                tracks.append(self._track(obj["id"], t, state, obj["altitude_m"]))
         return t, tracks, self._arrived(t)
 
     def _noisy(self, state: dict, altitude: float, sigma: float):
