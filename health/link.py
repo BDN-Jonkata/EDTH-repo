@@ -28,10 +28,10 @@ OK, DEGRADED, OFFLINE, PRESUMED_DEAD = "ok", "degraded", "offline", "presumed_de
 
 @dataclass
 class HealthConfig:
-    loss_good: float = 0.05         # chance a message is lost while the link is good (assumed)
-    loss_bad: float = 0.6           # and while it is in a burst (assumed)
-    stay_good: float = 0.98         # chance per message to stay in each state (assumed)
-    stay_bad: float = 0.90
+    loss_good: float = 0.02         # chance a message is lost while the link is good (fitted to common/channel.py's chain)
+    loss_bad: float = 0.95          # and while it is in a burst (the channel's bursts lose everything)
+    stay_good: float = 0.97         # chance per message to stay in each state
+    stay_bad: float = 0.80          # the channel's mean burst is 5 messages
     prior_bad: float = 0.1
     window: int = 40                # outcomes the frequentist layer looks at
     wilson_z: float = 1.96          # 95 % interval
