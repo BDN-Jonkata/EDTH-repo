@@ -2,7 +2,7 @@
 
 Metrics harness: count error, position/velocity error, ID swaps, friendly false alarms, degradation vs message loss.
 
-Status: scoring of one run is done and tested (hand-made cases and one seeder run through the friend/foe test adapter). Not done: sweeps over message loss for the whole pipeline (needs the real tracker), and a reader for the viewer's `result` JSON. See [system design](../docs/system-design.md).
+Status: scoring of one run is done and tested (hand-made cases and one seeder run through the friend/foe test adapter). A run exported from the viewer's mock simulation can be scored too (`viewer_run.py`). See [system design](../docs/system-design.md).
 
 ## What exists
 
@@ -12,10 +12,11 @@ Status: scoring of one run is done and tested (hand-made cases and one seeder ru
 | [truth.py](truth.py) | Reads `truth.json` (`edth.truth/2`); only the scoring module may. Interpolates between samples; an object outside the area has no state |
 | [common/assignment.py](../common/assignment.py) | Optimal one-to-one assignment (Hungarian) with a distance gate, pure Python; shared with the tracker |
 | [tracks.py](tracks.py) | `frames_from_local_tracks` (the `local_track` messages in [data-formats.md](../docs/data-formats.md)) and `frames_from_estimator` (the friend/foe test adapter) |
-| [run.py](run.py) | `python -m scoring.run truth.json tracks.jsonl [--gate 50] [--warmup 10]` |
+| [run.py](run.py) | `python -m scoring.run truth.json tracks.jsonl [--gate 50] [--warmup 10]`, or `python -m scoring.run --viewer run.json [--hostile-only] [--from 45 --to 90]` for a viewer run |
+| [viewer_run.py](viewer_run.py) | `score_viewer_run(run, hostile_only, window_s)`: reads a run exported by `node ui/viewer/export-run.js` (or the `simulations` table). The truth is built from the true states recorded in the run's own frames, so it is right for commanded drones too; tentative tracks are left out. `hostile_only` counts only the tracks the mock called `hostile`, as its own summary does; without it every class except friendly and peaceful counts, as in the rest of this module. `window_s` limits the frames (the mock's summary uses a window around the crossing, `[crossing - 6 s, crossing + 39 s]`). On `medium` the count error over that window agrees with the mock's per-frame record within 0.05; tracks and matching differ in small ways, so the other numbers (position error, swaps) are comparable, not identical |
 | [sweep.py](sweep.py) | `python -m scoring.sweep --set test --seeds 20 [--birds N --vehicles N] [--csv file]`: the friend/foe estimator on generated scenarios over beacon loss, scored with these metrics |
 | [identification.py](identification.py) | `identification(truth, ranges, warmup_s)`: how well the friendly drones are placed to identify the hostiles. `ident_covered_frac` is the share of hostile-present steps with a friendly drone within its best module's identification range (the catalog's `sim.ident_range_m`, assumed, clear weather); `ident_delay_s` is, per hostile, the time from first present to the first step a drone is in range (never covered counts as the whole time present), averaged. The pipeline's observations carry no class cues, so identification itself is not simulated; this measures what a hand-off to the closest drone is for. Only drones count; the fixed ground sensors are not included |
-| `test_scoring.py`, `test_identification.py` | Tests |
+| `test_scoring.py`, `test_identification.py`, `test_viewer_run.py` | Tests |
 
 ## How a step is scored
 

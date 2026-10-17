@@ -61,7 +61,7 @@ class Pipeline:
         world = World(scenario, self.fleet)
         self.observations = ObservationSource(scenario, seed, self.modules, sequencers, world)
         self.beacons = BeaconSource(scenario, seed + 1, sequencers, world)
-        self.channel = Channel(scenario, seed + 2)
+        self.channel = Channel(scenario, seed + 2, lambda node, t: _node_xy(world, node, t))   # for jamming zones
         self.poses, self.tracker = PoseBook(scenario), Tracker(tracker_config)
         self.investigator = Investigator(scenario, self.fleet, sequencers, cueing=Cueing() if cue else None) if commanded else None
         self.nodes = NodeTrackers(tracker_config, sequencers) if distributed else None
@@ -111,6 +111,14 @@ def run(scenario: dict, seed: int = 0, tracker_config: Optional[TrackerConfig] =
     pipeline = Pipeline(scenario, seed, tracker_config)
     for k in range(int(scenario["duration_s"] / STEP_S) + 1):
         yield pipeline.step(round(k * STEP_S, 6))
+
+
+def _node_xy(world: World, node: str, t: float) -> Optional[tuple]:
+    """Where a sending node really is (the channel's jamming zones need it); None for a sender that is not a node."""
+    if node not in world.friendlies and node not in world.ground:
+        return None
+    pose = world.node_pose(node, t)
+    return pose.x, pose.y
 
 
 def _track_state(tr: Track, t: float) -> TrackState:
