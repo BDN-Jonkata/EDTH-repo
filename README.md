@@ -111,7 +111,7 @@ Phased, starting from the optimistic case. Status legend: ⬜ not started · �
 
 | Status | Task |
 |--------|------|
-| ⬜ | Run full scenario sweeps and collect metrics |
+| 🟨 | Run full scenario sweeps and collect metrics: the seeder generates every seed of a set (`python seeder/generate.py scenarios/hard.json --sweep tuning`); collecting metrics over them is the next step |
 | ⬜ | Compare centralized / decentralized / hybrid if time allows |
 | ⬜ | Operator view / COP visualisation |
 | ⬜ | Demo, write-up, final presentation |
