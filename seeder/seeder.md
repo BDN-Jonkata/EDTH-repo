@@ -56,7 +56,9 @@ These are physical paths and scoring roles, never forced estimated flags. See
 
 ```
 python seeder/generate.py scenarios/hard.json --seed 7        # -> out/hard-s7/
+python seeder/generate.py scenarios/hard.json --sweep tuning    # every seed of a set -> out/<preset>-sweep-tuning/<seed>/
 python seeder/export_scenarios.py                              # refresh ui/viewer/scenarios.js
+python seeder/unverified.py                                    # worksheet of catalog numbers still to verify
 python -m unittest discover -s seeder/tests -v                 # 21 tests
 ```
 

@@ -89,8 +89,12 @@ def run(scenario: dict, seed: int = 0, tracker_config: Optional[TrackerConfig] =
 
 
 def _track_state(tr: Track, t: float) -> TrackState:
+    """What the estimator may know about a track, including how fresh it is: `observed_t` is the last reading
+    that really updated it (a coasting track is extrapolation, not an observation), so the behaviour module
+    draws no conclusion from a track that is only a guess. Existence is not lowered while a track coasts: that
+    dropped friend tracks whose beacons were lost out of the estimator, and they then counted as flagged."""
     return TrackState(tr.track_id, t, (tr.state[0], tr.state[1], 0.0), (tr.state[2], tr.state[3], 0.0),
-                      pos_sigma=tr.position_sigma, existence_prob=0.95)
+                      pos_sigma=tr.position_sigma, existence_prob=0.95, observed_t=tr.last_update)
 
 
 def _beacon(m: dict) -> Beacon:
@@ -125,7 +129,7 @@ def scored_frames(scenario: dict, seed: int = 0, tracker_config: Optional[Tracke
             found = estimator.update(frame.t, states, pending)
             classes, pending = {c.track_id: c.cls for c in found}, []
             if pipeline.investigator:
-                pipeline.investigator.on_classification(frame.t, found, states)
+                pipeline.investigator.on_classification(frame.t, found, states, {tr.track_id: tr for tr in frame.tracks})
         if pipeline.investigator:
             pipeline.investigator.step(frame.t, {tr.track_id: (tr.state[0], tr.state[1]) for tr in frame.tracks})
         yield frame.t, [Estimate(tr.track_id, frame.t, tr.state[0], tr.state[1], tr.state[2], tr.state[3],

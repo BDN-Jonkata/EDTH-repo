@@ -46,6 +46,8 @@ class TrackerConfig:
     pending_ttl_s: float = 1.0
     spawn_clearance_m: float = 25.0        # no new track this close to a living one
     beacon_velocity_sigma_mps: float = 1.0
+    friend_accel_noise_mps2: float = 3.0   # process noise of a friendly's beacon track
+    beacon_trust_s: float = 2.0            # while a friend's last beacon is this recent, sensor readings of it are only absorbed
 
 
 @dataclass
@@ -59,6 +61,7 @@ class Track:
     confirmed: bool = False
     origin: str = ""             # what started it: "radar", "bearings" or "beacon"
     friend_id: Optional[str] = None     # set for a track started by a friendly beacon
+    beacon_time: float = -math.inf      # when that drone's last beacon arrived
     range_time: float = -math.inf       # last reading that gave a range
     node_times: Dict[str, float] = field(default_factory=dict)
     unsupported_since: Optional[float] = None
@@ -91,7 +94,8 @@ class Tracker:
         dt = 0.0 if self._t is None else max(0.0, t - self._t)
         self._t = t
         for tr in self.tracks:
-            tr.state, tr.cov = predict(tr.state, tr.cov, dt, self.config.accel_noise_mps2)
+            accel = self.config.friend_accel_noise_mps2 if tr.friend_id else self.config.accel_noise_mps2
+            tr.state, tr.cov = predict(tr.state, tr.cov, dt, accel)
 
     # ------------------------------------------------------------------ beacons
     def _beacon(self, t: float, b: dict) -> None:
@@ -100,14 +104,14 @@ class Tracker:
         if tr is None:
             cov = identity_like([sigma ** 2, sigma ** 2, v_sigma ** 2, v_sigma ** 2])
             state = [b["position"][0], b["position"][1], b["velocity"][0], b["velocity"][1]]
-            tr = self._add(Track(self._new_id(), state, cov, t, t, [t], True, "beacon", b["friend_id"]))
+            tr = self._add(Track(self._new_id(), state, cov, t, t, [t], True, "beacon", b["friend_id"], beacon_time=t))
             self.friends[b["friend_id"]] = tr
             return
         for i, variance in enumerate((sigma ** 2, sigma ** 2, v_sigma ** 2, v_sigma ** 2)):
             value = (b["position"][0], b["position"][1], b["velocity"][0], b["velocity"][1])[i]
             h = [1.0 if k == i else 0.0 for k in range(4)]
             tr.state, tr.cov = scalar_update(tr.state, tr.cov, value - tr.state[i], h, variance)
-        tr.last_update = t
+        tr.last_update = tr.beacon_time = t
 
     # --------------------------------------------------------------- association
     def _associate(self, t: float, measurements: Sequence[Measurement]) -> List[Measurement]:
@@ -125,6 +129,9 @@ class Tracker:
         pairs = assign(cost, BIG_GATE) if self.tracks and scan else []
         for i, j in pairs:
             tr, m = self.tracks[i], scan[j]
+            if tr.friend_id is not None and t - tr.beacon_time <= self.config.beacon_trust_s:
+                tr.last_update = t          # absorbed: it is the drone, whose beacons know better than a sensor
+                continue
             tr.state, tr.cov = apply_measurement(tr.state, tr.cov, m)
             tr.last_update = t
             tr.update_times.append(t)

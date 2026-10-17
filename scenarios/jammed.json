@@ -1,0 +1,33 @@
+{
+  "name": "jammed",
+  "preset": "jammed",
+  "seed": 6,
+  "seed_set": "tuning",
+  "description": "Three hostiles under electronic warfare: a strong jamming zone over the north-east that switches on at 30 s, a weaker permanent one in the west, and a 32 kbit/s link cap per node. Messages from nodes inside a zone are lost, and radio sensors there hear more noise.",
+  "targets": {
+    "count": 3,
+    "motion": "mixed",
+    "speed_mps": [7, 14],
+    "crossing": {"enabled": true, "t": 60}
+  },
+  "environment": {
+    "weather": "clear",
+    "clutter": {
+      "false_alarms_per_min": 2,
+      "birds": 0,
+      "vehicles": 1
+    }
+  },
+  "degradations": {
+    "network": {
+      "enabled": true,
+      "loss": 0.1,
+      "latency_ms": [50, 200],
+      "bandwidth_kbps": 32,
+      "jamming_zones": [
+        {"x": 700, "y": 700, "radius_m": 280, "loss": 0.9, "t_start": 30, "t_end": 100, "rf_noise_mult": 3},
+        {"x": 200, "y": 300, "radius_m": 150, "loss": 0.6}
+      ]
+    }
+  }
+}

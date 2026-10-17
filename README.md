@@ -52,26 +52,27 @@ Phased, starting from the optimistic case. Status legend: ⬜ not started · �
 
 | Status | Task |
 |--------|------|
-| 🟨 | Folder structure and docs (concept, system design) |
+| ✅ | Folder structure and docs (concept, system design) |
 | ⬜ | Decide fusion topology (hybrid proposed) and module boundaries |
 | 🟨 | Define shared message schema (observation, track, uncertainty, timestamp, source ID): header, beacon, track, investigation and drone-command messages drafted in `docs/data-formats.md`; observation and final COP track not frozen |
 | 🟨 | Choose stack, simulation framework and message bus: Python, JSON Lines and PostgreSQL chosen; bus and the real simulation framework still open (a JavaScript mock simulation runs in the viewer) |
-| 🟨 | Define scoring metrics and ground-truth format: `truth.json` format, metrics and the scoring module defined and done |
+| ✅ | Define scoring metrics and ground-truth format: `truth.json` format, metrics and the scoring module defined and done |
 | 🟨 | Set up environment, tooling, CI: Python environment, pytest and unittest suites, node tests, `.env` and PostgreSQL done; no CI and no formatter yet |
 
 ### Phase 1 - Optimistic pipeline (clean data)
 
 | Status | Task |
 |--------|------|
-| 🟨 | Seeder: sensor and platform catalog, PostgreSQL storage, scenario generator (friendly patrols, ground sensors, hostile and non-allied benign paths, planned close crossing, five presets, tuning and test seeds) done; also clutter objects (birds, vehicles), weather combinations, weather events and a seasonal sky, and jamming zones in the config; terrain, moving ground units and bandwidth limits are not in the generator |
-| 🟨 | Simulation: the viewer runs a JavaScript mock simulation (2D map with terrain/height display, crossing, commanded drone motion, clutter objects, per-detection weather with a sky control, jamming zones); the real simulation module is not started |
+| ✅ | Seeder: sensor and platform catalog, PostgreSQL storage, scenario generator (friendly patrols, ground sensors, hostile and non-allied benign paths, planned close crossing, seven presets, tuning and test seeds) done; also clutter objects (birds, vehicles), weather combinations, weather events and a seasonal sky, jamming zones and bandwidth limits in the config, and scenario sweeps (`python seeder/generate.py scenarios/hard.json --sweep tuning`, one folder per seed); a worksheet for verifying the catalog numbers (`python seeder/unverified.py`); terrain and moving ground units wait for the mentor and are not part of this row |
+| ✅ | Mock simulation: the viewer runs a JavaScript simulation (2D map with terrain/height display, crossing, commanded drone motion, clutter objects, per-detection weather with a sky control, jamming zones, per-node link bandwidth caps; the Sensor limits table and coverage follow the weather at the sensor) |
+| ⬜ | Real simulation module (Python, with the channel emulator wired in); the mock above is the reference for its rules, including jamming zones and bandwidth caps |
 | ✅ | Network channel (`common/channel.py`): loss (independent or bursty, per sender), delay and node clocks from the scenario's `degradations`; jamming zones, node dropout and topology not modelled in Python (the viewer's mock simulation has a channel with jamming zones) |
 | ✅ | Sensor observation models (`sensors/observe.py`, `native.py`, `beacons.py`): range window, field of view, detection probability, signatures, weather per detection, native fields with honest noise; the viewer's mock simulation has its own JavaScript version |
-| ✅ | Baseline tracker (`tracker/`): central Kalman tracker on native readings, gated association, radar or two-bearing start, support rules, friendly beacon tracks; tested. Weak spot: a hostile is tracked 57 % of the time, see [tracker.md](tracker/tracker.md) |
+| ✅ | Baseline tracker (`tracker/`): central Kalman tracker on native readings, gated association, radar or two-bearing start, support rules, friendly beacon tracks; tested. The drones' own positions are smoothed from their beacons and their uncertainty goes into the sensor noise; sensor readings of a drone with fresh beacons are absorbed, not applied. Weak spot: a hostile is tracked 58 % of the time at 0 % message loss (limited by what the sensors see), see [tracker.md](tracker/tracker.md) |
 | ✅ | Friend/Foe estimator: beacon matching, delivery-rate-weighted silence, `peaceful` class and behaviour hook (`threat_llr`), tested on synthetic data and seeder scenarios through a test adapter (`friend_foe/`) |
 | ✅ | Friend/foe estimator fed from the real tracker and delivered beacons (`pipeline/`); the test adapter remains for quick experiments |
 | ✅ | Scoring of one run (`scoring/`): optimal matching to `truth.json`, count error, position/velocity/heading error, OSPA, ID swaps, friendly and clutter false alarms; tested |
-| ✅ | Message-loss sweep for the whole pipeline (`python -m pipeline.sweep`, results in [tracker.md](tracker/tracker.md#results)) |
+| ✅ | Message-loss sweep for the whole pipeline (`python -m pipeline.sweep`, results in [tracker.md](tracker/tracker.md#results)); every cell is printed with its standard error, and `--paired investigate` compares with and without investigation on the same seeds |
 | ⬜ | Reader for the viewer's result JSON in `scoring/` |
 
 **Exit criteria:** correct hostile count, no ID swaps through the crossing, zero friendlies flagged, on clean data.
@@ -86,7 +87,7 @@ Phased, starting from the optimistic case. Status legend: ⬜ not started · �
 | ✅ | Weather model (`sensors/`): several anomalies at once, anomalies that start, end and cover a zone, seasonal sun for day and night, per-module quality and sensor hierarchy from the catalog's `weather_effects`, shared golden cases for the JS port; tested |
 | ✅ | Weather applied to simulated observations: the Python observation models and the viewer's mock simulation both look up sensor quality per detection from the weather at the sensor and at the target (combinations, events and sky are accepted by the seeder and the viewer); standoff uses the catalog's `sim.ident_range_m` |
 | ✅ | Suspicious class, investigation trigger and weather-based standoff per catalog module; reads drone acks through `DroneStatusMapper`; tested |
-| ✅ | Trigger connected to the real tracker in Python: `python -m pipeline.sweep --investigate` sends a stand-in drone (`pipeline/fleet.py`, `dispatch.py`) at suspicious tracks and scores against the trajectories flown. Result: hostile tracked 2 to 4 points more at 0 and 50 % loss, but more false tracks and flagged friendlies, see [pipeline.md](pipeline/pipeline.md) |
+| ✅ | Trigger connected to the real tracker in Python: `python -m pipeline.sweep --investigate` sends a stand-in drone (`pipeline/fleet.py`, `dispatch.py`) at suspicious tracks and scores against the trajectories flown. Result (measured before the latest tracker fixes, so treat it as approximate): hostile tracked a few points more at low loss, with more false tracks; the dispatch rules and the beacon-track fix since then are not yet re-measured with `--paired investigate`, see [pipeline.md](pipeline/pipeline.md) |
 | ✅ | Closest-drone investigation of suspicious tracks in the viewer's mock simulation (Emkata, `ui/viewer/investigations.js`): closest drone with a feasible sensor, standoff from `ident_range_m` and weather, commanded motion with ack and retry, release on a final class, cooldown |
 
 ### Phase 3 - Prediction
@@ -111,7 +112,7 @@ Phased, starting from the optimistic case. Status legend: ⬜ not started · �
 
 | Status | Task |
 |--------|------|
-| ⬜ | Run full scenario sweeps and collect metrics |
+| 🟨 | Run full scenario sweeps and collect metrics: the seeder generates every seed of a set (`python seeder/generate.py scenarios/hard.json --sweep tuning`); collecting metrics over them is the next step |
 | ⬜ | Compare centralized / decentralized / hybrid if time allows |
 | ⬜ | Operator view / COP visualisation |
 | ⬜ | Demo, write-up, final presentation |
@@ -136,7 +137,7 @@ Detailed split and per-phase tasks: [docs/team-plan.md](docs/team-plan.md).
 |--------|------|------|
 | A | Platform and world: `common`, `scenarios`, `seeder`, `simulation` (incl. channel emulator), the viewer's mock simulation | Orlin |
 | Drone behaviour | Drone selection and flight, the behaviour module that feeds `threat_llr` | Emkata |
-| C | Sensing, classification, evaluation: `sensors`, `friend_foe`, `scoring`, `pipeline`, `ui` | Kristian |
+| C | Sensing, classification, evaluation: `sensors`, `friend_foe`, `scoring`, `pipeline`, `ui` | Kristiyan |
 | B | Tracking and fusion: `tracker`, `fusion`, `predictor` | **nobody: the team is three people.** The baseline tracker and the pipeline were built by C. Per-node trackers, fusion and the predictor are unowned |
 
 ## Decisions log
@@ -164,9 +165,14 @@ Detailed split and per-phase tasks: [docs/team-plan.md](docs/team-plan.md).
 | 2026-10-18 | Estimator gets the `peaceful` class and a second evidence axis. Beacon evidence (friendly or not) and behaviour evidence (hostile-like or peaceful-like, `threat_llr` hook for the drone-behaviour module) are kept apart; hostile and peaceful both need positive behaviour evidence, silence alone only gives suspicious; a beacon match stays friendly whatever the behaviour looks like. The hook changed from `behaviour_llr` (beacon scale) to `threat_llr` (own scale, positive = hostile-like). Measured on clutter: with no behaviour module, 54 % of investigation requests go to birds and vehicles with 2+2 clutter objects and 74 % with 5+5, so the behaviour module is what saves the drones (`friend_foe/friend_foe.md`) |
 | 2026-10-18 | The team is three people (Orlin: platform and world; Emkata: drone behaviour; Kristian: sensing, classification, evaluation), so role B had no owner. Built the missing chain in Python without waiting: a shared channel with loss, delay and clocks (`common/channel.py`), sensor observation models and a beacon source (`sensors/`), a central baseline tracker (`tracker/`), the pipeline that connects them to the estimator and to scoring (`pipeline/`), and a scoring module (`scoring/`). First end-to-end numbers on the test seeds: a hostile is tracked 57 % of the time at 0 % message loss and 23 % at 90 %, no friendly is flagged up to 50 % loss (`tracker/tracker.md`) |
 | 2026-10-18 | Closed the investigation loop in the Python pipeline with a stand-in fleet and dispatcher (`pipeline/fleet.py`, `dispatch.py`). Scoring now takes friendly trajectories recorded during the run (`scoring.truth.with_recorded_samples`), because `truth.json` holds only the scripted patrol. A reviewed finding on the behaviour module's evaluation: pre-registering friendly ids as verified made friendlies look confirmed at t = 0 because the test adapter names tracks with the true ids; with a real tracker it has no effect, and beacons-only results are the honest ones |
+| 2026-10-18 | Tracker fixes on our side after a review of the results: a drone's own position is smoothed from its beacons and its uncertainty widens the noise of its sensors' readings (the biggest source of ghost tracks and ID swaps); sensor readings of a drone with fresh beacons are only absorbed, not applied, so a duplicate "intruder" track no longer starts on a friendly; dispatch only sends a drone at an old, recently updated, well localised, moving track; the pipeline passes each track's freshness to the behaviour module. Test seeds, 0 % loss: false tracks 1.28 to 0.75, ID swaps 5.6 to 3.9, count error 1.59 to 1.31, hostile tracked 57 to 58 % (the tracked share is limited by sensor coverage). Sweeps print standard errors. Not yet re-measured: the investigation comparison after these fixes |
 | 2026-10-17 | JSON (JSON Lines) for messages while building the pipeline. `encode`/`decode` pair at the channel boundary so a compact binary format (Protobuf/CBOR) can replace it later without touching modules |
 | 2026-10-17 | Shared message header on the mock's messages (`observation`, `friendly_beacon`, drone commands and states), one `messages.js`, matching `common/codec.py`; the mock tracker still reads an internal record that is not part of the format |
 | 2026-10-17 | Clutter objects (birds, vehicles): real objects the sensors see that are not threats, generated from their own random stream so hostile paths do not move; a hostile track on one counts as a clutter false alarm (`cfa`) in the mock. Signatures are assumptions |
 | 2026-10-17 | Track class `peaceful` added: not identified, probably not an enemy, the mirror of `suspicious`. Needs positive behaviour evidence, never silence alone; the estimator has to produce it (not built yet) |
 | 2026-10-17 | Weather combinations, events and sky supported by the seeder validator and the viewer: JS port (`ui/viewer/weather.js`) checked against the shared cases generated from the Python reference (relative tolerance 1e-9); sensor quality is looked up per detection from the weather at the sensor and at the target; the combined-weather table is information only in the catalog check; `sim.ident_range_m` added to the catalog (assumed) |
 | 2026-10-17 | Jamming zones (`degradations.network.jamming_zones`): messages sent by or to a node inside an active zone use the higher loss, RF receivers there get more noise; the sender's true position and the true time decide; Realistic mode only. Beacons are lost too, which friend/foe must survive |
+| 2026-10-18 | Bandwidth limits (`degradations.network.bandwidth_kbps`): one cap per node link to C2; a message occupies the link for its size divided by the rate, in order, and when more than 2 s of data wait the oldest are dropped; loss and jamming are decided when a message leaves the link, so lost messages still used airtime; message size is the JSON length without the mock-only fields; Realistic mode only. The 2 s queue is an assumption. The channel emulator should copy the rule (spec in `docs/data-formats.md`) |
+| 2026-10-18 | Scenario sweeps in the seeder: `generate.py --sweep tuning` or `test` writes one folder per seed (`scenario.json`, `truth.json`, `run.json`) and an `index.json`; benign drones are counted apart from hostiles; the test set is run once, at the end. The layout is a proposal until scoring confirms it |
+| 2026-10-18 | Two new presets, `dusk` (a sunset across the run, a fog patch, clutter) and `jammed` (two jamming zones, a 32 kbit/s cap); the older presets are unchanged. Their numbers are assumptions chosen to show the effects |
+| 2026-10-18 | The viewer's Sensor limits table and coverage wedges now use each sensor's range in the weather at its own position and the time on screen, so fog patches and dusk show up; `seeder/unverified.py` prints a worksheet of the unverified catalog numbers (9 of 12 modules, all 7 platforms) for task 8 |
