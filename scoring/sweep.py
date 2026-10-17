@@ -11,8 +11,9 @@ called hostile or peaceful, so every non-friendly track counts as hostile (clutt
 
 import argparse
 import csv
+import math
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 
 from friend_foe.estimator import FriendFoeEstimator, for_scenario
 from friend_foe.scenario_adapter import frames_from_scenario
@@ -38,6 +39,41 @@ def average(runs: List[RunScore]) -> Dict[str, Optional[float]]:
         values = [getattr(r, col) for r in runs if getattr(r, col) is not None]
         out[col] = sum(values) / len(values) if values else None
     return out
+
+
+def stats_of(values: List[float]) -> Tuple[Optional[float], Optional[float]]:
+    """(mean, standard error of the mean); the error is None for fewer than 2 values."""
+    n = len(values)
+    if not n:
+        return None, None
+    mean = sum(values) / n
+    if n < 2:
+        return mean, None
+    return mean, math.sqrt(sum((v - mean) ** 2 for v in values) / (n - 1) / n)
+
+
+def average_with_error(runs: List[RunScore]) -> Dict[str, Tuple[Optional[float], Optional[float]]]:
+    """Each column's mean and standard error over the runs (seeds)."""
+    return {col: stats_of([getattr(r, col) for r in runs if getattr(r, col) is not None]) for col in COLUMNS}
+
+
+def paired_difference(a: List[RunScore], b: List[RunScore]) -> Dict[str, Tuple[Optional[float], Optional[float]]]:
+    """Mean and standard error of (b - a) per column over the same seeds. Runs on the same seeds share their
+    scenarios, so this is much tighter than comparing two separate means; a difference smaller than about
+    two standard errors is not distinguishable from seed noise."""
+    out = {}
+    for col in COLUMNS:
+        pairs = [(getattr(x, col), getattr(y, col)) for x, y in zip(a, b)
+                 if getattr(x, col) is not None and getattr(y, col) is not None]
+        out[col] = stats_of([y - x for x, y in pairs])
+    return out
+
+
+def fmt_error(pair: Tuple[Optional[float], Optional[float]]) -> str:
+    mean, error = pair
+    if mean is None:
+        return "-"
+    return f"{mean:.2f}" if error is None else f"{mean:.2f}±{error:.2f}"
 
 
 def fmt(v: Optional[float]) -> str:

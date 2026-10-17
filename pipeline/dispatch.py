@@ -37,14 +37,38 @@ class Task:
     last_xy: Tuple[float, float] = (0.0, 0.0)
 
 
+@dataclass
+class Eligibility:
+    """Which tracks are worth a drone. Ghost tracks and friendlies that lost their beacons were 43 % and 11 % of
+    the first dispatches, and a drone off its patrol covers nothing else."""
+    enabled: bool = True
+    min_age_s: float = 4.0           # a track that just appeared may be a fluke
+    max_coast_s: float = 2.0         # not one that nobody has updated lately (a guess at where it was)
+    max_sigma_m: float = 25.0        # position known well enough to fly to
+    min_speed_mps: float = 1.5       # a still "object" is most often a ghost or a fixed return
+
+    def allows(self, track, t: float) -> bool:
+        if not self.enabled:
+            return True
+        speed = math.hypot(track.state[2], track.state[3])
+        return (t - track.born >= self.min_age_s and t - track.last_update <= self.max_coast_s
+                and track.position_sigma <= self.max_sigma_m and speed >= self.min_speed_mps)
+
+
 class Investigator:
     """The trigger and the dispatcher together: classifications in, drone flights out, statuses fed back."""
 
-    def __init__(self, scenario: dict, fleet: Fleet, sequencers: Dict[str, Sequencer], **dispatch_options):
+    def __init__(self, scenario: dict, fleet: Fleet, sequencers: Dict[str, Sequencer],
+                 eligibility: Optional[Eligibility] = None, **dispatch_options):
         self.trigger = InvestigationTrigger(weather_from_scenario(scenario), modules_in_scenario(scenario))
         self.dispatcher = Dispatcher(fleet, scenario, sequencers, **dispatch_options)
+        self.eligibility = eligibility or Eligibility()
 
-    def on_classification(self, t: float, classifications: List[Classification], states: List[TrackState]) -> None:
+    def on_classification(self, t: float, classifications: List[Classification], states: List[TrackState],
+                          tracks: Optional[Dict[str, object]] = None) -> None:
+        """`tracks` maps track ids to the tracker's `Track`s, used to leave out tracks that are not worth a drone."""
+        if tracks is not None:
+            classifications = [c for c in classifications if c.track_id in tracks and self.eligibility.allows(tracks[c.track_id], t)]
         requests = self.trigger.update(t, classifications, states)
         self._feed_back(t, self.dispatcher.handle(t, requests))
 
