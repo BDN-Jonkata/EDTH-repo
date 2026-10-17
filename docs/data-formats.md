@@ -43,6 +43,24 @@ Top level: `schema`, `id` (for example `hard-s3`), `name`, `seed`, `preset`, `de
 
 A hostile's position at time `t`: walk the waypoints linearly, then add a sideways wobble of amplitude `wobble_m` that fades to zero near each waypoint. The exact formula is `target_state` in [seeder/scenario.py](../seeder/scenario.py); do not rewrite it, import it.
 
+### Weather combinations and weather events (proposed)
+
+**Not yet supported by the seeder generator or the viewer**: today `environment.weather` is one of `clear`, `fog`, `rain`, `wind`, `night`. The weather code in [sensors/weather.py](../sensors/weather.py) already reads the extensions below; a scenario that uses them works with `sensors/` and `friend_foe/`, but the seeder rejects them until it is changed (the sweep sets them after generating). A single weather keeps working unchanged.
+
+| Where | Form | Meaning |
+|-------|------|---------|
+| `environment.weather` | `fog+wind` | several anomalies at once |
+| | `rain:0.6+wind` | `:s` = strength from above 0 to 1 (default 1); the catalog multiplier moves that share of the way towards 1 |
+| `environment.time_of_day` | `night` | the simple form: adds the night effect at full strength, counted once even if `weather` also says night. Ignored when `environment.sky` is present |
+| `environment.sky` | `{date, hour, lat, lon, utc_offset_h?, time_scale?}` | how dark it is, from the date, the clock time and the place, so it follows the season: `date` = `YYYY-MM-DD`; `hour` = local clock time at t = 0 (0 to under 24); `lat`, `lon` in degrees, all four required because the place and date decide how long the day is; `utc_offset_h` defaults to the offset that matches `lon`; `time_scale` = clock seconds per simulated second (default 1, so a 120 s run barely moves the sun; use 60 to cross sunset in a run) |
+| `environment.weather_events[]` | `{weather, t_start?, t_end?, zone?: {x, y, radius_m}}` | an anomaly that comes and goes, and may cover only a circle of the map; on top of the base weather, overlapping events all apply with the strongest strength of each effect |
+
+Why a sky and not a fixed night: the length of the day depends on the season and the latitude (at 45 N about 15.6 h of daylight in June and 8.8 h in December, at 60 N 18.9 h and 5.9 h), so the same 21:00 is night in December and still dusk in June, and near 60 N a June night never gets fully dark. The sun's height above the horizon comes from the standard NOAA approximation ([sensors/daylight.py](../sensors/daylight.py)). The night strength is 0 with the sun above the horizon and rises linearly through twilight to 1 at 12 degrees below it; that mapping is a placeholder, since the catalog has one `night` multiplier for full darkness. Moon and cloud cover are ignored.
+
+Effect on sensors: each active effect scales a module's range, noise and detection probability by its catalog `weather_effects` entry, and the effects **multiply**. That is a worst-case assumption for range (real extinctions add, which is milder), so a combination is never better than its worst member. Catalog numbers are assumptions unless `verified`.
+
+Why it matters: `seed_catalog.py --check` tests single weathers only. In combination some platforms lose every working detection module (a camera is hurt by fog, a microphone by wind, so `mini4pro` has nothing left in fog and wind together). Run `python -m sensors.report` for the table.
+
 ## truth.json (`edth.truth/2`)
 
 ```

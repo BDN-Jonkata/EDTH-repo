@@ -26,7 +26,7 @@ import scenario as seeder_scenario  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[1]
 LOSSES = (0.0, 0.1, 0.3, 0.5, 0.7, 0.9)
-WEATHERS = ("clear", "fog", "rain", "wind")
+WEATHERS = ("clear", "fog", "rain", "wind", "fog+wind", "rain+wind", "fog+rain+wind")   # the seeder knows only the first four
 COLUMNS = ("friendly_flag_frac", "friendlies_flagged", "hostile_as_friendly_frac", "time_to_friendly_s",
            "friendlies_never_confirmed", "time_to_flag_s", "hostiles_never_flagged", "requests_on_friendlies",
            "infeasible_requests", "mean_standoff_m")
@@ -39,10 +39,11 @@ def load_preset(name: str) -> dict:
 def make_scenario(preset: dict, seed_set: str, index: int, weather: str, loss: float, burst: bool) -> dict:
     config = copy.deepcopy(preset)
     config["seed_set"], config["seed"] = seed_set, seeder_scenario.seed_for(seed_set, index)
-    config.setdefault("environment", {})["weather"] = weather
+    config.setdefault("environment", {})["weather"] = "clear"   # the seeder accepts one weather; combinations are set below
     net = config.setdefault("degradations", {}).setdefault("network", {})
     net.update({"enabled": True, "loss": loss, "burst": burst})
     scenario, _truth = seeder_scenario.generate(config)
+    scenario["environment"]["weather"] = weather
     return scenario
 
 
