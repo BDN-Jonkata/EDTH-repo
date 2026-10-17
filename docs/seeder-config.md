@@ -2,7 +2,7 @@
 
 Back to [README](../README.md) · See also [Concept](concept.md), [System design](system-design.md), [seeder module](../seeder/seeder.md)
 
-> Status: **implemented** in [seeder/scenario.py](../seeder/scenario.py) (`python seeder/generate.py`). Presets live in [scenarios/](../scenarios/). Not yet generated: moving ground units and non-drone clutter (birds, vehicles) as objects; jamming zones and bandwidth limits are accepted in the config but not simulated yet.
+> Status: **implemented** in [seeder/scenario.py](../seeder/scenario.py) (`python seeder/generate.py`). Presets live in [scenarios/](../scenarios/). Clutter objects (birds, vehicles) are generated and simulated by the mock. Not yet generated: moving ground units; jamming zones and bandwidth limits are accepted in the config but not simulated yet.
 
 Every scenario is fully defined by **one JSON config plus a seed**, so any run can be reproduced. The seeder turns the config into a scenario (nodes, targets, environment, degradations) and a separate ground-truth file.
 
@@ -44,7 +44,7 @@ Every scenario is fully defined by **one JSON config plus a seed**, so any run c
 
   "environment": {
     "weather": "fog", "time_of_day": "day",
-    "clutter": {"false_alarms_per_min": 2, "birds": true, "vehicles": true}
+    "clutter": {"false_alarms_per_min": 2, "birds": 3, "vehicles": 1}
   },
 
   "degradations": {
@@ -65,9 +65,18 @@ Every scenario is fully defined by **one JSON config plus a seed**, so any run c
 | `friendlies` | Which catalog platforms, patrol pattern, whether they broadcast their own pose and uncertainty (beacon) |
 | `ground` | Ground sensor platforms and positions. Also optional moving ground units that carry sensors or act as clutter |
 | `sensor_set` | Which sensor kinds are switched on. Lets us run "camera + acoustic only" against "camera + radar" on the same seed |
-| `environment` | Weather and time of day (change each module differently, see the catalog `weather_effects`), clutter (birds, vehicles, aircraft), terrain line-of-sight shadowing |
+| `environment` | Weather and time of day (change each module differently, see the catalog `weather_effects`), clutter, terrain line-of-sight shadowing (not yet). `clutter.false_alarms_per_min` is random radar false alarms; `clutter.birds` and `clutter.vehicles` are how many real non-threat objects cross the area (0 to 10 each, default 0) |
 | `degradations` | Each has its own on/off and strength: clock offset and drift, node position and heading error, packet loss (random or bursty), latency, out-of-order delivery, node dropout |
 | `network` | Topology (mesh or neighbours only), bandwidth limits, jamming zones where links degrade |
+
+Clutter objects (`CLUTTER_KINDS` in [seeder/scenario.py](../seeder/scenario.py), all numbers **assumed**) fly waypoint paths like hostiles and come from their own random stream, so adding them never moves the hostiles or friendlies:
+
+| Type | Motion | Speed | Altitude | Signature (1.0 = a small drone) |
+|------|--------|-------|----------|-------------------------------|
+| bird | erratic: random waypoints, frequent sudden turns, 8 m wobble | 6-14 m/s | 10-60 m | weak: EO 0.6, thermal 0.5, acoustic 0.3, radar 0.3 |
+| vehicle | a road across the area with one bend | 4-12 m/s | 1-2 m | strong: EO 1.3, thermal 1.5, acoustic 1.5, radar 1.5 |
+
+Neither emits RF, so RF never sees them. The system must not call them hostile; the mock baseline does, and its summary counts that as `cfa`.
 
 Per-sensor behaviour (field of view, max range, detection probability that falls with range, noise that grows with range, false-alarm rate, missed detections, sample rate, processing delay) comes from the catalog `sim` block, not the scenario config. The radar module carries a **resolution cell** (about 15 m in range by 3 degrees); two targets inside one cell merge into a single measurement, which is what makes the crossing hard.
 

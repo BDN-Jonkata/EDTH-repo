@@ -45,7 +45,8 @@
       id: sc.id, name: sc.name, duration: sc.duration_s, c2: { x: sc.c2[0], y: sc.c2[1] },
       ground: sc.ground.map((g) => ({ id: g.id, platform: g.platform, x: g.position[0], y: g.position[1], heading: (90 - g.heading_deg) * D2R })),
       friendlies: sc.friendlies.map((f) => Object.assign({ id: f.id, platform: f.platform, alt: f.altitude_m }, f.loop)),
-      hostiles: sc.targets.map((t) => ({ id: t.id, wps: t.waypoints, wob: t.wobble_m, ph: t.phase, alt: t.altitude_m, sig: t.signature || {}, emits: t.emits !== false })),
+      hostiles: sc.targets.map(pathObject),
+      clutter: (sc.clutter || []).map((o) => Object.assign(pathObject(o), { type: o.type })), // birds, vehicles: seen, not threats
       commands: sc.commands || [], beacon: sc.beacon, env: sc.environment, deg: sc.degradations, sensorKinds: sc.sensor_set.enabled_kinds, assign: {},
     };
     sc.friendlies.concat(sc.ground).forEach((n) => { world.assign[n.id] = n.platform; });
@@ -54,6 +55,8 @@
     world.eval = [Math.max(0, tc - 6), Math.min(sc.duration_s, tc + 39)]; // window around the crossing used for summary metrics
     return world;
   }
+  // an object on a waypoint path (a hostile or clutter); moved by hoState
+  const pathObject = (t) => ({ id: t.id, wps: t.waypoints, wob: t.wobble_m, ph: t.phase, alt: t.altitude_m, sig: t.signature || {}, emits: t.emits !== false });
 
   function frState(f, t) {
     const a = f.th0 + f.dir * (f.v / f.R) * t;
@@ -290,13 +293,13 @@
       T_END: world.duration, NF: Math.round(world.duration / DT), EVAL: world.eval,
       sensors: buildSensors(assign, P.weather, world.sensorKinds),
       nodes: world.ground.map((g) => g.id).concat(world.friendlies.map((f) => f.id)),
-      hostileById: {}, dropT: {}, driftScale: {}, linkQ: {}, queue: [],
+      pathById: {}, dropT: {}, driftScale: {}, linkQ: {}, queue: [],
       drones: {}, seqs: {}, cmd: { script: scriptedCommands(P, world), open: {}, records: {}, seen: {}, count: 0 },
       beaconEvery: Math.max(1, Math.round(10 / (world.beacon.rate_hz || 2))), beaconSigma: world.beacon.pos_sigma_m || 3,
       tracks: [], pending: [], friends: {}, alerts: [], frames: [], timeline: [], lastMatch: {}, sqHist: [], crossAlerted: {},
-      n: { hostile: 0, unk: 0, swaps: 0, ffa: 0, evalSq: 0, evalN: 0, evalCnt: 0, evalCntN: 0 },
+      n: { hostile: 0, unk: 0, swaps: 0, ffa: 0, cfa: 0, evalSq: 0, evalN: 0, evalCnt: 0, evalCntN: 0 },
     };
-    world.hostiles.forEach((h) => { c.hostileById[h.id] = h; });
+    world.hostiles.concat(world.clutter).forEach((h) => { c.pathById[h.id] = h; });
     if (real) (world.deg.dropout || []).forEach((d) => { c.dropT[d.node] = d.t; }); // nodes that die mid-run
     c.nodes.forEach((n) => { c.driftScale[n] = c.rn() * 2 - 1; c.linkQ[n] = 1; });
     shareFalseAlarmsAcrossRadars(c);
@@ -341,6 +344,7 @@
   function finish(c) {
     const n = c.n;
     const summary = { rmse: n.evalN ? Math.sqrt(n.evalSq / n.evalN) : null, countErr: n.evalCntN ? n.evalCnt / n.evalCntN : 0, swaps: n.swaps, ffa: n.ffa };
+    if (c.world.clutter.length) summary.cfa = n.cfa; // clutter objects tracked as hostile; only scenarios with clutter report it
     // entry markers from scenario script
     c.world.hostiles.forEach((h) => c.timeline.push({ t: h.wps[0][0], label: h.id + ' in', color: 'red' }));
     const commands = Object.keys(c.cmd.records).map((id) => c.cmd.records[id]);
@@ -383,11 +387,15 @@
       const st = hoState(h, t);
       if (st) truth.push(Object.assign({ id: h.id, kind: 'hostile' }, st));
     });
+    c.world.clutter.forEach((o) => {
+      const st = hoState(o, t);
+      if (st) truth.push(Object.assign({ id: o.id, kind: 'clutter', type: o.type }, st));
+    });
     return truth;
   }
   function targetAt(c, obj, t) {
     if (obj.kind === 'friendly') return friendlyState(c, c.world.friendlies.find((f) => f.id === obj.id), t);
-    return hoState(c.hostileById[obj.id], t);
+    return hoState(c.pathById[obj.id], t);
   }
 
   // -------------------------------------------------------------------- sensing
@@ -419,7 +427,7 @@
       if (!tg) return;
       const dx = tg.x - sp.x, dy = tg.y - sp.y, r = Math.hypot(dx, dy);
       if (r > s.range || r < s.minRange || r < 1) return;
-      const h = c.hostileById[o.id]; // a hostile's signature scales how well each sensor type sees it
+      const h = c.pathById[o.id]; // a hostile's or clutter object's signature scales how well each sensor type sees it
       if (s.kind === 'RF' && h && !h.emits) return; // a silent hostile is invisible to RF
       const az = Math.atan2(dy, dx);
       if (heading !== null && Math.abs(wrapPi(az - heading)) > s.fov / 2) return;
@@ -428,8 +436,8 @@
     });
     return seen;
   }
-  function detectionProb(s, hostile, r) {
-    const sig = hostile ? (hostile.sig[SIG_KEY[s.kind]] || 1) : 1;
+  function detectionProb(s, obj, r) { // obj: the hostile or clutter object, none for a friendly
+    const v = obj && obj.sig[SIG_KEY[s.kind]], sig = v === undefined ? 1 : v; // a signature of 0 means unseen, not "missing"
     return Math.min(1, s.pd * sig) * (1 - (1 - s.pdFar) * (r / s.range) * (r / s.range)); // detections thin out with distance
   }
   function addClutter(c, s, view, raw) {
@@ -664,6 +672,7 @@
     const sqSum = match.reduce((acc, m) => acc + m[2] * m[2], 0);
     const rmse10 = rollingRmse(c, match.length ? [sqSum / match.length, 1] : [0, 0]);
     flagFriendlies(c, t, truth, hostileTracks, usedA);
+    flagClutter(c, t, truth, hostileTracks, usedA);
     const countErr = hostileTracks.length - trueHost.length;
     if (t >= c.EVAL[0] && t <= c.EVAL[1]) addToSummary(c.n, sqSum, match.length, countErr);
     return { trueHost, match, rmse10, countErr };
@@ -704,16 +713,31 @@
     for (let i = Math.max(0, c.sqHist.length - 100); i < c.sqHist.length; i++) { ws += c.sqHist[i][0] * c.sqHist[i][1]; wn += c.sqHist[i][1]; }
     return wn ? Math.sqrt(ws / wn) : null;
   }
-  function flagFriendlies(c, t, truth, hostileTracks, usedA) {
+  // hostile tracks not matched to a true hostile but sitting on an object of this kind; each track is reported once
+  function falseHostiles(c, truth, hostileTracks, usedA, kind, flag) {
+    const found = [];
     hostileTracks.forEach((a) => {
       if (usedA.has(a.id)) return;
       const tr = c.tracks.find((x) => x.id === a.id);
-      if (!tr || tr.ffa) return;
-      const fr = truth.find((o) => o.kind === 'friendly' && Math.hypot(o.x - a.x, o.y - a.y) < 40);
-      if (!fr) return;
-      tr.ffa = true; c.n.ffa++;
+      if (!tr || tr[flag]) return;
+      const o = truth.find((q) => q.kind === kind && Math.hypot(q.x - a.x, q.y - a.y) < 40);
+      if (o) { tr[flag] = true; found.push([a, o]); }
+    });
+    return found;
+  }
+  function flagFriendlies(c, t, truth, hostileTracks, usedA) {
+    falseHostiles(c, truth, hostileTracks, usedA, 'friendly', 'ffa').forEach(([a, fr]) => {
+      c.n.ffa++;
       c.alerts.push({ t, sev: 'crit', text: 'Friendly ' + fr.id + ' flagged as hostile (' + a.id + ')' });
       c.timeline.push({ t, label: 'FFA', color: 'red' });
+    });
+  }
+  // a bird or vehicle tracked as hostile is a false alarm
+  function flagClutter(c, t, truth, hostileTracks, usedA) {
+    falseHostiles(c, truth, hostileTracks, usedA, 'clutter', 'cfa').forEach(([a, o]) => {
+      c.n.cfa++;
+      c.alerts.push({ t, sev: 'warn', text: 'Clutter ' + o.type + ' ' + o.id + ' tracked as hostile (' + a.id + ')' });
+      c.timeline.push({ t, label: 'clutter', color: 'amber' });
     });
   }
 

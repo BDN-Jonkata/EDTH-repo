@@ -101,7 +101,7 @@ FriendlyBeacon{ header, friend_id, position, covariance, velocity? }
 
 LocalTrack    { header, local_track_id, t_state,
                 state: [x, y, z, vx, vy, vz], covariance,
-                existence_prob, class: friendly|hostile|suspicious|unknown,
+                existence_prob, class: friendly|hostile|suspicious|peaceful|unknown,
                 class_prob, sources: [sensor_type...] }
 
 Track (COP)   { global_id, t_state, state, covariance,
@@ -155,7 +155,7 @@ Weather modifies each sensor's noise covariance and detection probability. Terra
 ### 5.4 Friend/Foe
 
 1. **Beacon match (primary):** a track whose position is consistent (within gate) with a received `FriendlyBeacon` is labelled friendly.
-2. **Behaviour pattern (secondary):** learn the pattern friendlies follow from beacon history. When an unknown track enters range, raise an alarm and output a presumption (friendly / hostile / suspicious / unknown) with probability, by comparing its motion to the pattern.
+2. **Behaviour pattern (secondary):** learn the pattern friendlies follow from beacon history. When an unknown track enters range, raise an alarm and output a presumption (friendly / hostile / suspicious / peaceful / unknown) with probability, by comparing its motion to the pattern.
 3. Output is a class + probability on each track, never a hard delete, so mistakes stay recoverable.
 
 ### 5.5 Fusion (hybrid)

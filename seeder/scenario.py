@@ -22,6 +22,18 @@ FRIENDLY_ANCHORS = [(250, 700), (760, 780), (780, 250), (380, 200), (520, 520)]
 SENSOR_KINDS = ("eo_camera", "thermal_camera", "microphone", "rf_receiver", "radar")
 SIGNATURE_KEYS = ("eo", "thermal", "acoustic", "rf", "radar")
 
+# Birds and vehicles: real objects the sensors see that are not threats. All numbers are assumptions.
+# signature = how well each sensor type sees it next to a typical small drone (1.0); neither emits RF.
+CLUTTER_KINDS = {
+    "bird": {"config_key": "birds", "id_prefix": "B", "motion": "waypoints", "speed_mps": [6, 14], "altitude_m": [10, 60],
+             "wobble_m": 8, "sudden_turn_prob": 0.5,
+             "signature": {"eo": 0.6, "thermal": 0.5, "acoustic": 0.3, "rf": 0.0, "radar": 0.3}},
+    "vehicle": {"config_key": "vehicles", "id_prefix": "V", "motion": "straight", "speed_mps": [4, 12], "altitude_m": [1, 2],
+                "wobble_m": 0, "sudden_turn_prob": 0.0,
+                "signature": {"eo": 1.3, "thermal": 1.5, "acoustic": 1.5, "rf": 0.0, "radar": 1.5}},
+}
+MAX_CLUTTER_PER_KIND = 10  # keep runs fast
+
 DEFAULT_CONFIG = {
     "name": "scenario",
     "seed": 1,
@@ -57,7 +69,7 @@ DEFAULT_CONFIG = {
     "environment": {
         "weather": "clear",
         "time_of_day": "day",
-        "clutter": {"false_alarms_per_min": 3},
+        "clutter": {"false_alarms_per_min": 3, "birds": 0, "vehicles": 0},
     },
     "degradations": {
         "clock": {"enabled": False, "offset_ms": [0, 200], "drift_ppm": 50},
@@ -105,7 +117,7 @@ def validate_config(cfg, catalog=None):
     return (_check_seed(cfg) + _check_area(cfg)
             + (_check_target_rules(cfg, t) if isinstance(t, dict) else _check_target_paths(t))
             + _check_friendlies(cfg, platforms) + _check_ground(cfg, platforms) + _check_environment(cfg)
-            + _check_commands(cfg))
+            + _check_commands(cfg) + _check_clutter(cfg))
 
 
 def _check_seed(cfg):
@@ -225,6 +237,15 @@ def _check_environment(cfg):
     return errors
 
 
+def _check_clutter(cfg):
+    errors = []
+    for model in CLUTTER_KINDS.values():
+        n = cfg["environment"]["clutter"].get(model["config_key"], 0)
+        if not isinstance(n, int) or isinstance(n, bool) or not 0 <= n <= MAX_CLUTTER_PER_KIND:
+            errors.append("environment.clutter.%s must be a whole number from 0 to %d" % (model["config_key"], MAX_CLUTTER_PER_KIND))
+    return errors
+
+
 # ------------------------------------------------------------------ motion models (same maths as ui/viewer/sim.js)
 def friendly_state(f, t):
     lp = f["loop"]
@@ -268,7 +289,7 @@ def target_state(tg, t):
 
 # ------------------------------------------------------------------ generation
 def _streams(seed):
-    return {name: random.Random(seed * 1000003 + i) for i, name in enumerate(("friendly", "target", "ground"))}
+    return {name: random.Random(seed * 1000003 + i) for i, name in enumerate(("friendly", "target", "ground", "clutter"))}
 
 
 def _slug(text):
@@ -314,8 +335,10 @@ def _make_ground(cfg):
     return out
 
 
-def _signature(spec, rng):
-    return {k: round(max(0.2, min(1.5, 1 + rng.uniform(-1, 1) * spec["signature_spread"])), 2) for k in SIGNATURE_KEYS}
+def _signature(spread, rng, base=None):
+    """Per sensor type, how well the object is seen: `base` (1.0 = a typical small drone) varied by up to +-spread."""
+    base = base or {}
+    return {k: round(base.get(k, 1) * max(0.2, min(1.5, 1 + rng.uniform(-1, 1) * spread)), 2) for k in SIGNATURE_KEYS}
 
 
 def _edge_point(rng):
@@ -441,7 +464,8 @@ def _make_targets(cfg, rng):
                 "id": tg.get("id", "H%d" % (i + 1)), "role": tg.get("role", "hostile"), "motion": tg.get("motion", "explicit"),
                 "speed_mps": tg.get("speed_mps"), "altitude_m": tg.get("altitude_m", 80), "waypoints": tg["waypoints"],
                 "wobble_m": tg.get("wobble_m", 5), "phase": tg.get("phase", round(rng.uniform(0, 2 * math.pi), 2)),
-                "signature": tg.get("signature") or _signature(DEFAULT_CONFIG["targets"], rng), "emits": tg.get("emits", True),
+                "signature": tg.get("signature") or _signature(DEFAULT_CONFIG["targets"]["signature_spread"], rng),
+                "emits": tg.get("emits", True),
             })
         return out
     out = []
@@ -449,15 +473,31 @@ def _make_targets(cfg, rng):
     if spec["crossing"]["enabled"] and spec["count"] >= 2:
         planned.extend(_crossing_paths(spec, rng, duration))
     while len(planned) < spec["count"]:
-        wps, v, motion = _free_path(spec, rng, spec["motion"], duration)
-        planned.append((wps, v, motion))
-    for i, (wps, v, motion) in enumerate(planned):
-        out.append({
-            "id": "H%d" % (i + 1), "role": "hostile", "motion": motion, "speed_mps": round(v, 1),
-            "altitude_m": round(rng.uniform(*spec["altitude_m"]), 1), "waypoints": wps,
-            "wobble_m": spec["wobble_m"], "phase": round(rng.uniform(0, 2 * math.pi), 2),
-            "signature": _signature(spec, rng), "emits": True,
-        })
+        planned.append(_free_path(spec, rng, spec["motion"], duration))
+    return [_path_object("H%d" % (i + 1), "hostile", path, spec, rng) for i, path in enumerate(planned)]
+
+
+def _path_object(oid, role, path, spec, rng, signature=None, emits=True):
+    """An object flying a waypoint path. Hostiles and clutter share this shape, so `target_state` and the simulation move both."""
+    wps, v, motion = path
+    return {
+        "id": oid, "role": role, "motion": motion, "speed_mps": round(v, 1),
+        "altitude_m": round(rng.uniform(*spec["altitude_m"]), 1), "waypoints": wps,
+        "wobble_m": spec["wobble_m"], "phase": round(rng.uniform(0, 2 * math.pi), 2),
+        "signature": _signature(spec["signature_spread"], rng, signature), "emits": emits,
+    }
+
+
+def _make_clutter(cfg, rng):
+    """Birds and vehicles crossing the area, from their own random stream so they never move the hostiles."""
+    counts, duration = cfg["environment"]["clutter"], cfg["duration_s"]
+    out = []
+    for kind, model in CLUTTER_KINDS.items():
+        spec = dict(model, enter_t=[0, 0.6 * duration], hover_prob=0.0, signature_spread=0.15)
+        for i in range(counts.get(model["config_key"], 0)):
+            path = _free_path(spec, rng, model["motion"], duration)
+            obj = _path_object("%s%d" % (model["id_prefix"], i + 1), "clutter", path, spec, rng, model["signature"], emits=False)
+            out.append(dict(obj, type=kind))
     return out
 
 
@@ -481,6 +521,7 @@ def generate(config, catalog=None, truth_dt=0.1):
     friendlies = _make_friendlies(cfg, rng["friendly"])
     ground = _make_ground(cfg)
     targets = _make_targets(cfg, rng["target"])
+    clutter = _make_clutter(cfg, rng["clutter"])
     for node in friendlies + ground:
         node["sensors"] = _sensors_of(platforms[node["platform"]], modules_by_id, enabled)
 
@@ -489,7 +530,7 @@ def generate(config, catalog=None, truth_dt=0.1):
         "schema": SCHEMA, "id": scenario_id, "name": cfg["name"], "seed": cfg["seed"], "seed_set": cfg["seed_set"],
         "preset": cfg["preset"], "description": cfg["description"], "duration_s": cfg["duration_s"],
         "area": {"size_m": AREA}, "c2": cfg["c2"], "commands": sorted(cfg["commands"], key=lambda c: c["t"]),
-        "friendlies": friendlies, "ground": ground, "targets": targets,
+        "friendlies": friendlies, "ground": ground, "targets": targets, "clutter": clutter,
         "beacon": cfg["friendlies"]["beacon"], "sensor_set": cfg["sensor_set"],
         "environment": cfg["environment"], "degradations": cfg["degradations"],
         "config": cfg,
@@ -513,7 +554,10 @@ def build_truth(scenario, dt=0.1):
         rows = _sample_rows(target_state, tg, n, dt)
         hostile_rows[tg["id"]] = {row[0]: row for row in rows}
         objects.append({"id": tg["id"], "kind": "hostile", "motion": tg["motion"], "altitude_m": tg["altitude_m"], "samples": rows})
-    ids = [tg["id"] for tg in scenario["targets"]]
+    for cl in scenario.get("clutter", []):  # not a threat: a hostile track on one of these is a false alarm
+        objects.append({"id": cl["id"], "kind": "clutter", "type": cl["type"], "motion": cl["motion"],
+                        "altitude_m": cl["altitude_m"], "samples": _sample_rows(target_state, cl, n, dt)})
+    ids =[tg["id"] for tg in scenario["targets"]]
     events = _enter_exit_events(ids, hostile_rows) + _crossing_events(ids, hostile_rows)
     events.sort(key=lambda e: e["t"])
     return {"schema": "edth.truth/2", "scenario_id": scenario["id"], "seed": scenario["seed"], "duration_s": scenario["duration_s"],

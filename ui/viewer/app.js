@@ -378,16 +378,22 @@
     const mp = {};
     f.match.forEach((m) => { mp[m[1]] = m[0]; });
     return f.truth.map((o) => {
+      if (o.kind === 'clutter') return clutterSvg(o);
       const t = mp[o.id] && f.tracks.find((q) => q.id === mp[o.id]);
       const line = t ? '<path d="M' + o.x + ' ' + Y(o.y) + 'L' + t.x + ' ' + Y(t.y) + '" stroke="#E6EAF0" stroke-width="1" stroke-opacity="0.7"/>' : '';
       return line + '<circle cx="' + o.x + '" cy="' + Y(o.y) + '" r="' + (o.kind === 'hostile' ? 6 : 5) + '" fill="none" stroke="#E6EAF0" stroke-width="1.3"/>';
     }).join('');
   }
+  // a bird or vehicle: grey dashed ring with its id, so a track on it reads as a false alarm
+  function clutterSvg(o) {
+    return '<circle cx="' + o.x + '" cy="' + Y(o.y) + '" r="4" fill="none" stroke="#8B96A5" stroke-width="1.2" stroke-dasharray="2 2"/>' +
+      '<text class="t" x="' + (o.x + 7) + '" y="' + (Y(o.y) + 3) + '" style="fill:#8B96A5">' + o.id + '</text>';
+  }
   function crossSvg(cross) {
     return '<circle class="pulse" cx="' + cross.x + '" cy="' + Y(cross.y) + '" r="48" fill="#F5B13D" fill-opacity="0.07" stroke="#F5B13D" stroke-width="1.6" stroke-dasharray="6 4"/><text class="t" x="' + cross.x + '" y="' + (Y(cross.y) + 66) + '" text-anchor="middle" style="fill:#F5B13D">PRED. CROSSING T−' + cross.tca.toFixed(1) + ' s</text>';
   }
   function tracksSvg(f) {
-    const order = { friendly: 0, unknown: 1, hostile: 2 };
+    const order = { friendly: 0, peaceful: 1, unknown: 1, hostile: 2 };
     return f.tracks.slice().sort((a, b) => order[a.cls] - order[b.cls]).map((t) => trackSvg(t, f, t.id === S.sel)).join('');
   }
 
@@ -399,7 +405,7 @@
     chip.className = 'chip ' + (ok ? 'cyan' : 'amber');
     chip.textContent = ok ? '✓ MATCH' : '▲ MISMATCH ' + (f.m.countErr > 0 ? '+' : '') + f.m.countErr;
 
-    const order = { hostile: 0, unknown: 1, friendly: 2 };
+    const order = { hostile: 0, unknown: 1, peaceful: 1, friendly: 2 };
     const list = f.tracks.slice().sort((a, b) => order[a.cls] - order[b.cls] || a.id.localeCompare(b.id, undefined, { numeric: true }));
     const cur = list.find((t) => t.id === S.sel);
     const firstHostile = list.find((t) => t.cls === 'hostile');
@@ -407,8 +413,8 @@
     if (!cur || (!S.userSel && firstHostile && cur.cls !== 'hostile')) S.sel = (list.find((t) => t.cls === 'hostile') || list[0] || {}).id || null;
     $('trkCount').textContent = list.length + ' active';
     $('trkBody').innerHTML = list.map((t) => {
-      const cls = t.cls === 'hostile' ? '◆ HOS' : t.cls === 'friendly' ? '● FRD' : '✣ UNK·T';
-      const ccol = t.cls === 'friendly' ? '#8DB8FF' : t.cls === 'unknown' ? '#F5B13D' : '#D5DBE3';
+      const cls = t.cls === 'hostile' ? '◆ HOS' : t.cls === 'friendly' ? '● FRD' : t.cls === 'peaceful' ? '○ PCF' : '✣ UNK·T';
+      const ccol = t.cls === 'friendly' ? '#8DB8FF' : t.cls === 'peaceful' ? '#5FD0C0' : t.cls === 'unknown' ? '#F5B13D' : '#D5DBE3';
       const b = t.cls === 'hostile' ? 'h' : t.cls === 'unknown' ? 'u' : 'f';
       return '<tr data-id="' + t.id + '"' + (t.id === S.sel ? ' class="sel"' : '') + '><td><button class="idb ' + b + '" aria-label="Select ' + t.id + '">' + t.id + '</button></td><td style="color:' + ccol + '">' + cls + '</td><td>' + pad4(t.x) + ' ' + pad4(t.y) + '</td><td>' + spd(t.vx, t.vy).toFixed(1) + '</td><td>' + String(Math.round(hdg(t.vx, t.vy))).padStart(3, '0') + '</td><td>' + Math.min(1, t.conf).toFixed(2) + '</td><td>' + t.age.toFixed(1) + 's</td><td>' + (t.cls === 'friendly' ? 'self' : t.nodes.map((n) => n.split(' ')[0]).filter((v, i, a) => a.indexOf(v) === i).join(' ')) + '</td></tr>';
     }).join('');
