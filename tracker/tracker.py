@@ -48,6 +48,7 @@ class TrackerConfig:
     spawn_clearance_m: float = 25.0        # no new track this close to a living one
     beacon_velocity_sigma_mps: float = 1.0
     friend_accel_noise_mps2: float = 3.0   # process noise of a friendly's beacon track
+    friend_ttl_s: float = 60.0             # a friendly's beacon track lives this long without a beacon or a reading: a drone does not vanish, and 10 s let sensors start a second, non-friend track on it at high loss
     beacon_trust_s: float = 2.0            # while a friend's last beacon is this recent, sensor readings of it are only absorbed
     duplicate_distance_m: float = 30.0     # two non-friend tracks this close and alike in velocity are one target (0 = off)
     duplicate_speed_mps: float = 6.0       # "alike in velocity": within this
@@ -246,7 +247,7 @@ class Tracker:
                 oosm.fold_old(tr, t, self.config.oosm_window_s)
             if tr.friend_id is None:
                 self._confirm_or_demote(tr, t)
-            ttl = self.config.confirmed_ttl_s if tr.confirmed else self.config.tentative_ttl_s
+            ttl = self.config.friend_ttl_s if tr.friend_id else self.config.confirmed_ttl_s if tr.confirmed else self.config.tentative_ttl_s
             if t - tr.last_update <= ttl:
                 keep.append(tr)
             elif tr.friend_id is not None:

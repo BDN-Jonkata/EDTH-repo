@@ -193,7 +193,8 @@ def scored_frames(scenario: dict, seed: int = 0, tracker_config: Optional[Tracke
                   stats: Optional[dict] = None, recorded: Optional[dict] = None,
                   keep_identity: bool = False, distributed: bool = False, cue: bool = False,
                   trust: bool = False, oosm: bool = False, clocks: bool = False, timesync: bool = False,
-                  oosm_age_s: Optional[float] = None, storefwd: bool = False) -> Iterator[tuple]:
+                  oosm_age_s: Optional[float] = None, storefwd: bool = False,
+                  friend_tracks: bool = True) -> Iterator[tuple]:
     """(t, [Estimate]) for the scoring module: the tracker's confirmed tracks with the estimator's class.
 
     With `investigate`, suspicious tracks send drones out; when the run ends `stats` (if given) is filled with
@@ -203,7 +204,8 @@ def scored_frames(scenario: dict, seed: int = 0, tracker_config: Optional[Tracke
     predictor's identity keeper (`predictor/identity.py`) on the tracks, so a re-acquired target keeps its ID.
     `trust` weights readings by link health and lets a cut-off friendly's silence count for less (`health/`).
     `oosm` applies a late reading to its track at the time it was taken (`tracker/oosm.py`). `clocks`, `timesync`, `oosm_age_s`
-    and `storefwd`: see `Pipeline`."""
+    and `storefwd`: see `Pipeline`. `friend_tracks` calls a track the tracker started from a friendly's beacon friendly
+    for as long as the tracker keeps it, instead of waiting for the estimator to match a fresh beacon to it again."""
     estimator = estimator or FriendFoeEstimator(for_scenario(scenario))
     pipeline = Pipeline(scenario, seed, tracker_config, investigate, distributed, cue, trust, oosm, clocks, timesync, oosm_age_s, storefwd)
     if trust:        # a missing beacon of a node whose link is down is not evidence against the drone
@@ -229,6 +231,7 @@ def scored_frames(scenario: dict, seed: int = 0, tracker_config: Optional[Tracke
             pipeline.investigator.on_readings(frame.t, frame.readings, frame.tracks)
             pipeline.investigator.step(frame.t, {tr.track_id: (tr.state[0], tr.state[1]) for tr in frame.tracks})
         yield frame.t, [Estimate(tr.track_id, frame.t, tr.state[0], tr.state[1], tr.state[2], tr.state[3],
-                                 classes.get(tr.track_id)) for tr in frame.tracks]
+                                 "friendly" if friend_tracks and tr.friend_id else classes.get(tr.track_id))
+                        for tr in frame.tracks]
     if stats is not None and pipeline.investigator:
         stats.update(pipeline.investigator.stats, log=pipeline.investigator.dispatcher.log)

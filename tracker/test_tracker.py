@@ -191,6 +191,21 @@ class TestPoseBook(unittest.TestCase):
         self.assertEqual(book.pose("GS1", 5.0).sigma, 0.0)            # a ground sensor's position is known
 
 
+class TestFriendTrackLife(unittest.TestCase):
+    def beacon(self, t):
+        return {"friend_id": "F1", "position": [100.0, 100.0], "velocity": [0.0, 0.0], "covariance": [[9.0, 0, 0], [0, 9.0, 0], [0, 0, 9.0]]}
+
+    def test_a_friendlys_track_outlives_a_long_silence_and_goes_after_its_limit(self):
+        tracker = Tracker()
+        tracker.step(0.0, [], [self.beacon(0.0)])
+        self.assertEqual([tr.friend_id for tr in tracker.tracks], ["F1"])
+        tracker.step(30.0, [])                       # 30 s with no beacon and no reading: a confirmed track would be long gone
+        self.assertEqual([tr.friend_id for tr in tracker.tracks], ["F1"])
+        tracker.step(61.0, [])
+        self.assertEqual(tracker.tracks, [])
+        self.assertEqual(tracker.friends, {})
+
+
 class TestDuplicateTracks(unittest.TestCase):
     def two_tracks(self, config, offset, dv):
         tracker = Tracker(config)
