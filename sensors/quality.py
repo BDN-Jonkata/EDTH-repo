@@ -1,8 +1,8 @@
 """Sensor quality under weather: the sensor hierarchy and required standoff.
 
 All sensor numbers come from the seeder catalog (`sim.range_m`,
-`sim.min_range_m`, `weather_effects`); this module adds none of its own except
-`IDENT_FRACTION`, which the catalog does not have. Active weather effects
+`sim.ident_range_m`, `sim.min_range_m`, `weather_effects`). `IDENT_FRACTION`
+is a compatibility fallback for older catalog inputs. Active weather effects
 multiply (fog at night = fog multiplier x night multiplier); that is an
 assumption, like the catalog numbers themselves.
 """
@@ -18,9 +18,8 @@ import catalog as seeder_catalog  # noqa: E402  (seeder/catalog.py)
 
 DETECTION_KINDS = seeder_catalog.DETECTION_KINDS
 
-# PLACEHOLDER, not in the catalog: the share of a module's detection range at
-# which it can still identify an object (camera sees class cues, a microphone
-# only hears presence). Propose `sim.ident_range_m` for the catalog and delete this.
+# Compatibility for older module dictionaries; current catalog entries use
+# their explicit `sim.ident_range_m`.
 IDENT_FRACTION = {
     "eo_camera": 0.6,
     "thermal_camera": 0.5,
@@ -112,7 +111,7 @@ def required_standoff(
     """How close a drone carrying `module` must get to identify the object."""
     sim = module["sim"]
     q = sensor_quality(module, weather.at(target_position, t))
-    max_range = sim["range_m"] * IDENT_FRACTION[module["kind"]] * q.range_scale
+    max_range = sim.get("ident_range_m", sim["range_m"] * IDENT_FRACTION[module["kind"]]) * q.range_scale
     floor = sim["min_range_m"]
     return Standoff(
         max_range_m=max_range,
