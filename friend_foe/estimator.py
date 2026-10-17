@@ -1,17 +1,23 @@
 """Friend/foe estimator: keeps evidence per track and classifies it.
 
-Classes: friendly | hostile | suspicious | unknown.
+Classes: friendly | hostile | suspicious | peaceful | unknown (meanings in
+docs/data-formats.md). Two separate kinds of evidence, both log-likelihood ratios:
 
-Evidence is a log-likelihood ratio (llr) of "friendly" vs "not friendly" per
-track, p_friendly = sigmoid(llr):
-
+Beacon axis, "friendly" vs "not friendly", p_friendly = sigmoid(llr):
 * A fresh friendly beacon consistent with the track pushes llr up (strongly).
-* No matching beacon pushes llr down slowly, but only to a floor. Beacons can
-  be lost to jamming, so silence alone makes a track suspicious, never hostile.
-* Hostile needs positive evidence of hostile behaviour, supplied through the
-  `behaviour_llr` hook (the drone-behaviour module). Negative = hostile-like.
+* No matching beacon pushes llr down slowly, but only to a floor, and less on a
+  lossy link. Beacons can be lost to jamming, so silence alone makes a track
+  suspicious, never hostile and never peaceful.
 
-Thresholds have hysteresis so classes do not flicker. The class is a
+Behaviour axis, "hostile" vs "peaceful", p_hostile = sigmoid(threat):
+* Only the `threat_llr` hook moves it (the drone-behaviour module): positive =
+  hostile-like, negative = peaceful-like. It forgets over `threat_tau_s`, so a
+  track that changes behaviour changes class. Hostile and peaceful both need
+  this positive evidence; without a hook neither ever appears.
+
+A beacon match is primary: a friendly stays friendly whatever its behaviour looks
+like. Otherwise hostile or peaceful (from behaviour) wins over suspicious (from
+silence). Thresholds have hysteresis so classes do not flicker. The class is a
 presumption with a probability, never a hard delete.
 
 Inputs are plain dataclasses that mirror the draft `LocalTrack` and
@@ -48,10 +54,11 @@ class Beacon:
 class Classification:
     track_id: str
     t: float
-    cls: str                        # friendly | hostile | suspicious | unknown
+    cls: str                        # friendly | hostile | suspicious | peaceful | unknown
     class_prob: float               # probability of `cls`
-    p_friendly: float
+    p_friendly: float               # beacon axis
     matched_beacon: Optional[str] = None
+    p_hostile: float = 0.5          # behaviour axis; 0.5 = no behaviour evidence
 
 
 @dataclass
@@ -72,12 +79,15 @@ class EstimatorConfig:
     delivery_min: float = 0.05
     max_dt_s: float = 2.0               # a longer gap between updates counts as this much silence
     llr_limit: float = 4.0              # evidence is clipped to +/- this
-    friendly_enter: float = 0.9
+    friendly_enter: float = 0.9         # on p_friendly
     friendly_exit: float = 0.7
-    hostile_enter: float = 0.1
-    hostile_exit: float = 0.2
-    suspicious_enter: float = 0.3
+    suspicious_enter: float = 0.3       # on p_friendly: low means not friendly
     suspicious_exit: float = 0.4
+    hostile_enter: float = 0.9          # on p_hostile (behaviour axis)
+    hostile_exit: float = 0.7
+    peaceful_enter: float = 0.1         # on p_hostile: low means peaceful-like
+    peaceful_exit: float = 0.3
+    threat_tau_s: float = 20.0          # behaviour evidence forgets over this time, so a change shows
     memory_ttl_s: float = 30.0          # forget tracks not seen for this long
 
 
@@ -88,10 +98,15 @@ def for_scenario(scenario: dict, config: Optional[EstimatorConfig] = None) -> Es
 
 @dataclass
 class _Memory:
-    llr: float = 0.0
+    llr: float = 0.0                # beacon axis
+    threat: float = 0.0             # behaviour axis, positive = hostile-like
     n_updates: int = 0
     cls: str = "unknown"
     last_t: float = 0.0
+
+
+def _sigmoid(llr: float) -> float:
+    return 1.0 / (1.0 + math.exp(-llr))
 
 
 def _dist(a: Sequence[float], b: Sequence[float]) -> float:
@@ -102,10 +117,10 @@ class FriendFoeEstimator:
     def __init__(
         self,
         config: Optional[EstimatorConfig] = None,
-        behaviour_llr: Optional[Callable[[TrackState], float]] = None,
+        threat_llr: Optional[Callable[[TrackState], float]] = None,
     ):
         self.config = config or EstimatorConfig()
-        self.behaviour_llr = behaviour_llr
+        self.threat_llr = threat_llr   # per update: > 0 hostile-like, < 0 peaceful-like
         self._memory: Dict[str, _Memory] = {}
         self._last_t: Optional[float] = None
         # beacons received and expected from friendly tracks, both forgetting over delivery_tau_s
@@ -135,21 +150,30 @@ class FriendFoeEstimator:
         return max(0.0, min(t - self._last_t, self.config.max_dt_s))
 
     def _update_track(self, t: float, dt: float, tr: TrackState, matched: Optional[str]) -> Classification:
-        cfg = self.config
         mem = self._memory.setdefault(tr.track_id, _Memory())
+        self._beacon_evidence(mem, dt, matched)
+        self._behaviour_evidence(mem, dt, tr)
+        mem.n_updates += 1
+        mem.last_t = t
+        p, q = _sigmoid(mem.llr), _sigmoid(mem.threat)
+        mem.cls = self._classify(mem, p, q)
+        return Classification(tr.track_id, t, mem.cls, self._class_prob(mem.cls, p, q), p, matched, q)
+
+    def _beacon_evidence(self, mem: _Memory, dt: float, matched: Optional[str]) -> None:
+        cfg = self.config
         if matched is not None:
             mem.llr += cfg.match_step
         elif mem.llr > cfg.no_beacon_floor:
             # silence is weaker evidence on a lossy link, where a friendly's beacons are missing too
             mem.llr = max(mem.llr - cfg.no_beacon_per_s * dt * self.delivery_rate, cfg.no_beacon_floor)
-        if self.behaviour_llr is not None:
-            mem.llr += self.behaviour_llr(tr)
         mem.llr = max(-cfg.llr_limit, min(cfg.llr_limit, mem.llr))
-        mem.n_updates += 1
-        mem.last_t = t
-        p = 1.0 / (1.0 + math.exp(-mem.llr))
-        mem.cls = self._classify(mem, p)
-        return Classification(tr.track_id, t, mem.cls, self._class_prob(mem.cls, p), p, matched)
+
+    def _behaviour_evidence(self, mem: _Memory, dt: float, tr: TrackState) -> None:
+        cfg = self.config
+        mem.threat *= math.exp(-dt / cfg.threat_tau_s)
+        if self.threat_llr is not None:
+            mem.threat += self.threat_llr(tr)
+        mem.threat = max(-cfg.llr_limit, min(cfg.llr_limit, mem.threat))
 
     def _learn_delivery(self, dt: float, found: Sequence[Classification]) -> None:
         cfg = self.config
@@ -187,23 +211,30 @@ class FriendFoeEstimator:
             result[tracks[i].track_id] = beacons[j].friend_id
         return result
 
-    def _classify(self, mem: _Memory, p: float) -> str:
+    def _classify(self, mem: _Memory, p: float, q: float) -> str:
+        """p = p_friendly (beacon axis), q = p_hostile (behaviour axis)."""
         cfg = self.config
         if mem.n_updates < cfg.min_updates:
             return "unknown"
         prev = mem.cls
         if p >= (cfg.friendly_exit if prev == "friendly" else cfg.friendly_enter):
             return "friendly"
-        if p <= (cfg.hostile_exit if prev == "hostile" else cfg.hostile_enter):
+        if q >= (cfg.hostile_exit if prev == "hostile" else cfg.hostile_enter):
             return "hostile"
+        if q <= (cfg.peaceful_exit if prev == "peaceful" else cfg.peaceful_enter):
+            return "peaceful"
         if p <= (cfg.suspicious_exit if prev == "suspicious" else cfg.suspicious_enter):
             return "suspicious"
         return "unknown"
 
     @staticmethod
-    def _class_prob(cls: str, p: float) -> float:
+    def _class_prob(cls: str, p: float, q: float) -> float:
         if cls == "friendly":
             return p
-        if cls in ("hostile", "suspicious"):
+        if cls == "hostile":
+            return q
+        if cls == "peaceful":
+            return 1.0 - q
+        if cls == "suspicious":
             return 1.0 - p
         return max(p, 1.0 - p)
