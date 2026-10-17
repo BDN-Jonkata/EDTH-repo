@@ -111,7 +111,7 @@ Phased, starting from the optimistic case. Status legend: ⬜ not started · �
 | 🟨 | Noise and bias on sensors: honest per-field noise, scaled by weather, is in the observation models; bias is not modelled |
 | 🟨 | Clock drift and time-sync handling: node clocks (offset, drift) stamp beacons in `common/channel.py`; the tracker does no time-sync |
 | 🟨 | Position uncertainty (GNSS-denied): pose error is added to beacons and the tracker takes node poses from them; no pose estimation |
-| 🟨 | Missing data, delay, out-of-order messages: loss and delay are in the channel; the tracker uses readings at arrival time and does not handle out-of-order ones |
+| 🟨 | Missing data, delay, out-of-order messages: loss, delay and delay bursts are in the channel; the tracker has an optional replay of late readings at the time they were taken (`--oosm`, `tracker/oosm.py`): it removes the ghost tracks late readings start, but did not win back the hostiles that `--trust` loses; a resend after an outage (store-and-forward) is not in the Python channel |
 | ✅ | Message-loss sweep for the friend/foe estimator, with weather and clutter (`python -m friend_foe.sweep`, results in `friend_foe/friend_foe.md`) |
 | ✅ | Message-loss sweep for the whole pipeline (`python -m pipeline.sweep`, see Phase 1) |
 

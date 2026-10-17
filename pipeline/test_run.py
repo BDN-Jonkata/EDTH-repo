@@ -3,7 +3,7 @@
 import unittest
 
 from friend_foe.sweep import Setup, load_preset, make_scenario_and_truth
-from pipeline.run import run, scored_frames
+from pipeline.run import Pipeline, run, scored_frames
 from scoring.metrics import ScoreConfig, score
 
 
@@ -60,6 +60,30 @@ class TestChannelFeatures(unittest.TestCase):
     def test_a_dropped_node_stops_sending(self):
         every_node = lambda d: d.update(dropout=[{"node": n, "t": 10.0} for n in ("F1", "F2", "F3", "F4", "F5", "GS1", "GS2")])
         self.assertLess(self.delivered(every_node), 0.5 * self.delivered(lambda d: None))
+
+
+class TestOutOfSequence(unittest.TestCase):
+    """`oosm`: readings that a delay burst makes late are used at the time they were taken, not left out (with `trust`)."""
+
+    def readings_used(self, **options):
+        sc, _ = scenario_and_truth("medium")
+        sc["duration_s"] = 40
+        sc["degradations"]["sensor_faults"] = [{"node": n, "kind": "delay_burst", "t_start": 10.0, "t_end": 30.0, "extra_ms": 4000}
+                                               for n in ("GS1", "GS2")]
+        pipeline = Pipeline(sc, sc["seed"], **options)
+        return sum(pipeline.step(round(k * 0.1, 6)).readings_used for k in range(401))
+
+    def test_late_readings_are_kept_with_the_option_and_left_out_without(self):
+        left_out = self.readings_used(trust=True)
+        kept = self.readings_used(trust=True, oosm=True)
+        self.assertGreater(kept, left_out)
+
+    def test_it_changes_nothing_when_nothing_is_late(self):
+        sc, truth = scenario_and_truth("medium")
+        sc["duration_s"] = 30
+        a = [(t, [(e.track_id, e.x, e.y) for e in ests]) for t, ests in scored_frames(sc, sc["seed"], trust=True)]
+        b = [(t, [(e.track_id, e.x, e.y) for e in ests]) for t, ests in scored_frames(sc, sc["seed"], trust=True, oosm=True)]
+        self.assertEqual(a, b)
 
 
 if __name__ == "__main__":
