@@ -3,6 +3,8 @@
 A merger (C2 or any reachable node) keeps the latest estimate of every local track it has heard, moves
 each to now with constant velocity, groups estimates that are the same object, and merges each group with
 covariance intersection (`fusion/ci.py`). Two tracks of one node are never the same object.
+Delayed updates cannot replace a newer local state. Association requires compatible velocity uncertainty
+and no conflicting verified identity, including across every member of a proposed group.
 
 Global IDs: a global ID is tied to the local tracks that make it up, so it survives when a node joins the
 group, leaves it, or a local track gets a new ID, as long as one member remains. If a group holds members
@@ -43,6 +45,7 @@ class Merger:
     def __init__(self, config: Optional[FusionConfig] = None):
         self.config = config or FusionConfig()
         self._heard: Dict[str, Estimate] = {}
+        self._latest: Dict[str, Tuple[float, int]] = {}   # state time and sequence, including expired tracks
         self._gid: Dict[str, str] = {}              # local track key -> global id
         self._born: Dict[str, float] = {}
         self._next = 1
@@ -51,9 +54,13 @@ class Merger:
         for m in messages:
             if m["type"] != "local_track":
                 continue
+            key = m["local_track_id"]
+            order = (m["t_state"], m["header"]["seq"])
+            if order <= self._latest.get(key, (-math.inf, -1)):
+                continue
             state, cov = state_and_cov(m)
-            self._heard[m["local_track_id"]] = Estimate(m["header"]["source_id"], m["local_track_id"], m["t_state"],
-                                                        state, cov, friend_id_of(m))
+            self._latest[key] = order
+            self._heard[key] = Estimate(m["header"]["source_id"], key, m["t_state"], state, cov, friend_id_of(m))
 
     def step(self, t: float) -> List[Track]:
         self._heard = {k: e for k, e in self._heard.items() if t - e.t <= self.config.ttl_s}
@@ -74,19 +81,24 @@ class Merger:
         state, cov = predict(e.state, e.cov, max(0.0, t - e.t), self.config.accel_noise_mps2)
         return Estimate(e.node, e.key, e.t, state, cov, e.friend_id)
 
-    def _distance2(self, a: Estimate, b: Estimate) -> float:
-        """Squared Mahalanobis distance between two position estimates, the sum of their covariances."""
-        dx, dy = a.state[0] - b.state[0], a.state[1] - b.state[1]
-        s = [[a.cov[i][j] + b.cov[i][j] for j in range(2)] for i in range(2)]
+    def _distance2(self, a: Estimate, b: Estimate, axes: Tuple[int, int] = (0, 1)) -> float:
+        """Squared Mahalanobis distance of a position or velocity pair, including both uncertainties."""
+        dx, dy = (a.state[i] - b.state[i] for i in axes)
+        s = [[a.cov[i][j] + b.cov[i][j] for j in axes] for i in axes]
         si = inverse(s)
         return dx * (si[0][0] * dx + si[0][1] * dy) + dy * (si[1][0] * dx + si[1][1] * dy)
 
+    def _compatible(self, a: Estimate, b: Estimate) -> bool:
+        if a.friend_id and b.friend_id and a.friend_id != b.friend_id:
+            return False
+        return self._distance2(a, b, (2, 3)) <= GATE_CHI2
+
     def _groups(self, estimates: List[Estimate]) -> List[List[Estimate]]:
-        """Group estimates of different nodes that are the same object, closest pairs first."""
+        """Group compatible estimates of different nodes, closest position pairs first."""
         pairs = []
         for i, a in enumerate(estimates):
             for b in estimates[i + 1:]:
-                if a.node == b.node:
+                if a.node == b.node or not self._compatible(a, b):
                     continue
                 d = math.hypot(a.state[0] - b.state[0], a.state[1] - b.state[1])
                 if d <= self.config.min_gate_m or self._distance2(a, b) <= GATE_CHI2:
@@ -95,6 +107,8 @@ class Merger:
         for _, ka, kb in sorted(pairs):
             ga, gb = groups[ka], groups[kb]
             if ga is gb or {e.node for e in ga} & {e.node for e in gb}:
+                continue
+            if not all(self._compatible(a, b) for a in ga for b in gb):
                 continue
             merged = ga + gb
             for e in merged:

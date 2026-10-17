@@ -14,8 +14,9 @@ def diag(*values):
     return identity_like(list(values))
 
 
-def message(node, local_id, t, x, y, sigma=5.0, vx=10.0, vy=0.0, friend=None):
-    track = Track(local_id, [x, y, vx, vy], diag(sigma ** 2, sigma ** 2, 1.0, 1.0), 0.0, t, confirmed=True, friend_id=friend)
+def message(node, local_id, t, x, y, sigma=5.0, vx=10.0, vy=0.0, friend=None, vel_sigma=1.0):
+    track = Track(local_id, [x, y, vx, vy], diag(sigma ** 2, sigma ** 2, vel_sigma ** 2, vel_sigma ** 2),
+                  0.0, t, confirmed=True, friend_id=friend)
     return local_track_message(node, track, t, Sequencer(node))
 
 
@@ -122,6 +123,76 @@ class TestMerger(unittest.TestCase):
         merger = Merger()
         merger.ingest([message("N1", "N1/T1", 0.0, 100.0, 100.0, friend="F1"), message("N2", "N2/T2", 0.0, 101.0, 100.0)])
         self.assertEqual(merger.step(0.0)[0].friend_id, "F1")
+
+    def test_a_delayed_update_does_not_roll_back_the_latest_state(self):
+        newest = message("N1", "T1", 10.0, 100.0, 100.0)
+        delayed = message("N1", "T1", 9.0, 80.0, 100.0)
+        delayed["header"]["seq"] = 99   # a new packet can still carry an older state
+        for batch in ([newest, delayed], [delayed, newest]):
+            with self.subTest(order=[m["t_state"] for m in batch]):
+                merger = Merger()
+                merger.ingest(batch)
+                self.assertEqual(merger.step(10.0)[0].state, [100.0, 100.0, 10.0, 0.0])
+
+    def test_same_time_updates_keep_the_newest_sequence_and_ignore_replays(self):
+        merger = Merger()
+        newest = message("N1", "T1", 10.0, 100.0, 100.0)
+        newest["header"]["seq"] = 20
+        replay = message("N1", "T1", 10.0, 80.0, 100.0)
+        replay["header"]["seq"] = 19
+        merger.ingest([newest, replay])
+        self.assertEqual(merger.step(10.0)[0].state[0], 100.0)
+        correction = message("N1", "T1", 10.0, 101.0, 100.0)
+        correction["header"]["seq"] = 21
+        merger.ingest([correction, newest])
+        self.assertEqual(merger.step(10.0)[0].state[0], 101.0)
+        self.assertEqual(merger.step(15.0), [])
+        merger.ingest([replay])
+        self.assertEqual(merger.step(15.0), [])
+
+    def test_distinct_verified_friends_do_not_merge_even_through_an_unidentified_track(self):
+        merger = Merger()
+        merger.ingest([message("N1", "T1", 0.0, 100.0, 100.0, friend="F1"),
+                       message("N2", "T1", 0.0, 101.0, 100.0),
+                       message("N3", "T1", 0.0, 102.0, 100.0, friend="F2")])
+        tracks = merger.step(0.0)
+        self.assertEqual(len(tracks), 2)
+        self.assertEqual({tr.friend_id for tr in tracks}, {"F1", "F2"})
+
+    def test_opposite_moving_targets_keep_two_global_ids_through_the_crossing(self):
+        merger = Merger()
+        identities = None
+        for t in (0.0, 0.5, 1.0, 1.5, 2.0):
+            batch = [message(node, local_id, t, x + offset, 100.0, vx=vx)
+                     for node, offset in (("N1", 0.0), ("N2", 1.0))
+                     for local_id, x, vx in (("T1", 90.0 + 10.0 * t, 10.0),
+                                             ("T2", 110.0 - 10.0 * t, -10.0))]
+            merger.ingest(batch)
+            tracks = merger.step(t)
+            self.assertEqual(len(tracks), 2)
+            by_direction = {tr.state[2] > 0: tr.track_id for tr in tracks}
+            if identities is None:
+                identities = by_direction
+            self.assertEqual(by_direction, identities)
+
+    def test_opposing_targets_from_different_nodes_are_not_one_object(self):
+        merger = Merger()
+        merger.ingest([message("N1", "T1", 0.0, 100.0, 100.0, vx=10.0),
+                       message("N2", "T1", 0.0, 105.0, 100.0, vx=-10.0)])
+        self.assertEqual(len(merger.step(0.0)), 2)
+
+    def test_a_vague_velocity_cannot_bridge_two_incompatible_targets(self):
+        merger = Merger()
+        merger.ingest([message("N1", "T1", 0.0, 100.0, 100.0, vx=10.0),
+                       message("N2", "T1", 0.0, 101.0, 100.0, vx=0.0, vel_sigma=10.0),
+                       message("N3", "T1", 0.0, 102.0, 100.0, vx=-10.0)])
+        self.assertEqual(len(merger.step(0.0)), 2)
+
+    def test_velocity_gate_allows_measurement_noise_according_to_its_uncertainty(self):
+        merger = Merger()
+        merger.ingest([message("N1", "T1", 0.0, 100.0, 100.0, vx=10.0, vel_sigma=10.0),
+                       message("N2", "T1", 0.0, 101.0, 100.0, vx=-2.0, vel_sigma=10.0)])
+        self.assertEqual(len(merger.step(0.0)), 1)
 
 
 if __name__ == "__main__":

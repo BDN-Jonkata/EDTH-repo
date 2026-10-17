@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="48" height="48" viewBox="0 0 48 48" fill="none">
+  <title>Suspicious drone with caution badge</title>
+  <path d="M13 1h22l12 12v22L35 47H13L1 35V13Z" fill="#241A08" stroke="#AB7B29" stroke-dasharray="4 3"/>
+  <path d="m13 13 22 22m0-22L13 35" stroke="#F5B13D" stroke-width="4" stroke-linecap="round"/>
+  <g fill="#3D2B0D" stroke="#FFD58A" stroke-width="1.7">
+    <circle cx="12" cy="12" r="6"/><circle cx="36" cy="12" r="6"/>
+    <circle cx="12" cy="36" r="6"/><circle cx="36" cy="36" r="6"/>
+  </g>
+  <path d="m24 15 6 6v10l-6 3-6-3V21Z" fill="#F5B13D" stroke="#FFE3A6" stroke-width="1.5"/>
+  <path d="M24 21v6" stroke="#3D2B0D" stroke-width="2" stroke-linecap="round"/>
+  <path d="M38 28 48 46H28Z" fill="#F5B13D" stroke="#241A08" stroke-width="2" stroke-linejoin="round"/>
+  <path d="M38 34v5" stroke="#241A08" stroke-width="2.2" stroke-linecap="round"/>
+  <circle cx="38" cy="42" r="1.2" fill="#241A08"/>
+</svg>

@@ -10,8 +10,9 @@
  * numbers and weather effects come from there. The platform of each node is
  * chosen with params.assign.
  *
- * This is a stand-in for the real modules (seeder, simulation, sensors,
- * tracker, fusion, friend_foe). Simplifications are marked "MOCK".
+ * This browser baseline runs independently of the Python tracking/fusion
+ * pipeline. Simplifications are marked "MOCK"; its results do not validate
+ * the Python backend.
  */
 (function (global) {
   'use strict';
@@ -28,6 +29,7 @@
   const Traffic = typeof window !== 'undefined' ? window.Traffic : require('./traffic.js');
   const FriendFoe = typeof window !== 'undefined' ? window.FriendFoe : require('./friend-foe.js');
   const Investigations = typeof window !== 'undefined' ? window.Investigations : require('./investigations.js');
+  const Metrics = typeof window !== 'undefined' ? window.Metrics : require('./metrics.js');
   const CAT = typeof CATALOG !== 'undefined' ? CATALOG : require('./catalog.js'); // eslint-disable-line no-undef
   const DT = 0.1;
   const T_END = 120;
@@ -93,9 +95,9 @@
   }
 
   // ----------------------------------------------------------------- sensors
-  // MOCK: every sensor reports a position fix with an honest covariance
-  // (long along the line of sight for bearing-type sensors). Numbers come from
-  // the catalog module's `sim` block, scaled by its weather effect.
+  // Sensors report their native bearing/range/Doppler/loudness fields, not
+  // oracle position fixes. Numbers come from the catalog module's `sim` block,
+  // scaled by its weather effect. Node pose is still exact in this baseline.
   const MODULES = {};
   CAT.modules.forEach((m) => { MODULES[m.id] = m; });
   const PLATFORMS = {};
@@ -154,7 +156,7 @@
   }
 
   // ----------------------------------------------------------- Kalman filter
-  // State [x y vx vy], row-major 4x4 covariance, position-only measurements.
+  // State [x y vx vy], row-major 4x4 covariance, native scalar measurement updates.
   function newTrack(id, kind, z, q, velVar) {
     const P = new Float64Array(16);
     P[0] = z.R[0]; P[1] = z.R[1]; P[4] = z.R[1]; P[5] = z.R[2];
@@ -312,7 +314,8 @@
       beaconEvery: Math.max(1, Math.round(10 / (world.beacon.rate_hz || 2))), beaconSigma: world.beacon.pos_sigma_m || 3,
       tracks: [], pending: [], friends: {}, alerts: [], frames: [], timeline: [], lastMatch: {}, sqHist: [], crossAlerted: {},
       beacons: {},
-      n: { hostile: 0, unk: 0, swaps: 0, ffa: 0, cfa: 0, bfa: 0, evalSq: 0, evalN: 0, evalCnt: 0, evalCntN: 0 },
+      n: { hostile: 0, unk: 0, swaps: 0, ffa: 0, cfa: 0, bfa: 0, evalSq: 0, evalN: 0, evalVelocitySq: 0,
+        evalHeadingSq: 0, evalHeadingN: 0, evalTruthN: 0, evalExactN: 0, evalCnt: 0, evalCntN: 0 },
     };
     world.targets.concat(world.clutter).forEach((h) => { c.pathById[h.id] = h; });
     setDropTimes(c, world, real);
@@ -386,7 +389,7 @@
     c.missions.update(t, c.tracks);
     c.investigations.sync(t, c.missions.drones);
     const { snap, hostileTracks } = snapshot(c, t);
-    const score = scoreFrame(c, t, truth, hostileTracks);
+    const score = scoreFrame(c, t, truth, hostileTracks, snap);
     const cross = findCrossing(hostileTracks);
     if (cross) announceCrossing(c, t, cross);
     if (!c.lite) c.frames.push(frameRecord(c, { t, k, truth, snap, frameMeas, cross, score, hostileTracks }));
@@ -395,7 +398,12 @@
 
   function finish(c) {
     const n = c.n;
-    const summary = { rmse: n.evalN ? Math.sqrt(n.evalSq / n.evalN) : null, countErr: n.evalCntN ? n.evalCnt / n.evalCntN : 0, swaps: n.swaps, ffa: n.ffa };
+    const summary = { rmse: n.evalN ? Math.sqrt(n.evalSq / n.evalN) : null,
+      velocityRmse: n.evalN ? Math.sqrt(n.evalVelocitySq / n.evalN) : null,
+      headingRmseDeg: n.evalHeadingN ? Math.sqrt(n.evalHeadingSq / n.evalHeadingN) : null,
+      trackedFraction: n.evalTruthN ? n.evalN / n.evalTruthN : null, matchedSamples: n.evalN, targetSamples: n.evalTruthN,
+      exactCountFraction: n.evalCntN ? n.evalExactN / n.evalCntN : null,
+      countErr: n.evalCntN ? n.evalCnt / n.evalCntN : 0, swaps: n.swaps, ffa: n.ffa };
     if (c.world.clutter.length) summary.cfa = n.cfa; // clutter objects tracked as hostile; only scenarios with clutter report it
     if (c.world.benigns.length) summary.bfa = n.bfa;
     // entry markers from scenario script
@@ -429,7 +437,11 @@
       meas: f.frameMeas.map((z) => ({ k: z.k, node: z.node, module: z.module, t: z.t, m: z.m, sx: z.sx, sy: z.sy, b: z.b, r: z.r, rmax: z.rmax, fields: z.fields, merged: !!z.merged, clutter: !!z.clutter })),
       links: Object.assign({}, c.linkQ), cross: f.cross,
       ...(c.sf ? { health: JSON.parse(JSON.stringify(c.sf.health)) } : {}),
-      m: { est: f.hostileTracks.length, tru: score.trueHost.length, countErr: score.countErr, rmse10: score.rmse10, swaps: c.n.swaps, ffa: c.n.ffa },
+      m: { est: f.hostileTracks.length, tru: score.trueHost.length, countErr: score.countErr,
+        tracked: score.match.length, trackingTargets: score.trueHost.length, matchedSamples: score.match.length,
+        trackCoverage: score.trueHost.length ? score.match.length / score.trueHost.length : null,
+        rmse10: score.rolling.rmse, velocityRmse10: score.rolling.velocityRmse, headingRmse10: score.rolling.headingRmseDeg,
+        swaps: c.n.swaps, ffa: c.n.ffa },
     };
   }
 
@@ -900,42 +912,44 @@
   }
 
   // ---------------------------------------------------------- scoring against truth
-  function scoreFrame(c, t, truth, hostileTracks) {
+  function scoreFrame(c, t, truth, hostileTracks, tracks) {
     const trueHost = truth.filter((o) => o.kind === 'hostile');
-    const { match, usedA } = matchTracks(c, t, hostileTracks, trueHost);
-    const sqSum = match.reduce((acc, m) => acc + m[2] * m[2], 0);
-    const rmse10 = rollingRmse(c, match.length ? [sqSum / match.length, 1] : [0, 0]);
-    flagFriendlies(c, t, truth, hostileTracks, usedA);
-    flagClutter(c, t, truth, hostileTracks, usedA);
-    falseHostiles(c, truth, hostileTracks, usedA, 'benign', 'bfa').forEach(([a, o]) => {
+    // First associate all confirmed/coasting tracks with ALL real objects.
+    // Assessments and scenario roles do not select the geometric assignment;
+    // only afterwards do we measure coverage/errors of the threat-scenario targets.
+    const eligible = tracks.filter((o) => o.st === 'confirmed' || o.st === 'coasting');
+    const paired = Metrics.assign(eligible, truth);
+    paired.forEach(({track, distance}) => { track.err = distance; });
+    const targetPairs = paired.filter((p) => p.truth.kind === 'hostile');
+    const match = targetPairs.map(({track, truth:target, distance}) => {
+      noteSwap(c, t, target.id, track.id);
+      c.lastMatch[target.id] = track.id;
+      return [track.id, target.id, distance];
+    });
+    const errors = Metrics.errors(targetPairs);
+    c.sqHist.push(errors);
+    if (c.sqHist.length > 100) c.sqHist.shift();
+    const rolling = Metrics.aggregate(c.sqHist);
+
+    // Hostile-label correctness is a separate assessment metric. In particular,
+    // an unidentified target still contributes to tracking position/identity
+    // quality, while the hostile count correctly reports that missing label.
+    const strictPairs = Metrics.assign(hostileTracks, truth);
+    flagFriendlies(c, t, strictPairs);
+    flagClutter(c, t, strictPairs);
+    falseHostiles(c, strictPairs, 'benign', 'bfa').forEach(([a, o]) => {
       c.n.bfa++;
       c.alerts.push({ t, sev: 'warn', text: 'Benign drone ' + o.id + ' assessed hostile (' + a.id + ')' });
     });
     const countErr = hostileTracks.length - trueHost.length;
-    if (t >= c.EVAL[0] && t <= c.EVAL[1]) addToSummary(c.n, sqSum, match.length, countErr);
-    return { trueHost, match, rmse10, countErr };
+    if (t >= c.EVAL[0] && t <= c.EVAL[1]) addToSummary(c.n, errors, trueHost.length, countErr);
+    return { trueHost, match, rolling, countErr };
   }
-  function addToSummary(n, sqSum, matched, countErr) {
-    n.evalSq += sqSum; n.evalN += matched; n.evalCnt += Math.abs(countErr); n.evalCntN++;
-  }
-  // nearest-first pairing of estimated and true hostiles
-  function matchTracks(c, t, hostileTracks, trueHost) {
-    const pairs = [];
-    hostileTracks.forEach((a) => trueHost.forEach((b) => {
-      const d = Math.hypot(a.x - b.x, a.y - b.y);
-      // a pair that was matched before stays matched while it is still close, so two tracks near each other do not flicker
-      if (d < 60) pairs.push([c.lastMatch[b.id] === a.id && d < 40 ? d - 1000 : d, a, b, d]);
-    }));
-    pairs.sort((p, q) => p[0] - q[0]);
-    const usedA = new Set(), usedB = new Set(), match = [];
-    pairs.forEach(([, a, b, d]) => {
-      if (usedA.has(a.id) || usedB.has(b.id)) return;
-      usedA.add(a.id); usedB.add(b.id); match.push([a.id, b.id, d]);
-      a.err = d;
-      noteSwap(c, t, b.id, a.id);
-      c.lastMatch[b.id] = a.id;
-    });
-    return { match, usedA };
+  function addToSummary(n, errors, targets, countErr) {
+    n.evalSq += errors.positionSq; n.evalN += errors.n; n.evalVelocitySq += errors.velocitySq;
+    n.evalHeadingSq += errors.headingSq; n.evalHeadingN += errors.headingN;
+    n.evalTruthN += targets; n.evalExactN += countErr === 0 ? 1 : 0;
+    n.evalCnt += Math.abs(countErr); n.evalCntN++;
   }
   function noteSwap(c, t, trueId, trackId) {
     const prev = c.lastMatch[trueId];
@@ -944,35 +958,28 @@
     c.alerts.push({ t, sev: 'crit', text: 'Identity swap on ' + trueId + ': ' + prev + ' → ' + trackId });
     c.timeline.push({ t, label: 'swap', color: 'red' });
   }
-  // position error over the last 100 frames (10 s), weighted by how many pairs were matched
-  function rollingRmse(c, entry) {
-    c.sqHist.push(entry);
-    let ws = 0, wn = 0;
-    for (let i = Math.max(0, c.sqHist.length - 100); i < c.sqHist.length; i++) { ws += c.sqHist[i][0] * c.sqHist[i][1]; wn += c.sqHist[i][1]; }
-    return wn ? Math.sqrt(ws / wn) : null;
-  }
-  // hostile tracks not matched to a true hostile but sitting on an object of this kind; each track is reported once
-  function falseHostiles(c, truth, hostileTracks, usedA, kind, flag) {
+  // A hostile label on an object of this kind; each track is reported once.
+  // Mixed-kind assignment prevents a nearby hostile hiding a friendly alarm.
+  function falseHostiles(c, pairs, kind, flag) {
     const found = [];
-    hostileTracks.forEach((a) => {
-      if (usedA.has(a.id)) return;
+    pairs.forEach(({track:a, truth:o, distance}) => {
+      if (o.kind !== kind || distance >= 40) return;
       const tr = c.tracks.find((x) => x.id === a.id);
       if (!tr || tr[flag]) return;
-      const o = truth.find((q) => q.kind === kind && Math.hypot(q.x - a.x, q.y - a.y) < 40);
-      if (o) { tr[flag] = true; found.push([a, o]); }
+      tr[flag] = true; found.push([a, o]);
     });
     return found;
   }
-  function flagFriendlies(c, t, truth, hostileTracks, usedA) {
-    falseHostiles(c, truth, hostileTracks, usedA, 'friendly', 'ffa').forEach(([a, fr]) => {
+  function flagFriendlies(c, t, pairs) {
+    falseHostiles(c, pairs, 'friendly', 'ffa').forEach(([a, fr]) => {
       c.n.ffa++;
       c.alerts.push({ t, sev: 'crit', text: 'Friendly ' + fr.id + ' flagged as hostile (' + a.id + ')' });
       c.timeline.push({ t, label: 'FFA', color: 'red' });
     });
   }
   // a bird or vehicle tracked as hostile is a false alarm
-  function flagClutter(c, t, truth, hostileTracks, usedA) {
-    falseHostiles(c, truth, hostileTracks, usedA, 'clutter', 'cfa').forEach(([a, o]) => {
+  function flagClutter(c, t, pairs) {
+    falseHostiles(c, pairs, 'clutter', 'cfa').forEach(([a, o]) => {
       c.n.cfa++;
       c.alerts.push({ t, sev: 'warn', text: 'Clutter ' + o.type + ' ' + o.id + ' tracked as hostile (' + a.id + ')' });
       c.timeline.push({ t, label: 'clutter', color: 'amber' });
@@ -1213,12 +1220,14 @@
       used[i] = true;
       for (let j = i + 1; j < seen.length; j++) {
         if (used[j]) continue;
-        if (Math.abs(seen[j].r - seen[i].r) < cell.range_m && Math.abs(seen[j].az - seen[i].az) < cell.azimuth_deg * D2R) {
+        if (Math.abs(seen[j].r - seen[i].r) < cell.range_m && Math.abs(wrapPi(seen[j].az - seen[i].az)) < cell.azimuth_deg * D2R) {
           grp.push(seen[j]); used[j] = true;
         }
       }
       const n = grp.length, avg = (key) => grp.reduce((acc, g) => acc + g[key], 0) / n;
-      out.push({ x: avg('x'), y: avg('y'), vx: avg('vx'), vy: avg('vy'), r: avg('r'), az: avg('az'), n, sq: grp[0].sq, o: grp[0].o });
+      // Bearings on either side of -pi/pi have a mean near west, not east.
+      const az = Math.atan2(grp.reduce((sum,g)=>sum+Math.sin(g.az),0), grp.reduce((sum,g)=>sum+Math.cos(g.az),0));
+      out.push({ x: avg('x'), y: avg('y'), vx: avg('vx'), vy: avg('vy'), r: avg('r'), az, n, sq: grp[0].sq, o: grp[0].o });
     }
     return out;
   }

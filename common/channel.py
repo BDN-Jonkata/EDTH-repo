@@ -42,6 +42,8 @@ class Loss:
     def drops(self) -> bool:
         if not self.burst:
             return self.rng.random() < self.loss
+        if self.loss == 1.0:
+            return True
         flip = self.p_bad_to_good if self.bad else self.p_good_to_bad
         if self.rng.random() < flip:
             self.bad = not self.bad

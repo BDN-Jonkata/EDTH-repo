@@ -4,6 +4,8 @@ Sensor models (camera bearing, acoustic, RF, radar) including weather effects. E
 
 Status: weather conditions (single, combined and changing over time and place), sensor quality, required standoff and a weather report done, built on the seeder catalog; observation models and the beacon source done and tested (Python, mirroring the viewer's mock). See [system design](../docs/system-design.md).
 
+This is component completion, not proof of the operational sensor coverage or crossing accuracy required by 03-Rai. See the [current challenge audit](../docs/challenge-audit.md).
+
 ## Observation models
 
 | File | Contents |
@@ -14,6 +16,8 @@ Status: weather conditions (single, combined and changing over time and place), 
 | [beacons.py](beacons.py) | `BeaconSource`: friendly position beacons with the beacon noise, pose error and the drone's own clock |
 
 This is the simulation side: it needs the true positions, so the tracker never imports it. Messages leave undelayed; [common/channel.py](../common/channel.py) loses and delays them. Numbers are the catalog's (assumptions unless `verified`); the classifier hint, signal levels and false-alarm placement are the mock's simplifications.
+
+Python native observations currently stamp `t_obs` and header `t_sent` with ideal simulation time. Configured node clock offset/drift is applied by `BeaconSource` to beacons only; the channel does not transform observation timestamps. Simulating and handling imperfect sensor clocks remains open.
 
 ## What exists
 
@@ -32,15 +36,15 @@ The numbers are not in this module. Each catalog sensor module has `sim.range_m`
 
 Day and night follow the season. A fixed night from, say, 21:00 to 05:00 is wrong, because the length of the day depends on the date and the latitude. `Sky(date, hour, lat, lon)` computes the sun's height above the horizon (the standard NOAA approximation, checked against known values) and turns it into a night strength from 0 to 1: 0 with the sun up, rising linearly through twilight to 1 at 12 degrees below the horizon (a placeholder mapping, since the catalog only has one full-night multiplier). The same 21:00 is night in December and dusk in June, and near 60 N a June night never gets fully dark. `SkyWeather` adds that strength as the `night` effect on top of any weather, so dusk and fog combine. Moon and cloud cover are ignored.
 
-Anomalies that come and go: `EventWeather(base, events)` answers for a position and time, so `required_standoff` uses the weather at the object when the request is made. The scenario format for combinations and events is a proposal that the seeder and viewer do not support yet; see "Weather combinations" in [data-formats.md](../docs/data-formats.md).
+Anomalies that come and go: `EventWeather(base, events)` answers for a position and time, so `required_standoff` uses the weather at the object when the request is made. The seeder and viewer support combinations, events and seasonal sky settings; see "Weather combinations" in [data-formats.md](../docs/data-formats.md). Observations use weather at both the current sensor position and the target position through `conditions_between`; the Python standoff helper currently uses only the target position.
 
 **Finding:** the catalog check only tests single weathers. In combination, platforms lose every working detection module: fog and rain leave `anafi_thermal` with none, fog and wind (or rain, wind and night) leave `mini4pro` and `gs_eo_acoustic` with none (camera hurt by fog, microphone by wind), and fog, rain and wind at night leave 4 of 7 platforms without one. The radar and RF platforms survive everything.
 
-How close an object must be to be identified comes from the catalog field `sim.ident_range_m` (assumed, like the other catalog numbers); the placeholder fraction `IDENT_FRACTION` that stood in for it is gone.
+How close an object must be to be identified comes from the catalog field `sim.ident_range_m` (assumed, like the other catalog numbers); `IDENT_FRACTION` remains only as a compatibility fallback for older module inputs without that field. Being in range does not itself simulate identification or establish hostile intent.
 
 ## Not done yet
 
-- Observation models that produce sensor messages from the scenario (needs the simulation).
-- Applying `sensor_quality` to the noise and detection probability of those observations.
-- Seeder and viewer support for combined weather and weather events (proposed to the seeder owner).
-- Weather that changes a sensor's own position over time (a drone flying out of a fog bank): standoff uses the weather at the object only.
+- Calibration of assumed sensor noise, detection probabilities and weather multipliers against measurements; catalogue datasheet verification does not validate the simulation model.
+- Sensor bias and true terrain/building line-of-sight occlusion.
+- Python standoff accounting for weather at the investigating sensor as well as the object; observations already account for both positions.
+- Operational identification cues: approaching within the assumed identification range does not yet provide a validated class observation to the estimator.

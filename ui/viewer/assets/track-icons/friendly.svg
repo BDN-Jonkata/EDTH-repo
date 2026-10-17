@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="48" height="48" viewBox="0 0 48 48" fill="none">
+  <title>Friendly drone with verified identity shield</title>
+  <rect x="1" y="1" width="46" height="46" rx="13" fill="#0E1A2E" stroke="#365D91"/>
+  <path d="m13 13 22 22m0-22L13 35" stroke="#5B9BFF" stroke-width="4" stroke-linecap="round"/>
+  <g fill="#142B49" stroke="#8DB8FF" stroke-width="1.7">
+    <circle cx="12" cy="12" r="6"/><circle cx="36" cy="12" r="6"/>
+    <circle cx="12" cy="36" r="6"/><circle cx="36" cy="36" r="6"/>
+  </g>
+  <g stroke="#5B9BFF" stroke-width="1.5" stroke-linecap="round">
+    <path d="M9 12h6m18 0h6M9 36h6m18 0h6"/>
+  </g>
+  <path d="m24 14 6 7v10l-6 4-6-4V21Z" fill="#5B9BFF" stroke="#B9D6FF" stroke-width="1.5"/>
+  <path d="m21 23 3-3 3 3m-3 1v5" stroke="#0E1A2E" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="m38 29 8 3v6c0 4-4 7-8 9-4-2-8-5-8-9v-6Z" fill="#5B9BFF" stroke="#0E1A2E" stroke-width="2"/>
+  <path d="m34.5 37.5 2.5 2.5 4.5-5" stroke="#071323" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>

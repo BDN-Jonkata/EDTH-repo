@@ -4,6 +4,8 @@ Metrics harness: count error, position/velocity error, ID swaps, friendly false 
 
 Status: scoring of one run is done and tested (hand-made cases and one seeder run through the friend/foe test adapter). A run exported from the viewer's mock simulation can be scored too (`viewer_run.py`). See [system design](../docs/system-design.md).
 
+The [03-Rai audit](../docs/challenge-audit.md) separates actual hostile labels from the historical **presumed-threat** count below. Neither a low count error nor zero ID swaps alone demonstrates challenge success. Use `python -m scoring.challenge --official --losses 0,0.5,0.9 --json out/challenge.json` for current whole-run and crossing diagnostics. It uses geometric association with **zero continuity discount**, reports sample coverage, and refuses to treat a partially observed crossing as identity success. Position/velocity acceptance tolerances still need to be agreed; the challenge supplies no numeric thresholds.
+
 ## What exists
 
 | File | Contents |
@@ -21,7 +23,7 @@ Status: scoring of one run is done and tested (hand-made cases and one seeder ru
 ## How a step is scored
 
 1. Estimated tracks are matched to the true objects present (hostile, friendly, non-allied benign **and** clutter) by optimal assignment inside a gate (`gate_m`, default 50 m). Matching all kinds means a track on a friendly, benign drone or bird is never taken for a true hostile.
-2. A track **counts as hostile** unless its class is `friendly` or `peaceful`. A track with no class, or `unknown`, counts: a hostile presumption (change `NOT_HOSTILE_CLASSES` in [metrics.py](metrics.py) to treat `unknown` differently).
+2. Legacy count fields presume a track hostile unless its class is `friendly` or `peaceful`. A track with no class, or `unknown`, counts. The separate `strict_hostile_*` fields count only `class == hostile`, matching the GUI's hostile counter. This preserves historical comparisons without calling unidentified contacts confirmed hostiles.
 3. Metrics are averaged over the steps scored (`warmup_s` skips the start).
 
 | Metric | Definition |
@@ -31,6 +33,10 @@ Status: scoring of one run is done and tested (hand-made cases and one seeder ru
 | `ospa_m` | OSPA between true hostiles and counted tracks, cutoff 100 m, order 2. A missed or extra track costs the cutoff |
 | `id_swaps` | times a hostile object's matched track id differs from the one it had at its last matched step (the standard ID switch; a gap with no match does not count unless the id changed) |
 | `hostile_detected_frac` | share of hostile object-steps matched to a counted track |
+| `hostile_tracked_frac`, `matched_hostile_samples`, `hostile_samples` | geometric coverage and its sample counts, independent of assessed class; read these beside position errors and ID swaps |
+| `count_exact_frac` | share of steps whose legacy presumed-threat count exactly equals the true hostile count |
+| `strict_hostile_count_error_mean_abs`, `strict_hostile_count_error_bias`, `strict_hostile_count_exact_frac` | count error and exact-count share for tracks actually labelled hostile |
+| `strict_hostile_detected_frac`, `strict_friendlies_flagged` | hostile coverage and distinct friendly false alarms using only actual hostile labels |
 | `friendlies_flagged`, `friendly_flag_frac` | friendlies matched to a counted track at least once, and the share of friendly object-steps |
 | `clutter_flagged_frac` | share of clutter object-steps matched to a counted track: a bird or vehicle called hostile is a false alarm, not a missed hostile |
 | `benign_flag_frac` | share of non-allied benign drone object-steps matched to a counted track; separate from friendly identity and clutter |
@@ -51,3 +57,5 @@ With 2 birds and 2 vehicles and no behaviour module the count error is 3.0 at ev
 ## Assumptions
 
 The gate, the continuity bonus, the OSPA cutoff and the 1 m/s heading threshold are my choices, not from a requirements document. The matching is per step, as in [system-design.md](../docs/system-design.md) section 5.9, with one addition: keeping the pair an object had at the last step is worth `continuity_m` (10 m). Without it two objects passing within the position noise trade tracks, and the clean adapter tracks showed 1.1 false ID swaps per run. The price: a real swap between two tracks closer than about 10 m is not seen. `frames_from_estimator` uses the friend/foe test adapter, whose tracks are cleaner than a real tracker's, so numbers from it only show that the scoring works.
+
+The viewer's current tracking RMSE, velocity/heading errors, coverage and ID swaps use confirmed/coasting contacts, independently of assessed class; its hostile count remains strict. Older saved viewer runs scored only hostile-labelled tracks and could show zero swaps with zero tracking coverage. The `--hostile-only` reader option still filters tracks and is useful for reproducing that historical count policy; leave it off when evaluating contact tracking, then use the new strict count fields for hostile assessment. Viewer and Python geometric gates differ (60 m versus 50 m), so report the engine and scorer with each result.

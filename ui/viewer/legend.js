@@ -9,15 +9,15 @@
   const $ = (id) => document.getElementById(id);
   const STORE_KEY = 'dds.legend';
   const CLASS_TEXT = {
-    friendly: 'Our drones; a trusted beacon verifies the identity.',
-    peaceful: 'Observed safe behaviour. Still tracked and counted.',
-    unknown: 'Detected, no behaviour evidence yet.',
-    suspicious: 'Behaviour of concern; may send a drone to look. Not a confirmed threat.',
-    hostile: 'Established threat; counted in the hostile count.',
+    friendly: 'Blue drone with an identity shield. Verified fleet or trusted partner.',
+    peaceful: 'Teal drone with a check. Observed safe behaviour; still tracked.',
+    unknown: 'Neutral question-mark contact. Not enough evidence to assess the object.',
+    suspicious: 'Amber drone with a caution badge. Behaviour of concern; may send another drone to look.',
+    hostile: 'Red drone with a threat badge. High assessed behaviour risk; counted in the hostile estimate.',
   };
   const STATE_TEXT = {
-    tentative: ['Tentative', 'Dashed uncertainty ellipse and dashed ID tag: not confirmed yet.'],
-    confirmed: ['Confirmed', 'Solid outline and filled ID tag.'],
+    tentative: ['Tentative', 'Dotted ring around the image: the track still needs sensor support.'],
+    confirmed: ['Confirmed', 'Enough sensor support to maintain a track. The image shows its assessment.'],
     coasting: ['Coasting', 'Faded: no recent reading, the position is predicted.'],
   };
   const KIND_NAME = { EO: 'EO camera', IR: 'Thermal camera', MIC: 'Microphone', RAD: 'Radar', RF: 'RF receiver' };
@@ -42,9 +42,9 @@
   // a state is drawn on the hostile symbol, as the map does
   function stateIcon(state) {
     const g = ctx.glyph('hostile'), col = ctx.classColor('hostile');
-    if (state === 'tentative') return icon('<ellipse rx="14" ry="9" fill="none" stroke="' + col + '" stroke-width="1" stroke-dasharray="2.5 2"/>' + g);
+    if (state === 'tentative') return icon(g + '<circle r="15" fill="none" stroke="' + col + '" stroke-width="1" stroke-dasharray="2.5 2"/>');
     if (state === 'coasting') return icon('<g opacity="0.55">' + g + '</g>');
-    return icon('<ellipse rx="12" ry="7" fill="' + col + '" fill-opacity="0.1" stroke="' + col + '" stroke-width="1"/>' + g);
+    return icon(g);
   }
   function stateRows(f) {
     return Object.keys(STATE_TEXT).map((st) => {
@@ -70,8 +70,8 @@
   function nodeRows() {
     return [
       row(icon(ctx.glyph('friendly')), 'Friendly drone', 'Patrols and can be sent to look; carries sensors.'),
-      row(icon(ctx.marks.ground), 'Ground sensor', 'Fixed node with its own sensors.'),
-      row(icon(ctx.marks.c2), 'C2', 'Command and control: where messages arrive and the picture is fused.'),
+      row(icon(ctx.marks.ground), 'Ground sensor', 'Cyan sensor station on a tripod. Its label lists the sensors it carries.'),
+      row(icon(ctx.marks.c2), 'C2', 'Violet command center with communications antennas: where messages arrive and the picture is fused.'),
     ];
   }
 
