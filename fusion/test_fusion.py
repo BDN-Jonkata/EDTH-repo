@@ -1,9 +1,11 @@
 """Tests for covariance intersection, the local_track message and the merger."""
 
+import math
+import random
 import unittest
 
 from common.codec import Sequencer
-from fusion.ci import intersect, intersect_all, inverse
+from fusion.ci import WEIGHT_STEPS, _mix as mix, intersect, intersect_all, inverse
 from fusion.merger import Merger
 from fusion.messages import local_track_message, state_and_cov
 from tracker.ekf import identity_like
@@ -18,6 +20,13 @@ def message(node, local_id, t, x, y, sigma=5.0, vx=10.0, vy=0.0, friend=None, ve
     track = Track(local_id, [x, y, vx, vy], diag(sigma ** 2, sigma ** 2, vel_sigma ** 2, vel_sigma ** 2),
                   0.0, t, confirmed=True, friend_id=friend)
     return local_track_message(node, track, t, Sequencer(node))
+
+
+def random_covariance(rng):
+    """A positive definite 4x4 matrix with correlated entries."""
+    a = [[rng.gauss(0, 1) for _ in range(4)] for _ in range(4)]
+    scale = rng.choice([1.0, 10.0, 100.0])
+    return [[scale * sum(a[i][k] * a[j][k] for k in range(4)) + (1.0 if i == j else 0.0) for j in range(4)] for i in range(4)]
 
 
 class TestCovarianceIntersection(unittest.TestCase):
@@ -37,6 +46,23 @@ class TestCovarianceIntersection(unittest.TestCase):
         x, p = intersect([0.0, 0.0, 0.0, 0.0], diag(4.0, 4.0, 1.0, 1.0), [30.0, 0.0, 0.0, 0.0], diag(400.0, 400.0, 1.0, 1.0))
         self.assertLess(x[0], 10.0)
         self.assertLess(p[0][0], 4.5)                           # about the sharper one's own 4 (the weight grid stops at 0.95)
+
+    def test_the_fast_weight_search_picks_the_same_weight_as_trying_every_one(self):
+        rng = random.Random(7)
+        for _ in range(60):
+            p1, p2 = random_covariance(rng), random_covariance(rng)
+            info1, info2 = inverse(p1), inverse(p2)
+            sizes = [(inverse(mix(s / WEIGHT_STEPS, info1, info2))[0][0] + inverse(mix(s / WEIGHT_STEPS, info1, info2))[1][1], s)
+                     for s in range(1, WEIGHT_STEPS)]
+            _, p = intersect([0.0] * 4, p1, [0.0] * 4, p2)
+            expected = inverse(mix(min(sizes)[1] / WEIGHT_STEPS, info1, info2))
+            for r in range(4):
+                for c in range(4):
+                    self.assertAlmostEqual(p[r][c], expected[r][c], places=9)
+
+    def test_a_covariance_with_no_spread_in_one_direction_does_not_stop_the_merge(self):
+        x, p = intersect([0.0] * 4, [[0.0] * 4 for _ in range(4)], [1.0, 1.0, 0.0, 0.0], diag(25.0, 25.0, 1.0, 1.0))
+        self.assertTrue(all(math.isfinite(v) for v in x))
 
     def test_three_estimates_fold(self):
         e = ([1.0, 1.0, 0.0, 0.0], diag(9.0, 9.0, 1.0, 1.0))

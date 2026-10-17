@@ -16,7 +16,7 @@ import math
 from dataclasses import dataclass
 from typing import Dict, List, Optional, Sequence, Set, Tuple
 
-from fusion.ci import inverse, intersect_all
+from fusion.ci import intersect_all
 from fusion.messages import friend_id_of, state_and_cov
 from tracker.ekf import predict
 from tracker.tracker import Track
@@ -84,9 +84,9 @@ class Merger:
     def _distance2(self, a: Estimate, b: Estimate, axes: Tuple[int, int] = (0, 1)) -> float:
         """Squared Mahalanobis distance of a position or velocity pair, including both uncertainties."""
         dx, dy = (a.state[i] - b.state[i] for i in axes)
-        s = [[a.cov[i][j] + b.cov[i][j] for j in axes] for i in axes]
-        si = inverse(s)
-        return dx * (si[0][0] * dx + si[0][1] * dy) + dy * (si[1][0] * dx + si[1][1] * dy)
+        i, j = axes
+        s00, s01, s11 = a.cov[i][i] + b.cov[i][i], a.cov[i][j] + b.cov[i][j], a.cov[j][j] + b.cov[j][j]
+        return (s11 * dx * dx - 2.0 * s01 * dx * dy + s00 * dy * dy) / (s00 * s11 - s01 * s01)   # d^T S^-1 d, S symmetric 2x2
 
     def _compatible(self, a: Estimate, b: Estimate) -> bool:
         if a.friend_id and b.friend_id and a.friend_id != b.friend_id:
