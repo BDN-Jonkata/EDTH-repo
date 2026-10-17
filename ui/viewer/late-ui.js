@@ -102,14 +102,14 @@
       if (!at || !(h.state === 'isolated' || h.state === 'offline' || h.state === 'presumed_dead')) return '';
       const iso = h.state === 'isolated', col = iso ? ISO : DOWN;
       const text = n + ' ' + (iso ? 'ISOLATED ' + Math.round(h.silent_s) + ' s' : h.state === 'offline' ? 'OFFLINE' : 'SILENT') + (h.buffered_s > 0 && iso ? ' · holds ' + Math.round(h.buffered_s) + ' s' : '');
-      return '<circle cx="' + at.x + '" cy="' + ctx.Y(at.y) + '" r="' + (iso ? 20 : 16) + '" fill="' + col + '" fill-opacity="0.08" stroke="' + col + '" stroke-width="1.6" stroke-dasharray="' + (iso ? '2 3' : '5 4') + '"/>' +
-        '<text class="t" x="' + (at.x > 650 ? at.x - 24 : at.x + 24) + '" y="' + (ctx.Y(at.y) - 18) + '" text-anchor="' + (at.x > 650 ? 'end' : 'start') + '" style="fill:' + col + '">' + esc(text) + '</text>';
+      return '<circle data-node-health="' + esc(n) + '" cx="' + at.x + '" cy="' + ctx.Y(at.y) + '" r="' + (iso ? 33 : 28) + '" fill="' + col + '" fill-opacity="0.08" stroke="' + col + '" stroke-width="1.6" stroke-dasharray="' + (iso ? '2 3' : '5 4') + '"/>' +
+        '<text class="t" x="' + (at.x > 650 ? at.x - 36 : at.x + 36) + '" y="' + (ctx.Y(at.y) - 26) + '" text-anchor="' + (at.x > 650 ? 'end' : 'start') + '" style="fill:' + col + '">' + esc(text) + '</text>';
     }).join('');
   }
   function lateBadges(f) {
     return bursts().list.filter((b) => b.arrLast >= f.t - 6 && b.arrFirst <= f.t && b.arrFirst > -Infinity).map((b) => {
       const at = ctx.nodeXY(f, b.node);
-      return at ? '<text class="t" x="' + (at.x > 650 ? at.x - 14 : at.x + 14) + '" y="' + (ctx.Y(at.y) + 30) + '" text-anchor="' + (at.x > 650 ? 'end' : 'start') + '" style="fill:' + LATE + '">' + esc(b.node) + ' late data in: ' + b.n + ' readings</text>' : '';
+      return at ? '<text class="t" x="' + (at.x > 650 ? at.x - 30 : at.x + 30) + '" y="' + (ctx.Y(at.y) + 50) + '" text-anchor="' + (at.x > 650 ? 'end' : 'start') + '" style="fill:' + LATE + '">' + esc(b.node) + ' late data in: ' + b.n + ' readings</text>' : '';
     }).join('');
   }
   function mapSvg(f) {

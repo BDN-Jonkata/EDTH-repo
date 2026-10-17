@@ -75,7 +75,7 @@ contains the actual identity/risk thresholds displayed in track details.
 
 `degradations.store_forward` = `{enabled, buffer_s?, resend_share?}` (default: absent, off). When on, every node keeps a copy of each message it sends until C2 acknowledges it, for at most `buffer_s` seconds (default 60, the oldest expire first). C2 sends a [`c2_ack`](#store-and-forward-messages) once a second; after hearing one, a node resends what C2 is missing, oldest first, using at most `resend_share` (default 0.5) of its bandwidth cap per second (no cap: no limit). A message is resent with its original header, so `seq` and `t_sent` show it is old. A node that hears no ack for 3 s counts itself offline. A message the bandwidth cap drops is still in the node's store, so it is resent like a lost one. The numbers are assumptions.
 
-The seeder only checks and passes both on; the mock simulation applies them in Realistic mode only (the rules are in [ui/viewer/storefwd.js](../ui/viewer/storefwd.js)).
+The seeder only checks and passes both on; the mock simulation applies them in Realistic mode only (the rules are in [ui/viewer/storefwd.js](../ui/viewer/storefwd.js)). The Python pipeline applies them with `--storefwd` (`pipeline/storefwd.py`, `common/storefwd.py`, the same cases check both).
 
 ### Weather combinations and weather events
 
@@ -170,7 +170,7 @@ Everything that crosses the channel is a message with a top-level `type` and a `
 |-------|---------|
 | `sensor_type` | the module's catalog `kind`: `eo_camera`, `thermal_camera`, `microphone`, `rf_receiver`, `radar` |
 | `sensor_id` | the module's catalog `id`; the node carrying it is `header.source_id` |
-| `t_obs` | when the sensor saw it, on the node's clock (the mock sends at once, so it equals `t_sent`) |
+| `t_obs` | when the sensor saw it, on the node's clock (the mock sends at once, so it equals `t_sent`). The Python pipeline stamps it with the node's clock (offset and drift) only with `--clocks` or `--timesync`; otherwise it is the true time |
 | `kind` | `bearing` (cameras, microphone array, RF), `range_bearing` (radar) or `detection` (a single microphone: only how loud) |
 | `value` | the module's native fields, as in the `native.type` table above; angles are compass degrees |
 | `cov_fields`, `covariance` | the noisy fields of `value`, in order, and their covariance matrix (noise is independent, so it is diagonal; units are the field's unit squared) |

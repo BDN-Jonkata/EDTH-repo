@@ -1,9 +1,11 @@
 """Out-of-sequence readings: a reading that arrives late is applied to its track at the time it was taken.
 
 Each track keeps a checkpoint (its state at some time in the recent past) and a log of the readings applied since,
-each with the time it was applied. A late reading is put into that log by its own time and the track is replayed
-from the checkpoint to now, so the filter ends up as if the reading had come on time. The log covers
-`oosm_window_s`; older readings are folded into the checkpoint, and a reading older than the checkpoint is dropped.
+each with the time it was applied and the state it left the track in. A late reading is put into that log by its own
+time: the track goes back to the state just before it, takes the reading, and the logged readings after it are applied
+again, so the filter ends up as if the reading had come on time. Only the entries after the reading are redone, so a
+reading that is only a fraction of a second late costs a few updates. The log covers `oosm_window_s`; older readings
+are folded into the checkpoint, and a reading older than the checkpoint is dropped.
 
 Replay is exact for this filter and simple; the cheaper one-step-lag methods are only good for short delays, and
 here the delays are seconds (delay bursts). Only the tracker's own readings are logged, not beacons: friendly tracks
@@ -17,7 +19,7 @@ from tracker.measurement import Measurement
 from tracker.models import apply_measurement
 
 Checkpoint = Tuple[float, Vec, Mat]   # time, state, covariance
-Event = Tuple[float, Measurement]     # time it was applied, the reading
+Entry = Tuple[float, Measurement, Vec, Mat]   # time it was applied, the reading, the state and covariance it left
 
 
 def start_log(track, t: float) -> None:
@@ -27,25 +29,23 @@ def start_log(track, t: float) -> None:
 
 
 def record(track, t: float, m: Measurement) -> None:
-    track.log.append((t, m))
+    """A reading was just applied to the track at time `t`: keep it with the state it left."""
+    track.log.append((t, m, list(track.state), [list(row) for row in track.cov]))
 
 
 def _advance(state: Vec, cov: Mat, t_from: float, t_to: float, accel: float):
     return predict(state, cov, t_to - t_from, accel) if t_to > t_from else (state, cov)
 
 
-def replay(track, accel: float, until: float, extra: Optional[Measurement] = None):
-    """(state, cov) of the track at `until`: from its checkpoint, with the logged readings (and `extra`, taken at
-    `extra.t`) applied in time order."""
-    t, state, cov = track.checkpoint
-    events: List[Event] = list(track.log) + ([(extra.t, extra)] if extra is not None else [])
-    for te, m in sorted(events, key=lambda e: e[0]):
-        if te > until:
-            break
-        state, cov = _advance(state, cov, t, te, accel)
-        state, cov = apply_measurement(state, cov, m)
-        t = te
-    return _advance(state, cov, t, until, accel)
+def _before(track, t: float) -> Tuple[int, Checkpoint]:
+    """(number of log entries at or before `t`, the track's state after the last of them or at the checkpoint)."""
+    k = len(track.log)
+    while k > 0 and track.log[k - 1][0] > t:
+        k -= 1
+    if k == 0:
+        return 0, track.checkpoint
+    te, _m, state, cov = track.log[k - 1]
+    return k, (te, state, cov)
 
 
 def state_at(track, accel: float, t_query: float, now: float, current_state: Vec, current_cov: Mat):
@@ -57,19 +57,26 @@ def state_at(track, accel: float, t_query: float, now: float, current_state: Vec
                 current_state[2], current_state[3]], current_cov
     if track.checkpoint[0] > t_query:
         return None
-    return replay(track, accel, t_query)
+    _k, (t, state, cov) = _before(track, t_query)
+    return _advance(state, cov, t, t_query, accel)
 
 
-def fold_old(track, t: float, window_s: float, accel: float) -> None:
+def insert(track, accel: float, m: Measurement, until: float):
+    """Put a late reading into the track's history by its own time and return (state, cov) at `until`: the track
+    goes back to just before the reading, takes it, and the readings logged after it are applied again."""
+    k, (t, state, cov) = _before(track, m.t)
+    state, cov = apply_measurement(*_advance(state, cov, t, m.t, accel), m)
+    t, redone = m.t, [(m.t, m, state, cov)]
+    for te, later, _s, _c in track.log[k:]:
+        state, cov = apply_measurement(*_advance(state, cov, t, te, accel), later)
+        t = te
+        redone.append((te, later, state, cov))
+    track.log[k:] = redone
+    return _advance(state, cov, t, until, accel)
+
+
+def fold_old(track, t: float, window_s: float) -> None:
     """Readings older than the window go into the checkpoint, so the log stays short."""
     while track.log and track.log[0][0] < t - window_s:
-        te, m = track.log.pop(0)
-        t0, state, cov = track.checkpoint
-        state, cov = apply_measurement(*_advance(state, cov, t0, te, accel), m)
+        te, _m, state, cov = track.log.pop(0)
         track.checkpoint = (te, state, cov)
-
-
-def insert(track, m: Measurement) -> None:
-    """Put a late reading into the log in time order (it has already been replayed into the state)."""
-    track.log.append((m.t, m))
-    track.log.sort(key=lambda e: e[0])

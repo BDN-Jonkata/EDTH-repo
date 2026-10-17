@@ -1,11 +1,13 @@
 // Port check: every case of common/testdata/channel_cases.json (made by `python -m common.golden` from the Python
-// ports in common/jamming.py and common/linkcap.py) must get the same answer from jamming.js and linkcap.js.
+// ports in common/jamming.py, common/linkcap.py and common/storefwd.py) must get the same answer from jamming.js,
+// linkcap.js and storefwd.js.
 // Run: node ui/viewer/test-channel-port.js
 const assert = require('assert');
 const fs = require('fs');
 const path = require('path');
 const Jamming = require('./jamming.js');
 const LinkCap = require('./linkcap.js');
+const StoreFwd = require('./storefwd.js');
 
 const cases = JSON.parse(fs.readFileSync(path.join(__dirname, '..', '..', 'common', 'testdata', 'channel_cases.json'), 'utf8'));
 const close = (a, b, what) => assert.ok(Math.abs(a - b) <= 1e-9 * Math.max(1, Math.abs(b)), what + ': ' + a + ' vs ' + b);
@@ -31,6 +33,22 @@ cases.linkcap.forEach((c) => test('link cap: ' + c.name, () => {
   const stats = LinkCap.summary(net);
   assert.deepStrictEqual(Object.keys(stats).sort(), Object.keys(c.stats).sort());
   Object.keys(stats).forEach((k) => ['count', 'bytes', 'dropped'].forEach((f) => assert.strictEqual(stats[k][f], c.stats[k][f], k + '.' + f)));
+}));
+
+cases.receiver.forEach((c) => test('store-and-forward, C2 side: ' + c.name, () => {
+  const r = StoreFwd.createReceiver(), accepted = [];
+  c.steps.forEach(([op, value]) => { if (op === 'receive') accepted.push(StoreFwd.receive(r, value, 0)); else StoreFwd.skipBelow(r, value); });
+  assert.deepStrictEqual(accepted, c.accepted);
+  assert.deepStrictEqual(StoreFwd.ackEntry(r), c.ack);
+}));
+cases.node.forEach((c) => test('store-and-forward, node side: ' + c.name, () => {
+  const node = StoreFwd.createNode({ buffer_s: c.buffer_s });
+  c.sends.forEach((m) => StoreFwd.remember(node, { type: 'observation', header: { seq: m.seq }, pad: 'x'.repeat(m.pad), arr: 1 }, m.t));
+  const resent = c.acks.map((a) => StoreFwd.onAck(node, a.entry, a.t, a.budget === null ? Infinity : a.budget, LinkCap.sizeOf).map((p) => p.header.seq));
+  assert.deepStrictEqual(resent, c.resent);
+  assert.deepStrictEqual(node.store.map((m) => m.seq), c.left);
+  assert.deepStrictEqual(node.stats, c.stats);
+  assert.deepStrictEqual(StoreFwd.status(node, 10), c.status_at_10);
 }));
 
 let failed = 0;

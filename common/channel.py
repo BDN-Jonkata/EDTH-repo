@@ -15,7 +15,7 @@ scenario asks for it, so a scenario without them behaves exactly as before:
   - node dropout (`degradations.dropout[]` = `{node, t}`): the node sends nothing from then on.
   - sensor faults (`degradations.sensor_faults[]`, class `Faults`): `dropout` (same as the list above), `link_outage`
     (a node's messages are lost in a window) and `delay_burst` (they arrive `extra_ms` later). Applied whenever listed.
-Not modelled: topology, store-and-forward (the pipeline has no history to put late messages in).
+Not modelled here: topology. Store-and-forward is in `pipeline/storefwd.py` (it needs `send_to`, a message from C2 to a node).
 """
 
 import heapq
@@ -42,6 +42,8 @@ class Loss:
     def drops(self) -> bool:
         if not self.burst:
             return self.rng.random() < self.loss
+        if self.loss == 1.0:
+            return True
         flip = self.p_bad_to_good if self.bad else self.p_good_to_bad
         if self.rng.random() < flip:
             self.bad = not self.bad
@@ -59,6 +61,15 @@ class Clock:
 
     def local(self, t: float) -> float:
         return t * (1.0 + self.drift) + self.offset_s
+
+
+def node_clocks(scenario: dict, seed: int, friendly_clocks: Dict[str, "Clock"]) -> Dict[str, "Clock"]:
+    """A clock for every node: the friendlies' (the ones their beacons use) and a new one per ground sensor."""
+    rng = random.Random(seed)
+    clocks = dict(friendly_clocks)
+    for g in scenario["ground"]:
+        clocks[g["id"]] = Clock(rng, scenario["degradations"]["clock"])
+    return clocks
 
 
 def network_settings(scenario: dict) -> Tuple[float, bool, Tuple[float, float]]:
@@ -139,6 +150,15 @@ class Channel:
             self.cap.enqueue(source, message, t, extra_delay_s)
         else:
             self._transmit(source, message, t, extra_delay_s)
+
+    def alive(self, node: str, t: float) -> bool:
+        return t < self.dead_from.get(node, float("inf"))
+
+    def send_to(self, node: str, message: dict, t: float) -> None:
+        """A message from C2 to `node` goes over that node's own link (its loss chain, jamming zone, outage and delay
+        burst, as in the mock) and is not held back by the link cap. A dead node hears nothing."""
+        if self.alive(node, t):
+            self._transmit(node, message, t, 0.0)
 
     def _transmit(self, source: str, message: dict, t: float, extra_delay_s: float) -> None:
         link = self.links.setdefault(source, Loss(self.rng, self.loss, self.burst))

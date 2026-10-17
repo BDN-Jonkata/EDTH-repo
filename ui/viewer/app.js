@@ -6,6 +6,10 @@
   const scen = () => (S.res && S.res.scen) || S.world; // the scenario of the current run
   const COL = { h: '#FF5A5F', f: '#5B9BFF', u: '#F5B13D', line: '#C9D1DB', cyan: '#3FC1D9' };
   const CLASS_NAME = { friendly: 'Friendly', hostile: 'Hostile', suspicious: 'Suspicious', peaceful: 'Peaceful', unknown: 'Unknown' };
+  // Images follow the assessed class, never the scenario's scoring role.
+  const iconClass = (cls) => Object.hasOwn(CLASS_NAME, cls) ? cls : 'unknown';
+  const iconPath = (cls) => 'assets/track-icons/' + iconClass(cls) + '.svg';
+  const iconImg = (cls, sizeClass) => '<img class="track-icon ' + sizeClass + '" src="' + iconPath(cls) + '" alt="" aria-hidden="true" draggable="false">';
   const PATTERN_NAME = { hover: 'Hovering', transit: 'Transit', orbit: 'Orbit / survey', pursuit: 'Responsive pursuit', maneuvering: 'Maneuvering', insufficient_history: 'Collecting history' };
   const REASON_NAME = { insufficient_history: 'Collecting enough observed history', ambiguous_motion: 'No clear risk pattern',
     sustained_safe_transit: 'Sustained steady transit', consistent_orbit: 'Consistent orbit',
@@ -73,21 +77,17 @@
   const el = (tag, attrs) => { const e = document.createElementNS(NS, tag); for (const k in attrs) e.setAttribute(k, attrs[k]); return e; };
 
   // ---------------------------------------------------------- static map
-  const TERRAIN = `
+  const TERRAIN = Village.landscape + `
 <ellipse cx="700" cy="225" rx="330" ry="250" fill="#FFF" opacity="0.022"/><ellipse cx="775" cy="290" rx="330" ry="250" fill="#000" opacity="0.22"/>
 <ellipse cx="712" cy="236" rx="190" ry="140" fill="#FFF" opacity="0.03"/><ellipse cx="752" cy="272" rx="190" ry="140" fill="#000" opacity="0.18"/>
 <ellipse cx="150" cy="805" rx="170" ry="125" fill="#FFF" opacity="0.02"/><ellipse cx="185" cy="840" rx="170" ry="125" fill="#000" opacity="0.18"/>
 <g stroke="#FFF" stroke-opacity="0.045"><path d="M100 0V1000M200 0V1000M300 0V1000M400 0V1000M500 0V1000M600 0V1000M700 0V1000M800 0V1000M900 0V1000M0 100H1000M0 200H1000M0 300H1000M0 400H1000M0 500H1000M0 600H1000M0 700H1000M0 800H1000M0 900H1000"/></g>
 <g class="t" style="font-size:9px;fill:#6F7B89"><text x="103" y="12">E100</text><text x="303" y="12">E300</text><text x="503" y="12">E500</text><text x="703" y="12">E700</text><text x="4" y="197">N800</text><text x="4" y="397">N600</text><text x="4" y="597">N400</text><text x="4" y="797">N200</text></g>
-<path d="M1000 840C900 880 820 900 760 940S650 990 620 1000" fill="none" stroke="#24404A" stroke-width="5"/><text class="t" x="820" y="925" style="font-style:italic;fill:#6F8A94">brook</text>
 <g transform="rotate(-12 730 252)" fill="none"><ellipse cx="730" cy="252" rx="410" ry="310" stroke="#2E3944" stroke-width="1.1"/><ellipse cx="730" cy="252" rx="300" ry="225" stroke="#3B4855" stroke-width="1.6"/><ellipse cx="730" cy="252" rx="200" ry="150" stroke="#2E3944" stroke-width="1.1"/><ellipse cx="730" cy="252" rx="110" ry="80" stroke="#3B4855" stroke-width="1.6"/>
 <text class="t" x="730" y="175" text-anchor="middle">240</text><text class="t" x="730" y="105" text-anchor="middle">230</text><text class="t" x="430" y="256" text-anchor="middle">220</text><text class="t" x="320" y="256" text-anchor="middle">210</text></g>
 <g fill="none"><ellipse cx="160" cy="820" rx="150" ry="110" stroke="#2E3944" stroke-width="1.1"/><ellipse cx="160" cy="820" rx="70" ry="50" stroke="#3B4855" stroke-width="1.6"/></g>
 <text class="t" x="160" y="713" text-anchor="middle">210</text><text class="t" x="160" y="773" text-anchor="middle">220</text><path d="M724 246l6-10 6 10z" fill="#9AA4B2"/><text class="t" x="742" y="250">243 m</text>
-<g fill="none" stroke-linecap="round"><path d="M0 610C220 590 400 520 540 500S820 460 1000 420" stroke="#2C3642" stroke-width="15"/><path d="M505 0C510 180 520 340 528 500S545 800 560 1000" stroke="#2C3642" stroke-width="12"/><path d="M0 610C220 590 400 520 540 500S820 460 1000 420" stroke="#161D25" stroke-width="11"/><path d="M505 0C510 180 520 340 528 500S545 800 560 1000" stroke="#161D25" stroke-width="8"/></g>
-<text class="t" x="70" y="590" transform="rotate(-4 70 590)">MAIN RD</text>
-<g fill="#1C242E" stroke="#4A5664"><rect x="410" y="440" width="40" height="26"/><rect x="460" y="430" width="30" height="34"/><rect x="560" y="440" width="46" height="30"/><rect x="615" y="450" width="30" height="24"/><rect x="400" y="520" width="36" height="30"/><rect x="445" y="535" width="50" height="28"/><rect x="565" y="520" width="40" height="40"/><rect x="612" y="515" width="28" height="22"/><rect x="420" y="580" width="30" height="30"/><rect x="470" y="590" width="44" height="26"/><rect x="560" y="580" width="36" height="28"/><rect x="606" y="574" width="40" height="30"/><rect x="652" y="480" width="28" height="22"/><rect x="360" y="470" width="28" height="24"/><rect x="480" y="360" width="30" height="26"/><rect x="580" y="380" width="34" height="24"/><rect x="700" y="430" width="40" height="28"/><rect x="330" y="560" width="30" height="26"/></g>
-<g class="t" text-anchor="middle" style="font-size:9px;fill:#A9B3BF;stroke-width:0"><text x="430" y="456">8 m</text><text x="475" y="450">6 m</text><text x="583" y="458">12 m</text><text x="630" y="465">7 m</text><text x="418" y="538">6 m</text><text x="470" y="552">9 m</text><text x="585" y="543">15 m</text><text x="492" y="606">7 m</text><text x="626" y="592">10 m</text><text x="495" y="376">6 m</text><text x="597" y="395">8 m</text><text x="720" y="447">12 m</text></g>`;
+` + Village.settlement;
   const FURNITURE = `
 <g transform="translate(958 54)"><circle r="22" fill="#0F141A" stroke="#2C3644"/><path d="M0 -15L7 8L0 3L-7 8Z" fill="#E6EAF0"/><text class="tb" y="-26" text-anchor="middle" fill="#E6EAF0" style="font-size:10px">N</text></g>
 <g transform="translate(28 958)"><rect x="-8" y="-24" width="232" height="40" rx="3" fill="#0F141A" fill-opacity="0.9" stroke="#2C3644"/><rect x="0" y="0" width="100" height="6" fill="#E6EAF0"/><rect x="100" y="0" width="100" height="6" fill="#0F141A" stroke="#E6EAF0"/>
@@ -113,7 +113,7 @@
     const p = S.applied, out = [];
     for (let l = 0; l <= 90; l += 10) {
       const r = Sim.run({ seed: p.seed, mode: 'realistic', weather: p.weather, sky: p.sky, loss: l, delayMs: p.delayMs, driftMs: p.driftMs, bandwidthKbps: p.bandwidthKbps, assign: p.assign, scenario: S.scenario }, { lite: true });
-      out.push({ loss: l, rmse: r.summary.rmse, count: r.summary.countErr, swaps: r.summary.swaps, ffa: r.summary.ffa });
+      out.push({ loss: l, rmse: r.summary.rmse, count: r.summary.countErr, swaps: r.summary.swaps, ffa: r.summary.ffa, coverage: r.summary.trackedFraction });
     }
     S.deg = out;
     return out;
@@ -296,13 +296,14 @@
     const col = classColor(t.cls);
     const sp = spd(t.vx, t.vy);
     const coast = t.st === 'coasting';
-    const o = ['<g' + (coast ? ' opacity="0.55"' : '') + '>'];
+    const o = ['<g data-track-id="' + t.id + '"' + (coast ? ' opacity="0.55"' : '') + '><title>' + t.id + ' · ' + CLASS_NAME[iconClass(t.cls)] + '</title>'];
     if (S.layers.unc && t.cls !== 'friendly') o.push(ellipseSvg(t.x, t.y, t, col, t.st === 'tentative' || coast, 2.45));
     if (S.layers.pred && t.cls === 'hostile') o.push(predictionSvg(t, col));
     if (t.cls !== 'friendly') o.push(trailSvg(t, f, col));
     if (sp > 0.5) o.push(headingSvg(t, sp, col));
-    o.push(glyphSvg(t, col));
-    if (sel) o.push('<circle cx="' + x + '" cy="' + y + '" r="20" fill="none" stroke="#8FE3F2" stroke-width="1.4"/>');
+    o.push(glyphSvg(t));
+    if (t.st === 'tentative') o.push('<circle cx="' + x + '" cy="' + y + '" r="23" fill="none" stroke="' + col + '" stroke-width="1.2" stroke-dasharray="3 4"/>');
+    if (sel) o.push('<circle cx="' + x + '" cy="' + y + '" r="26" fill="none" stroke="#8FE3F2" stroke-width="1.4"/>');
     o.push(labelSvg(t, col, sp, sel));
     o.push('</g>');
     return o.join('');
@@ -330,30 +331,26 @@
   }
   function headingSvg(t, sp, col) {
     const x = t.x, y = Y(t.y), mk = { hostile: 'm-r', friendly: 'm-b', suspicious: 'm-a', peaceful: 'm-p', unknown: 'm-n' }[t.cls];
-    const L = t.cls === 'friendly' ? 30 : 12 + Math.min(30, sp * 2.4), ux = t.vx / sp, uy = t.vy / sp;
-    return '<path d="M' + (x + ux * 12) + ' ' + (y - uy * 12) + 'L' + (x + ux * L) + ' ' + (y - uy * L) + '" stroke="' + col + '" stroke-width="2" marker-end="url(#' + mk + ')"/>';
+    const L = t.cls === 'friendly' ? 38 : 26 + Math.min(26, sp * 2.4), ux = t.vx / sp, uy = t.vy / sp;
+    return '<path d="M' + (x + ux * 22) + ' ' + (y - uy * 22) + 'L' + (x + ux * L) + ' ' + (y - uy * L) + '" stroke="' + col + '" stroke-width="2" marker-end="url(#' + mk + ')"/>';
   }
-  // Each flag has its own shape/color; uncertainty does not imply suspicion.
-  function glyphSvg(t, col) {
-    const x = t.x, y = Y(t.y);
-    if (t.cls === 'hostile') return '<path d="M' + x + ' ' + (y - 12) + 'L' + (x + 12) + ' ' + y + 'L' + x + ' ' + (y + 12) + 'L' + (x - 12) + ' ' + y + 'Z" fill="#2A1012" stroke="' + col + '" stroke-width="2"/>';
-    if (t.cls === 'friendly') return '<circle cx="' + x + '" cy="' + y + '" r="10" fill="#0E1A2E" stroke="' + col + '" stroke-width="2"/><path d="M' + (x - 4) + ' ' + (y - 4) + 'L' + (x + 4) + ' ' + (y + 4) + 'M' + (x + 4) + ' ' + (y - 4) + 'L' + (x - 4) + ' ' + (y + 4) + '" stroke="' + col + '" stroke-width="1.6"/>';
-    if (t.cls === 'suspicious') return '<path d="M' + x + ' ' + (y - 9) + 'L' + (x + 9) + ' ' + (y + 7) + 'L' + (x - 9) + ' ' + (y + 7) + 'Z" fill="#241A08" stroke="' + col + '" stroke-width="2"/>';
-    return '<circle cx="' + x + '" cy="' + y + '" r="7" fill="' + (t.cls === 'peaceful' ? '#0B2724' : '#1B222C') + '" stroke="' + col + '" stroke-width="2.2"' + (t.cls === 'unknown' ? ' stroke-dasharray="3 2"' : '') + '/>';
+  // Shared images for the map, legend, table and selected-track details.
+  function glyphSvg(t, size = 40) {
+    return '<image data-track-class="' + iconClass(t.cls) + '" href="' + iconPath(t.cls) + '" x="' + (t.x-size/2) + '" y="' + (Y(t.y)-size/2) + '" width="' + size + '" height="' + size + '" preserveAspectRatio="xMidYMid meet" aria-hidden="true"/>';
   }
   function labelSvg(t, col, sp, sel) {
     const x = t.x, y = Y(t.y);
-    if (t.cls === 'friendly') return '<text class="t tb" x="' + (x + 13) + '" y="' + (y - 11) + '" style="fill:#8DB8FF">' + t.id + '</text>';
+    if (t.cls === 'friendly') return '<text class="t tb" x="' + (x + 24) + '" y="' + (y - 18) + '" style="fill:#8DB8FF">' + t.id + '</text>';
     if (t.cls === 'hostile') {
-      return '<rect x="' + (x - 13) + '" y="' + (y - 38) + '" width="26" height="16" rx="2" fill="' + col + '"' + (sel ? ' stroke="#E6EAF0" stroke-width="1.5"' : '') + '/><text class="tb" x="' + x + '" y="' + (y - 26) + '" text-anchor="middle" fill="#14080A">' + t.id + '</text>' +
-        '<text class="t" x="' + (x + 17) + '" y="' + (y - 26) + '">' + sp.toFixed(0) + ' m/s</text>';
+      return '<rect x="' + (x - 13) + '" y="' + (y - 44) + '" width="26" height="16" rx="2" fill="' + col + '"' + (sel ? ' stroke="#E6EAF0" stroke-width="1.5"' : '') + '/><text class="tb" x="' + x + '" y="' + (y - 32) + '" text-anchor="middle" fill="#14080A">' + t.id + '</text>' +
+        '<text class="t" x="' + (x + 17) + '" y="' + (y - 32) + '">' + sp.toFixed(0) + ' m/s</text>';
     }
-    return '<rect x="' + (x - 13) + '" y="' + (y - 34) + '" width="26" height="16" rx="2" fill="#0D1318" stroke="' + col + '" stroke-dasharray="3 2"/><text class="tb" x="' + x + '" y="' + (y - 22) + '" text-anchor="middle" fill="' + col + '">' + t.id + '</text><text class="t" x="' + (x + 17) + '" y="' + (y - 22) + '" style="fill:' + col + '">' + t.cls.toUpperCase() + '</text>';
+    return '<rect x="' + (x - 13) + '" y="' + (y - 43) + '" width="26" height="16" rx="2" fill="#0D1318" stroke="' + col + '" stroke-dasharray="3 2"/><text class="tb" x="' + x + '" y="' + (y - 31) + '" text-anchor="middle" fill="' + col + '">' + t.id + '</text><text class="t" x="' + (x + 17) + '" y="' + (y - 31) + '" style="fill:' + col + '">' + t.cls.toUpperCase() + '</text>';
   }
 
   function renderMap(f) {
-    $('terrain').innerHTML = S.layers.terrain ? TERRAIN : '';
-    $('terrain').style.display = '';
+    if (!$('terrain').hasChildNodes()) $('terrain').innerHTML = TERRAIN;
+    $('terrain').style.display = S.layers.terrain ? '' : 'none';
     $('cover').innerHTML = S.layers.cover ? coverageSvg(f) : '';
     $('coverageAge').innerHTML = S.layers.coverageAge && f.coverage ? f.coverage.map((last, i) => {
       const age = last < 0 ? 1 : Math.min(1, (f.t - last) / 60);
@@ -385,8 +382,11 @@
     $('trk').innerHTML = S.layers.tracks ? tracksSvg(f) : '';
   }
   // fixed infrastructure: the C2 node and the ground sensors
-  const C2_MARK = '<path d="M-9 -9H9V9H-9Z" fill="#141A22" stroke="#9AA4B2" stroke-width="1.5"/><path d="M-5 0H5M0 -5V5" stroke="#9AA4B2" stroke-width="1.5"/>';
-  const GROUND_MARK = '<rect x="-8" y="-8" width="16" height="16" fill="#141A22" stroke="#C9D1DB" stroke-width="1.6"/><circle r="3" fill="#C9D1DB"/>';
+  function infrastructureSvg(kind, size) {
+    return '<image data-node-kind="' + kind + '" href="assets/infrastructure/' + kind + '.svg" x="' + (-size/2) + '" y="' + (-size/2) + '" width="' + size + '" height="' + size + '" preserveAspectRatio="xMidYMid meet" aria-hidden="true"/>';
+  }
+  const C2_MARK = infrastructureSvg('c2', 48);
+  const GROUND_MARK = infrastructureSvg('ground-sensor', 40);
   // where a node is: a ground sensor at its site, a drone where it flies
   function nodeXY(f, id) {
     const g = scen().ground.find((q) => q.id === id), d = g || f.truth.find((q) => q.id === id);
@@ -394,10 +394,10 @@
   }
   function fixedSvg() {
     const c2 = scen().c2;
-    const fx = ['<g transform="translate(' + c2.x + ' ' + Y(c2.y) + ')">' + C2_MARK + '</g><text class="t" x="' + (c2.x + 14) + '" y="' + (Y(c2.y) + 18) + '">C2</text>'];
+    const fx = ['<g data-node-id="C2" transform="translate(' + c2.x + ' ' + Y(c2.y) + ')"><title>C2 command center</title>' + C2_MARK + '</g><text class="t tb" x="' + c2.x + '" y="' + (Y(c2.y) + 38) + '" text-anchor="middle" style="fill:#C8AFF8">C2</text>'];
     scen().ground.forEach((g) => {
       const kinds = S.res.sensors.filter((q) => q.node === g.id).map((q) => q.kind).join('·');
-      fx.push('<g transform="translate(' + g.x + ' ' + Y(g.y) + ')">' + GROUND_MARK + '</g><text class="t" x="' + (g.x + 12) + '" y="' + (Y(g.y) + 22) + '" style="fill:#C9D1DB">' + g.id + ' ' + kinds + '</text>');
+      fx.push('<g data-node-id="' + g.id + '" transform="translate(' + g.x + ' ' + Y(g.y) + ')"><title>' + g.id + ' ground sensor · ' + kinds + '</title>' + GROUND_MARK + '</g><text class="t" x="' + g.x + '" y="' + (Y(g.y) + 38) + '" text-anchor="middle" style="fill:#B2DDE5">' + g.id + ' ' + kinds + '</text>');
     });
     return fx.join('');
   }
@@ -468,10 +468,10 @@
       '<span data-class="' + cls + '" style="padding:3px 5px;border:1px solid #2C3644;border-radius:3px;color:' + classColor(cls) + '">' +
       CLASS_NAME[cls] + ' ' + list.filter((t) => t.cls === cls).length + '</span>').join('');
     $('trkBody').innerHTML = list.map((t) => {
-      const cls = { hostile: '◆ HOS', friendly: '● FRD', peaceful: '○ PCF', suspicious: '▲ SUS', unknown: '✣ UNK' }[t.cls];
+      const cls = { hostile: 'HOS', friendly: 'FRD', peaceful: 'PCF', suspicious: 'SUS', unknown: 'UNK' }[t.cls] || 'UNK';
       const ccol = classColor(t.cls);
       const b = { hostile: 'h', suspicious: 'u', unknown: 'n', peaceful: 'p', friendly: 'f' }[t.cls];
-      return '<tr data-id="' + t.id + '"' + (t.id === S.sel ? ' class="sel"' : '') + '><td><button class="idb ' + b + '" aria-label="Select ' + t.id + '">' + t.id + '</button></td><td style="color:' + ccol + '">' + cls + (t.cls === 'unknown' ? '' : ' ' + percent(t.conf)) + '</td><td data-score="identity">' + percent(t.pF) + '</td><td data-score="risk">' + percent(t.pH) + '</td><td>' + pad4(t.x) + ' ' + pad4(t.y) + '</td><td>' + spd(t.vx, t.vy).toFixed(1) + '</td><td>' + String(Math.round(hdg(t.vx, t.vy))).padStart(3, '0') + '</td><td>' + t.age.toFixed(1) + 's</td><td>' + (t.cls === 'friendly' ? 'self' : t.nodes.map((n) => n.split(' ')[0]).filter((v, i, a) => a.indexOf(v) === i).join(' ')) + '</td></tr>';
+      return '<tr data-id="' + t.id + '"' + (t.id === S.sel ? ' class="sel"' : '') + '><td><button class="idb ' + b + '" aria-label="Select ' + t.id + '">' + t.id + '</button></td><td style="color:' + ccol + '"><span class="track-class">' + iconImg(t.cls, 'track-icon-small') + '<span>' + cls + (t.cls === 'unknown' ? '' : ' ' + percent(t.conf)) + '</span></span></td><td data-score="identity">' + percent(t.pF) + '</td><td data-score="risk">' + percent(t.pH) + '</td><td>' + pad4(t.x) + ' ' + pad4(t.y) + '</td><td>' + spd(t.vx, t.vy).toFixed(1) + '</td><td>' + String(Math.round(hdg(t.vx, t.vy))).padStart(3, '0') + '</td><td>' + t.age.toFixed(1) + 's</td><td>' + (t.cls === 'friendly' ? 'self' : t.nodes.map((n) => n.split(' ')[0]).filter((v, i, a) => a.indexOf(v) === i).join(' ')) + '</td></tr>';
     }).join('');
 
     const al = S.res.alerts.filter((a) => a.t <= f.t + 1e-6);
@@ -557,7 +557,7 @@
       ['unknown', 'No decisive label / insufficient history', 'Needs fresh, usable observations'],
     ];
     box.innerHTML =
-      '<div class="row" style="align-items:center"><span class="mono" style="padding:1px 6px;font-size:12px;font-weight:600;border-radius:2px;' + b + '">' + t.id + '</span><span style="font-size:13px;font-weight:600">' + label + '</span><span class="grow"></span><button class="ibtn" id="centre" aria-label="Centre map on ' + t.id + '"><svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="5" fill="none" stroke="currentColor" stroke-width="1.4"/><circle cx="8" cy="8" r="1.5" fill="currentColor"/></svg></button></div>' +
+      '<div class="track-detail-heading">' + iconImg(t.cls, 'track-icon-detail') + '<div class="track-detail-title"><span class="mono" style="padding:1px 6px;font-size:12px;font-weight:600;border-radius:2px;' + b + '">' + t.id + '</span><strong>' + label + '</strong></div><button class="ibtn" id="centre" aria-label="Centre map on ' + t.id + '"><svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="5" fill="none" stroke="currentColor" stroke-width="1.4"/><circle cx="8" cy="8" r="1.5" fill="currentColor"/></svg></button></div>' +
       '<div style="display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px">' +
       [['σ east', Math.sqrt(t.pxx).toFixed(1) + ' m'], ['σ north', Math.sqrt(t.pyy).toFixed(1) + ' m'], ['ρ', rho.toFixed(2)], ['95% ellipse', (e.a * 2.45).toFixed(0) + '×' + (e.b * 2.45).toFixed(0) + ' m']]
         .map((c) => '<div style="display:flex;flex-direction:column;gap:2px"><span style="font-size:11px;color:#8B96A5">' + c[0] + '</span><span class="mono" style="font-size:13px">' + c[1] + '</span></div>').join('') + '</div>' +
@@ -606,7 +606,11 @@
     $('play').setAttribute('aria-label', S.playing ? 'Pause' : 'Play');
     const set = (id, v, bad) => { const m = $(id); m.querySelector('b').textContent = v; m.classList.toggle('bad', !!bad); };
     set('mCount', (f.m.countErr > 0 ? '+' : '') + f.m.countErr, f.m.countErr !== 0);
+    set('mCoverage', f.m.tracked + ' / ' + f.m.trackingTargets, f.m.tracked < f.m.trackingTargets);
+    $('mCoverage').querySelector('span.mono').textContent = f.m.trackingTargets ? Math.round(f.m.trackCoverage * 100) + '% current coverage' : 'no targets present';
     set('mRmse', f.m.rmse10 === null ? '-' : f.m.rmse10.toFixed(1) + ' m', false);
+    set('mVelocity', f.m.velocityRmse10 === null ? '-' : f.m.velocityRmse10.toFixed(1) + ' m/s', false);
+    set('mHeading', f.m.headingRmse10 === null ? '-' : f.m.headingRmse10.toFixed(1) + '°', false);
     set('mSwap', f.m.swaps, f.m.swaps > 0);
     set('mFfa', f.m.ffa, f.m.ffa > 0);
     renderChart(f);
@@ -616,7 +620,7 @@
     const X0 = 40, X1 = 790;
     if (S.tab === 'time') {
       $('chartLegend').innerHTML = '<span style="color:#3FC1D9">━</span> RMSE (m) &nbsp; <span style="color:#F5B13D">┅</span> |count error| ×5';
-      $('chartNote').textContent = 'Position RMSE (10 s window) and absolute hostile-count error up to the playhead.';
+      $('chartNote').textContent = 'Live metrics: matched-target position RMSE (10 s) and labelled hostile-count error. Missing targets are reflected in coverage, not RMSE.';
       const xs = (t) => X0 + (t / S.res.T_END) * (X1 - X0);
       let rm = '', ce = '';
       for (let k = 0; k <= S.idx; k += 3) {
@@ -633,9 +637,9 @@
       const d = degradation();
       const xs = (l) => X0 + 20 + (l / 90) * (X1 - X0 - 40);
       const ys = (v) => 100 - Math.min(20, v) * 4;
-      const line = (key, dash) => 'M' + d.filter((p) => p[key] !== null).map((p) => xs(p.loss).toFixed(1) + ' ' + ys(key === 'count' ? p[key] * 5 : p[key]).toFixed(1)).join('L');
+      const line = (key) => { const points = d.filter((p) => p[key] !== null); return points.length ? 'M' + points.map((p) => xs(p.loss).toFixed(1) + ' ' + ys(key === 'count' ? p[key] * 5 : p[key]).toFixed(1)).join('L') : ''; };
       $('chartLegend').innerHTML = '<span style="color:#3FC1D9">━</span> RMSE (m) &nbsp; <span style="color:#F5B13D">┅</span> mean |count err| ×5 &nbsp; <span style="color:#FF5A5F">╌</span> ID swaps + friendly FAs';
-      $('chartNote').textContent = 'Realistic mode, same seed and weather, message loss 0-90 %, scored over t = ' + S.res.EVAL[0] + '-' + S.res.EVAL[1] + ' s (around the crossing); swaps/FAs over the whole run.';
+      $('chartNote').textContent = 'JS simulation, same seed/weather, loss 0-90 %, t = ' + S.res.EVAL[0] + '-' + S.res.EVAL[1] + ' s; swaps/FAs over the whole run. RMSE scores matched targets; count scores hostile labels. Coverage by loss: ' + d.map((p) => p.loss + '%→' + (p.coverage === null ? 'n/a' : Math.round(p.coverage * 100) + '%')).join(', ') + '.';
       svg.innerHTML = '<path d="M40 20H800M40 60H800M40 100H800" stroke="#1B222C"/>' +
         [['20', 24], ['10', 64], ['0', 104]].map((l) => '<text x="32" y="' + l[1] + '" text-anchor="end" class="mono" style="font-size:10px;fill:#8B96A5">' + l[0] + '</text>').join('') +
         '<path d="' + line('rmse') + '" fill="none" stroke="#3FC1D9" stroke-width="1.8"/><path d="' + line('count') + '" fill="none" stroke="#F5B13D" stroke-width="1.8" stroke-dasharray="4 3"/>' +
@@ -650,7 +654,7 @@
   function render() {
     const f = frame();
     $('clock').textContent = 'T+' + fmtT(f.t);
-    $('frameInfo').textContent = 'frame ' + f.k + ' · fused @ 10 Hz';
+    $('frameInfo').textContent = 'frame ' + f.k + ' · JS simulation @ 10 Hz' + (S.revised && S.res.storeForward ? ' · retrospective positions; live metrics' : '');
     const cb = $('crossBanner');
     if (f.cross) {
       cb.style.display = 'inline-flex';
@@ -756,8 +760,8 @@
   });
   Legend.init({
     state: S, layers: LAYERS, className: CLASS_NAME, classColor, kcol: KCOL, kdash: KDASH, linkStyle,
-    glyph: (cls) => glyphSvg({ cls, x: 0, y: 1000 }, classColor(cls)), // the map's own symbol, drawn at the origin
-    marks: { c2: C2_MARK, ground: GROUND_MARK },
+    glyph: (cls) => glyphSvg({ cls, x: 0, y: 1000 }, 28), // the same image, fitted inside the legend swatch
+    marks: { c2: infrastructureSvg('c2', 28), ground: infrastructureSvg('ground-sensor', 28) },
     rangeNow: (s, f) => rangeNow(s, f), nominalRange: (s) => Sim.MODULES[s.module].sim.range_m,
     shortField: (n) => (SHORT[n] === undefined ? n : (SHORT[n] || 'class')),
     redraw: () => { if (S.res) render(); },

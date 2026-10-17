@@ -221,6 +221,28 @@ class TestDuplicateTracks(unittest.TestCase):
         self.assertEqual(len(tracker.tracks), 2)
 
 
+class TestFreshReplay(unittest.TestCase):
+    """`oosm_min_age_s` below the usual 1 s also replays readings that are only a fraction of a second old; one no
+    track explains still starts a track while it is younger than `oosm_start_max_age_s`."""
+
+    @staticmethod
+    def steps(config, age_s):
+        tracker = Tracker(config)
+        for k in range(30):
+            t = round(k * 0.1, 6)
+            tracker.step(t, [radar(round(t - age_s, 6), 100.0 + 10.0 * (t - age_s), 50.0, 10.0, 0.0, sigma_r=2.0, sigma_b=0.005)])
+        return tracker
+
+    def test_a_target_seen_only_through_slightly_old_readings_is_still_tracked(self):
+        tracker = self.steps(TrackerConfig(oosm=True, oosm_min_age_s=0.2), 0.3)
+        self.assertEqual(len(tracker.tracks), 1)
+        self.assertAlmostEqual(tracker.tracks[0].state[0], 100.0 + 10.0 * (2.9 - 0.3), delta=3.0)
+
+    def test_the_start_age_limit_is_what_keeps_old_readings_from_starting_tracks(self):
+        tracker = self.steps(TrackerConfig(oosm=True, oosm_min_age_s=0.2, oosm_start_max_age_s=0.2), 0.3)
+        self.assertEqual(len(tracker.tracks), 0)
+
+
 class TestOutOfSequence(unittest.TestCase):
     """A reading that arrives late is applied at the time it was taken (tracker/oosm.py)."""
 
