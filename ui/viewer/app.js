@@ -112,7 +112,7 @@
     const p = S.applied, out = [];
     for (let l = 0; l <= 90; l += 10) {
       const r = Sim.run({ seed: p.seed, mode: 'realistic', weather: p.weather, sky: p.sky, loss: l, delayMs: p.delayMs, driftMs: p.driftMs, bandwidthKbps: p.bandwidthKbps, assign: p.assign, scenario: S.scenario }, { lite: true });
-      out.push({ loss: l, rmse: r.summary.rmse, count: r.summary.countErr, swaps: r.summary.swaps, ffa: r.summary.ffa });
+      out.push({ loss: l, rmse: r.summary.rmse, count: r.summary.countErr, swaps: r.summary.swaps, ffa: r.summary.ffa, coverage: r.summary.trackedFraction });
     }
     S.deg = out;
     return out;
@@ -603,7 +603,11 @@
     $('play').setAttribute('aria-label', S.playing ? 'Pause' : 'Play');
     const set = (id, v, bad) => { const m = $(id); m.querySelector('b').textContent = v; m.classList.toggle('bad', !!bad); };
     set('mCount', (f.m.countErr > 0 ? '+' : '') + f.m.countErr, f.m.countErr !== 0);
+    set('mCoverage', f.m.tracked + ' / ' + f.m.trackingTargets, f.m.tracked < f.m.trackingTargets);
+    $('mCoverage').querySelector('span.mono').textContent = f.m.trackingTargets ? Math.round(f.m.trackCoverage * 100) + '% current coverage' : 'no targets present';
     set('mRmse', f.m.rmse10 === null ? '-' : f.m.rmse10.toFixed(1) + ' m', false);
+    set('mVelocity', f.m.velocityRmse10 === null ? '-' : f.m.velocityRmse10.toFixed(1) + ' m/s', false);
+    set('mHeading', f.m.headingRmse10 === null ? '-' : f.m.headingRmse10.toFixed(1) + '°', false);
     set('mSwap', f.m.swaps, f.m.swaps > 0);
     set('mFfa', f.m.ffa, f.m.ffa > 0);
     renderChart(f);
@@ -613,7 +617,7 @@
     const X0 = 40, X1 = 790;
     if (S.tab === 'time') {
       $('chartLegend').innerHTML = '<span style="color:#3FC1D9">━</span> RMSE (m) &nbsp; <span style="color:#F5B13D">┅</span> |count error| ×5';
-      $('chartNote').textContent = 'Position RMSE (10 s window) and absolute hostile-count error up to the playhead.';
+      $('chartNote').textContent = 'Live metrics: matched-target position RMSE (10 s) and labelled hostile-count error. Missing targets are reflected in coverage, not RMSE.';
       const xs = (t) => X0 + (t / S.res.T_END) * (X1 - X0);
       let rm = '', ce = '';
       for (let k = 0; k <= S.idx; k += 3) {
@@ -630,9 +634,9 @@
       const d = degradation();
       const xs = (l) => X0 + 20 + (l / 90) * (X1 - X0 - 40);
       const ys = (v) => 100 - Math.min(20, v) * 4;
-      const line = (key, dash) => 'M' + d.filter((p) => p[key] !== null).map((p) => xs(p.loss).toFixed(1) + ' ' + ys(key === 'count' ? p[key] * 5 : p[key]).toFixed(1)).join('L');
+      const line = (key) => { const points = d.filter((p) => p[key] !== null); return points.length ? 'M' + points.map((p) => xs(p.loss).toFixed(1) + ' ' + ys(key === 'count' ? p[key] * 5 : p[key]).toFixed(1)).join('L') : ''; };
       $('chartLegend').innerHTML = '<span style="color:#3FC1D9">━</span> RMSE (m) &nbsp; <span style="color:#F5B13D">┅</span> mean |count err| ×5 &nbsp; <span style="color:#FF5A5F">╌</span> ID swaps + friendly FAs';
-      $('chartNote').textContent = 'Realistic mode, same seed and weather, message loss 0-90 %, scored over t = ' + S.res.EVAL[0] + '-' + S.res.EVAL[1] + ' s (around the crossing); swaps/FAs over the whole run.';
+      $('chartNote').textContent = 'JS simulation, same seed/weather, loss 0-90 %, t = ' + S.res.EVAL[0] + '-' + S.res.EVAL[1] + ' s; swaps/FAs over the whole run. RMSE scores matched targets; count scores hostile labels. Coverage by loss: ' + d.map((p) => p.loss + '%→' + (p.coverage === null ? 'n/a' : Math.round(p.coverage * 100) + '%')).join(', ') + '.';
       svg.innerHTML = '<path d="M40 20H800M40 60H800M40 100H800" stroke="#1B222C"/>' +
         [['20', 24], ['10', 64], ['0', 104]].map((l) => '<text x="32" y="' + l[1] + '" text-anchor="end" class="mono" style="font-size:10px;fill:#8B96A5">' + l[0] + '</text>').join('') +
         '<path d="' + line('rmse') + '" fill="none" stroke="#3FC1D9" stroke-width="1.8"/><path d="' + line('count') + '" fill="none" stroke="#F5B13D" stroke-width="1.8" stroke-dasharray="4 3"/>' +
@@ -647,7 +651,7 @@
   function render() {
     const f = frame();
     $('clock').textContent = 'T+' + fmtT(f.t);
-    $('frameInfo').textContent = 'frame ' + f.k + ' · fused @ 10 Hz';
+    $('frameInfo').textContent = 'frame ' + f.k + ' · JS simulation @ 10 Hz' + (S.revised && S.res.storeForward ? ' · retrospective positions; live metrics' : '');
     const cb = $('crossBanner');
     if (f.cross) {
       cb.style.display = 'inline-flex';

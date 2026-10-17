@@ -173,7 +173,7 @@
   </div>
   <div class="sec" style="gap:6px;display:none" id="healthSec">
     <div style="display:flex;justify-content:space-between;align-items:center"><p class="h">Node health</p><span class="mono" style="font-size:11px;color:#8B96A5">C2's view · what the node holds</span></div>
-    <label class="late-toggle"><input type="checkbox" id="lateToggle"> Late data loaded <span>(tracks corrected by readings that arrived late)</span></label>
+    <label class="late-toggle"><input type="checkbox" id="lateToggle"> Retrospective corrections <span>(uses later arrivals; metrics show the live picture)</span></label>
     <div style="overflow:auto;max-height:240px;margin:0 -6px">
       <table class="tbl mono"><thead><tr><th>Node</th><th>Link</th><th>Lost</th><th>Silent s</th><th>Node offline</th><th>Held s</th></tr></thead><tbody id="health"></tbody></table>
     </div>
@@ -206,9 +206,12 @@
   </div>
   <div class="row" style="flex-wrap:wrap;gap:12px;align-items:stretch">
     <div class="row" style="flex:1 1 520px;flex-wrap:wrap">
-      <div class="mt" id="mCount"><span>Count error</span><b>0</b><span class="mono">est − true</span></div>
-      <div class="mt" id="mRmse"><span>Position RMSE</span><b>-</b><span class="mono">hostiles, 10 s</span></div>
-      <div class="mt" id="mSwap"><span>ID swaps</span><b>0</b><span class="mono">this run</span></div>
+      <div class="mt" id="mCount"><span>Hostile count error</span><b>0</b><span class="mono">labelled − true</span></div>
+      <div class="mt" id="mCoverage" title="Geometrically matched scenario targets, independent of their assessed class. Read alongside ID swaps."><span>Targets tracked</span><b>0 / 0</b><span class="mono">current coverage</span></div>
+      <div class="mt" id="mRmse"><span>Position RMSE</span><b>-</b><span class="mono">matched targets, 10 s</span></div>
+      <div class="mt" id="mVelocity"><span>Velocity RMSE</span><b>-</b><span class="mono">matched targets, 10 s</span></div>
+      <div class="mt" id="mHeading"><span>Heading RMSE</span><b>-</b><span class="mono">moving targets, 10 s</span></div>
+      <div class="mt" id="mSwap" title="Zero swaps with missing targets does not demonstrate stable identities."><span>ID swaps</span><b>0</b><span class="mono">read with coverage</span></div>
       <div class="mt" id="mFfa"><span>Friendly false alarms</span><b>0</b><span class="mono">must stay 0</span></div>
     </div>
     <div style="flex:999 1 520px;min-width:0;background:#0F141A;border:1px solid #222A35;border-radius:4px;padding:8px 12px;display:flex;flex-direction:column;gap:6px">
@@ -242,6 +245,7 @@
 <script src="traffic.js"></script>
 <script src="friend-foe.js"></script>
 <script src="investigations.js"></script>
+<script src="metrics.js"></script>
 <script src="sim.js"></script>
 <script src="weather-ui.js"></script>
 <script src="legend.js"></script>

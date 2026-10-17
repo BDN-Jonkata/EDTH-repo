@@ -136,6 +136,37 @@ class TestScore(unittest.TestCase):
         self.assertEqual(s.false_tracks_mean, 1.0)
         self.assertEqual(s.hostile_detected_frac, 0.0)
 
+    def test_tracking_is_separate_from_strict_hostile_classification(self):
+        frames = list(perfect_frames([self.h1, self.h2], cls={"H1": "unknown", "H2": "peaceful"}))
+        s = score(truth_of(self.h1, self.h2), frames)
+        self.assertEqual(s.hostile_tracked_frac, 1.0)
+        self.assertEqual((s.matched_hostile_samples, s.hostile_samples), (42, 42))
+        self.assertEqual(s.pos_rmse_m, 0.0)
+        self.assertEqual(s.hostile_detected_frac, 0.5)  # legacy presumed-threat policy
+        self.assertEqual(s.strict_hostile_detected_frac, 0.0)
+        self.assertEqual(s.strict_hostile_count_error_mean_abs, 2.0)
+        self.assertEqual(s.strict_hostile_count_exact_frac, 0.0)
+
+    def test_correct_count_can_hide_a_missed_target_and_a_ghost(self):
+        frames = [(t, [est("a", t, *self.h1["samples"][k][1:], cls="hostile"),
+                       est("ghost", t, 5000, 5000, cls="hostile")]) for k, t in enumerate(TIMES)]
+        s = score(truth_of(self.h1, self.h2), frames)
+        self.assertEqual(s.strict_hostile_count_exact_frac, 1.0)
+        self.assertEqual(s.hostile_tracked_frac, 0.5)
+        self.assertEqual(s.false_tracks_mean, 1.0)
+
+    def test_no_matches_does_not_report_perfect_kinematics(self):
+        s = score(truth_of(self.h1), [(t, []) for t in TIMES])
+        self.assertEqual((s.id_swaps, s.hostile_tracked_frac), (0, 0.0))
+        self.assertIsNone(s.pos_rmse_m)
+        self.assertIsNone(s.vel_rmse_mps)
+        self.assertEqual(s.strict_hostile_count_exact_frac, 0.0)
+
+    def test_unknown_friendly_is_not_a_strict_hostile_alarm(self):
+        s = score(truth_of(self.f1), perfect_frames([self.f1], cls={"F1": "unknown"}))
+        self.assertEqual(s.friendlies_flagged, 1)  # legacy presumed-threat policy
+        self.assertEqual(s.strict_friendlies_flagged, 0)
+
     def test_warmup_skips_early_steps(self):
         s = score(truth_of(self.h1), perfect_frames([self.h1]), ScoreConfig(warmup_s=5.0))
         self.assertEqual(s.steps, 11)
