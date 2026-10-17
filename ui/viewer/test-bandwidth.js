@@ -45,7 +45,8 @@ test('links of different nodes are independent', () => {
 });
 test('a run with a cap reports the bytes per message type, matching the messages sent', () => {
   const sizes = {};
-  const res = run({ bandwidthKbps: 64 }, (m) => { sizes[m.type] = (sizes[m.type] || 0) + LinkCap.sizeOf(m); });
+  // the tap also sees local investigation events that never use a link
+  const res = run({ bandwidthKbps: 64 }, (m) => { if (m.type.startsWith('investigation_')) return; sizes[m.type] = (sizes[m.type] || 0) + LinkCap.sizeOf(m); });
   Object.keys(sizes).forEach((type) => assert.strictEqual(res.bandwidth[type].bytes, sizes[type], type));
   assert.ok(res.bandwidth.observation.count > 100 && res.bandwidth.observation.avg_bytes > 200);
 });
@@ -55,8 +56,10 @@ test('a low cap drops messages; a cap above the demand drops none', () => {
   assert.strictEqual(dropped(run({ bandwidthKbps: 100000 })), 0);
 });
 test('messages that are lost on the link still used their airtime', () => {
-  const dropped = (r) => r.bandwidth.observation.dropped;
-  assert.strictEqual(dropped(run({ bandwidthKbps: 16, loss: 100 })), dropped(run({ bandwidthKbps: 16, loss: 0 })));
+  // with total loss the estimator hears nothing, so the drones offer different traffic: compare the share dropped
+  const share = (r) => r.bandwidth.observation.dropped / r.bandwidth.observation.count;
+  const lost = share(run({ bandwidthKbps: 16, loss: 100 })), kept = share(run({ bandwidthKbps: 16, loss: 0 }));
+  assert.ok(lost > 0.2 && Math.abs(lost - kept) < 0.1, 'dropped share ' + lost + ' vs ' + kept);
 });
 test('no cap, or Optimistic mode: no bandwidth entry and the same run', () => {
   assert.strictEqual(run({}).bandwidth, undefined);
