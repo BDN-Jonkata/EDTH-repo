@@ -7,14 +7,25 @@ from __future__ import annotations
 
 import argparse
 import sys
+from pathlib import Path
 
-import catalog as cat
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))  # repo root, for sensors.report
+import catalog as cat  # noqa: E402
+from sensors.report import survival_rows  # noqa: E402
 
 
 def print_resilience(catalog):
     print("\nModules that still work per weather (range >= %.0f%% and detections >= %.0f%%):" % (cat.ROBUST_RANGE * 100, cat.ROBUST_PD * 100))
     for pid, row in cat.resilience_table(catalog):
         print("  %-18s" % pid + "".join("  %s: %s" % (w, ",".join(row[w]) or "NONE") for w in cat.WEATHERS))
+
+
+def print_combinations(catalog):
+    """Information only, never an error: in a combined weather some platforms keep no working detection module."""
+    rows = survival_rows({m["id"]: m for m in catalog["modules"]}, catalog["platforms"])
+    print("\nWeather combinations (information only; sensors/report.py has the same table):")
+    for name, working, dead in rows:
+        print("  %-12s %-4s modules work   platforms with none: %s" % (name, working, dead))
 
 
 def main():
@@ -26,6 +37,7 @@ def main():
     errors = cat.validate(catalog)
     print("%d modules, %d platforms" % (len(catalog["modules"]), len(catalog["platforms"])))
     print_resilience(catalog)
+    print_combinations(catalog)
     if errors:
         print("\nCatalog errors:")
         for e in errors:

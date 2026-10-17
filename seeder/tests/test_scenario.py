@@ -141,6 +141,50 @@ class Commands(unittest.TestCase):
                 self.assertEqual(sorted(p["spec"]["flight"]), ["assumed", "max_accel_mps2", "max_speed_mps", "max_turn_dps"], p["id"])
 
 
+def with_clutter(name, birds=3, vehicles=2):
+    cfg = load(name)
+    cfg["environment"] = dict(cfg.get("environment", {}), clutter={"false_alarms_per_min": 3, "birds": birds, "vehicles": vehicles})
+    return cfg
+
+
+class Clutter(unittest.TestCase):
+    def test_none_by_default(self):
+        for p in PRESETS:
+            scenario, truth = sc.generate(json.loads(p.read_text(encoding="utf-8")))
+            self.assertEqual(scenario["clutter"], [], p.stem)
+            self.assertFalse([o for o in truth["objects"] if o["kind"] == "clutter"], p.stem)
+
+    def test_counts_types_and_no_rf(self):
+        scenario, _ = sc.generate(with_clutter("challenge"))
+        self.assertEqual([c["id"] for c in scenario["clutter"]], ["B1", "B2", "B3", "V1", "V2"])
+        for c in scenario["clutter"]:
+            self.assertEqual(c["role"], "clutter")
+            self.assertIn(c["type"], sc.CLUTTER_KINDS)
+            self.assertFalse(c["emits"])
+            self.assertEqual(c["signature"]["rf"], 0)
+        self.assertTrue(all(c["altitude_m"] <= 2 for c in scenario["clutter"] if c["type"] == "vehicle"), "vehicles stay on the ground")
+
+    def test_does_not_move_the_hostiles_or_friendlies(self):
+        for name in ("easy", "challenge"):
+            plain, _ = sc.generate(load(name))
+            cluttered, _ = sc.generate(with_clutter(name))
+            self.assertEqual(plain["targets"], cluttered["targets"], name)
+            self.assertEqual(plain["friendlies"], cluttered["friendlies"], name)
+
+    def test_same_seed_is_identical(self):
+        a, b = sc.generate(with_clutter("hard")), sc.generate(with_clutter("hard"))
+        self.assertEqual(json.dumps(a, sort_keys=True), json.dumps(b, sort_keys=True))
+
+    def test_truth_lists_clutter_apart_from_hostiles(self):
+        scenario, truth = sc.generate(with_clutter("medium"))
+        clutter = [o for o in truth["objects"] if o["kind"] == "clutter"]
+        self.assertEqual([o["id"] for o in clutter], [c["id"] for c in scenario["clutter"]])
+        self.assertTrue(all(o["samples"] and o["type"] in sc.CLUTTER_KINDS for o in clutter))
+        self.assertFalse([e for e in truth["events"] if e.get("id", "").startswith(("B", "V"))], "events are about hostiles only")
+        first = clutter[0]["samples"][0]
+        self.assertEqual(first[1:3], [round(v, 1) for v in sc._target_pos(scenario["clutter"][0], first[0])], "same motion as hostiles")
+
+
 class Validation(unittest.TestCase):
     def check(self, mutate, text):
         cfg = load("challenge")
@@ -162,7 +206,58 @@ class Validation(unittest.TestCase):
         self.check(lambda c: c.update(degradations={"network": {"loss": 1.5}}), "loss must be between")
 
     def test_rejects_bad_weather(self):
-        self.check(lambda c: c.update(environment={"weather": "snow"}), "weather must be")
+        self.check(lambda c: c.update(environment={"weather": "snow"}), "weather must be clear or")
+
+    def test_accepts_combined_weather_events_and_sky(self):
+        cfg = load("challenge")
+        cfg.setdefault("environment", {}).update(
+            weather="fog:0.5+wind",
+            weather_events=[{"weather": "rain", "t_start": 40, "t_end": 80, "zone": {"x": 500, "y": 500, "radius_m": 100}}],
+            sky={"date": "2026-06-21", "hour": 20.5, "lat": 45.0, "lon": 0.0, "time_scale": 60})
+        env = sc.generate(cfg)[0]["environment"]
+        self.assertEqual(env["weather"], "fog:0.5+wind")
+        self.assertEqual(env["weather_events"][0]["zone"]["radius_m"], 100)
+        self.assertEqual(env["sky"]["time_scale"], 60)
+
+    def test_weather_does_not_change_the_paths(self):
+        plain, fogged = load("challenge"), load("challenge")
+        fogged.setdefault("environment", {}).update(weather="fog+rain", sky={"date": "2026-12-21", "hour": 17, "lat": 55, "lon": 0})
+        self.assertEqual(sc.generate(plain)[0]["targets"], sc.generate(fogged)[0]["targets"])
+
+    def test_rejects_bad_weather_forms(self):
+        for text in ("fog+fog", "fog:0", "fog:1.5", "clear+fog", "fog+"):
+            self.check(lambda c, text=text: c.setdefault("environment", {}).update(weather=text), "weather")
+
+    def test_rejects_bad_events(self):
+        self.check(lambda c: c.setdefault("environment", {}).update(weather_events=[{"t_start": 3}]), "missing")
+        self.check(lambda c: c.setdefault("environment", {}).update(weather_events=[{"weather": "fog", "t_start": 9, "t_end": 5}]), "end after")
+        self.check(lambda c: c.setdefault("environment", {}).update(weather_events=[{"weather": "fog", "zone": {"x": 1}}]), "missing")
+
+    def test_rejects_a_sky_without_a_place_or_date(self):
+        self.check(lambda c: c.setdefault("environment", {}).update(sky={"date": "2026-06-21", "hour": 20}), "sky needs")
+        self.check(lambda c: c.setdefault("environment", {}).update(sky={"date": "2026-13-45", "hour": 20, "lat": 1, "lon": 1}), "sky")
+        self.check(lambda c: c.setdefault("environment", {}).update(sky={"date": "2026-06-21", "hour": 24, "lat": 1, "lon": 1}), "hour")
+
+    def test_accepts_and_passes_on_jamming_zones(self):
+        cfg = load("challenge")
+        zone = {"x": 500, "y": 500, "radius_m": 150, "loss": 0.8, "t_start": 40, "t_end": 80, "rf_noise_mult": 3}
+        cfg["degradations"] = {"network": {"jamming_zones": [zone]}}
+        self.assertEqual(sc.generate(cfg)[0]["degradations"]["network"]["jamming_zones"], [zone])
+
+    def test_jamming_does_not_change_the_paths(self):
+        plain, jammed = load("challenge"), load("challenge")
+        jammed["degradations"] = {"network": {"jamming_zones": [{"x": 1, "y": 2, "radius_m": 50, "loss": 1}]}}
+        self.assertEqual(sc.generate(plain)[0]["targets"], sc.generate(jammed)[0]["targets"])
+
+    def test_rejects_bad_jamming_zones(self):
+        def zones(*z):
+            return lambda c: c.setdefault("degradations", {}).update(network={"jamming_zones": list(z)})
+        self.check(zones({"x": 1, "y": 2, "radius_m": 0, "loss": 0.5}), "radius_m must be positive")
+        self.check(zones({"x": 1, "y": 2, "radius_m": 5, "loss": 1.5}), "loss must be between")
+        self.check(zones({"x": 1, "y": 2, "radius_m": 5, "loss": 0.5, "t_start": 9, "t_end": 5}), "t_end must be after")
+        self.check(zones({"x": 1, "y": 2, "radius_m": 5, "loss": 0.5, "rf_noise_mult": 0.5}), "at least 1")
+        self.check(zones({"x": 1}), "is required")
+        self.check(lambda c: c.setdefault("degradations", {}).update(network={"jamming_zones": "all"}), "must be a list")
 
     def test_rejects_ground_outside_area(self):
         self.check(lambda c: c.update(ground=[{"id": "G", "platform": "gs_radar_rf", "position": [2000, 5]}]), "outside the area")
@@ -175,6 +270,11 @@ class Validation(unittest.TestCase):
 
     def test_rejects_unknown_command(self):
         self.check(lambda c: c.update(commands=[{"t": 5, "drone_id": "F1", "command": "dance"}]), "command must be one of")
+
+    def test_rejects_bad_clutter_counts(self):
+        self.check(lambda c: c.update(environment={"clutter": {"birds": -1}}), "clutter.birds must be")
+        self.check(lambda c: c.update(environment={"clutter": {"vehicles": 11}}), "clutter.vehicles must be")
+        self.check(lambda c: c.update(environment={"clutter": {"birds": True}}), "clutter.birds must be")
 
     def test_seed_sets(self):
         self.assertEqual(sc.seed_for("tuning", 0), 1)

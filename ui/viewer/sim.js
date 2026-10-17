@@ -19,6 +19,8 @@
   const Drones = typeof window !== 'undefined' ? window.Drones : require('./drones.js');
   const Messages = typeof window !== 'undefined' ? window.Messages : require('./messages.js');
   const Mission = typeof window !== 'undefined' ? window.Missions : require('./missions.js');
+  const Weather = typeof window !== 'undefined' ? window.Weather : require('./weather.js');
+  const Jamming = typeof window !== 'undefined' ? window.Jamming : require('./jamming.js');
   const CAT = typeof CATALOG !== 'undefined' ? CATALOG : require('./catalog.js'); // eslint-disable-line no-undef
   const DT = 0.1;
   const T_END = 120;
@@ -27,13 +29,11 @@
   const D2R = Math.PI / 180;
   const GATE = 9.21; // chi-square, 2 dof, 99 %
   const KIND = { eo_camera: 'EO', thermal_camera: 'IR', microphone: 'MIC', rf_receiver: 'RF', radar: 'RAD' };
-  const NO_EFFECT = { range_mult: 1, noise_mult: 1, pd_mult: 1 };
   const RAD2DEG = 180 / Math.PI;
   const ALT = { friendly: 60, hostile: 80, ground: 5 }; // metres, only used for elevation angles
   const wrapPi = (a) => Math.atan2(Math.sin(a), Math.cos(a));
   const compass = (mathRad) => ((90 - mathRad * RAD2DEG) % 360 + 360) % 360; // 0 = north, clockwise
   const G_BEARING = 6.63; // chi-square, 1 dof, 99 %
-  const WEATHERS = ['clear', 'fog', 'rain', 'wind', 'night'];
 
   // ---------------------------------------------------------------- scenario
   // A scenario comes from the seeder (seeder/scenario.py, exported to scenarios.js or served by serve.py):
@@ -48,7 +48,8 @@
       friendlies: sc.friendlies.map((f) => Object.assign({ id: f.id, platform: f.platform, alt: f.altitude_m }, f.loop, {
         x: f.loop.cx + f.loop.R * Math.cos(f.loop.th0), y: f.loop.cy + f.loop.R * Math.sin(f.loop.th0),
       })),
-      hostiles: sc.targets.map((t) => ({ id: t.id, wps: t.waypoints, wob: t.wobble_m, ph: t.phase, alt: t.altitude_m, sig: t.signature || {}, emits: t.emits !== false })),
+      hostiles: sc.targets.map(pathObject),
+      clutter: (sc.clutter || []).map((o) => Object.assign(pathObject(o), { type: o.type })), // birds, vehicles: seen, not threats
       commands: sc.commands || [], beacon: sc.beacon, env: sc.environment, deg: sc.degradations, sensorKinds: sc.sensor_set.enabled_kinds, assign: {},
     };
     sc.friendlies.concat(sc.ground).forEach((n) => { world.assign[n.id] = n.platform; });
@@ -57,6 +58,8 @@
     world.eval = [Math.max(0, tc - 6), Math.min(sc.duration_s, tc + 39)]; // window around the crossing used for summary metrics
     return world;
   }
+  // an object on a waypoint path (a hostile or clutter); moved by hoState
+  const pathObject = (t) => ({ id: t.id, wps: t.waypoints, wob: t.wobble_m, ph: t.phase, alt: t.altitude_m, sig: t.signature || {}, emits: t.emits !== false });
 
   // piecewise-linear path with a sideways wobble (same maths as seeder/scenario.py)
   function hoPos(h, t) {
@@ -105,7 +108,13 @@
     return Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * r());
   }
 
-  function buildSensors(assign, weather, kinds) {
+  // radar clutter rate under the active effects: the highest one the catalog gives, else the default
+  function clutterRate(m, effects) {
+    const rates = Object.keys(effects).map((n) => m.weather_effects && m.weather_effects[n] && m.weather_effects[n].clutter_rate_per_s).filter((r) => r !== undefined);
+    return rates.length ? Math.max.apply(null, rates) : 0.05;
+  }
+  // effects = the weather that holds everywhere and all run; events and the sky are applied per detection (sensorAt)
+  function buildSensors(assign, effects, kinds) {
     const list = [];
     Object.keys(assign).forEach((node) => {
       const plat = PLATFORMS[assign[node]];
@@ -113,11 +122,10 @@
       plat.modules.forEach((link) => {
         const m = MODULES[link.module_id];
         if (!KIND[m.kind] || kinds.indexOf(m.kind) < 0) return; // gnss / imu are not detection sensors; the scenario can switch kinds off
-        const eff = (m.weather_effects && m.weather_effects[weather]) || NO_EFFECT;
-        const sm = m.sim;
+        const q = Weather.sensorQuality(m, effects), sm = m.sim;
         list.push({
-          node, module: m.id, kind: KIND[m.kind],
-          range: sm.range_m * eff.range_mult,
+          node, module: m.id, kind: KIND[m.kind], mod: m, sm,
+          range: sm.range_m * q.range,
           minRange: sm.min_range_m,
           fov: sm.fov_deg * D2R,
           pointing: sm.pointing,
@@ -125,12 +133,12 @@
           latency: sm.latency_ms / 1000,
           native: m.native.type,
           fields: m.native.fields.map((f) => f.name),
-          pd: Math.min(1, sm.pd * eff.pd_mult),
+          pd: Math.min(1, sm.pd * q.pd),
           pdFar: sm.pd_far,
-          nm: eff.noise_mult,
+          nm: q.noise,
           noise: sm.noise,
           cell: sm.resolution_cell || null,
-          clutter: m.kind === 'radar' ? (eff.clutter_rate_per_s || 0.05) : 0,
+          clutter: m.kind === 'radar' ? clutterRate(m, effects) : 0,
         });
       });
     });
@@ -277,6 +285,7 @@
     const real = P.mode === 'realistic';
     const world = prepare(P.scenario || DEFAULT_SCENARIO);
     const assign = Object.assign({}, world.assign, P.assign || {});
+    const wx = Weather.providerFor(world.env, P.weather || 'clear', P.sky !== undefined ? P.sky : world.env.sky);
     const c = {
       P, world, assign, real, lite: false,
       rn: rng(P.seed * 7919 + 13),   // sensor noise
@@ -284,15 +293,17 @@
       rcl: rng(P.seed * 15485863 + 3), // clutter
       loss: real ? P.loss / 100 : 0, delay: real ? P.delayMs / 1000 : 0, drift: real ? P.driftMs / 1000 : 0,
       T_END: world.duration, NF: Math.round(world.duration / DT), EVAL: world.eval,
-      sensors: buildSensors(assign, P.weather, world.sensorKinds),
+      wx: wx.provider, wxStatic: wx.isStatic,
+      zones: real ? ((world.deg.network && world.deg.network.jamming_zones) || []) : [], // jamming is a comms degradation: only in Realistic mode
+      sensors: buildSensors(assign, Weather.activeEffects(wx.base), world.sensorKinds),
       nodes: world.ground.map((g) => g.id).concat(world.friendlies.map((f) => f.id)),
-      hostileById: {}, dropT: {}, driftScale: {}, linkQ: {}, queue: [],
+      pathById: {}, dropT: {}, driftScale: {}, linkQ: {}, queue: [],
       drones: {}, seqs: {}, cmd: { script: scriptedCommands(P, world), open: {}, records: {}, seen: {}, count: 0 },
       beaconEvery: Math.max(1, Math.round(10 / (world.beacon.rate_hz || 2))), beaconSigma: world.beacon.pos_sigma_m || 3,
       tracks: [], pending: [], friends: {}, alerts: [], frames: [], timeline: [], lastMatch: {}, sqHist: [], crossAlerted: {},
-      n: { hostile: 0, unk: 0, swaps: 0, ffa: 0, evalSq: 0, evalN: 0, evalCnt: 0, evalCntN: 0 },
+      n: { hostile: 0, unk: 0, swaps: 0, ffa: 0, cfa: 0, evalSq: 0, evalN: 0, evalCnt: 0, evalCntN: 0 },
     };
-    world.hostiles.forEach((h) => { c.hostileById[h.id] = h; });
+    world.hostiles.concat(world.clutter).forEach((h) => { c.pathById[h.id] = h; });
     if (real) (world.deg.dropout || []).forEach((d) => { c.dropT[d.node] = d.t; }); // nodes that die mid-run
     c.nodes.forEach((n) => { c.driftScale[n] = c.rn() * 2 - 1; c.linkQ[n] = 1; });
     const fleet = world.friendlies.map((f) => {
@@ -313,7 +324,7 @@
     const clutter = c.world.env.clutter;
     const perSec = ((clutter && clutter.false_alarms_per_min) || 0) / 60;
     const radars = c.sensors.filter((q) => q.kind === 'RAD');
-    radars.forEach((q) => { q.clutter = Math.max(q.clutter, perSec / radars.length); });
+    radars.forEach((q) => { q.faFloor = perSec / radars.length; q.clutter = Math.max(q.clutter, q.faFloor); });
   }
   // friendly roster is synced before the mission: tracks start at the true state
   function startFriendTracks(c) {
@@ -349,6 +360,7 @@
   function finish(c) {
     const n = c.n;
     const summary = { rmse: n.evalN ? Math.sqrt(n.evalSq / n.evalN) : null, countErr: n.evalCntN ? n.evalCnt / n.evalCntN : 0, swaps: n.swaps, ffa: n.ffa };
+    if (c.world.clutter.length) summary.cfa = n.cfa; // clutter objects tracked as hostile; only scenarios with clutter report it
     // entry markers from scenario script
     c.world.hostiles.forEach((h) => c.timeline.push({ t: h.wps[0][0], label: h.id + ' in', color: 'red' }));
     const commands = Object.keys(c.cmd.records).map((id) => c.cmd.records[id]);
@@ -394,11 +406,15 @@
       const st = hoState(h, t);
       if (st) truth.push(Object.assign({ id: h.id, kind: 'hostile' }, st));
     });
+    c.world.clutter.forEach((o) => {
+      const st = hoState(o, t);
+      if (st) truth.push(Object.assign({ id: o.id, kind: 'clutter', type: o.type }, st));
+    });
     return truth;
   }
   function targetAt(c, obj, t) {
     if (obj.kind === 'friendly') return friendlyState(c, c.world.friendlies.find((f) => f.id === obj.id), t);
-    return hoState(c.hostileById[obj.id], t);
+    return hoState(c.pathById[obj.id], t);
   }
 
   // -------------------------------------------------------------------- sensing
@@ -415,36 +431,52 @@
     const tt = Math.max(0, t - clockOffset(c, s.node, t));
     const heading = s.pointing === 'omni' ? null : (sp.heading !== undefined ? sp.heading : Math.atan2(sp.vy, sp.vx));
     const isGround = s.node.startsWith('GS');
-    let seen = detect(c, s, { sp, heading, truth, tt });
+    let seen = detect(c, s, { sp, heading, truth, tt, t });
     if (s.cell && seen.length > 1) seen = mergeCells(seen, s.cell); // radar resolution cell
-    seen.forEach((d) => raw.push(makeRecord(s, d, sp, t, isGround, c.rn))); // each detection becomes the native record
+    seen.forEach((d) => raw.push(makeRecord(d.sq || s, d, sp, t, isGround, c.rn))); // each detection becomes the native record
     addClutter(c, s, { sp, heading, t, isGround }, raw);
   }
   // who is inside the sensor's limits: range window, field of view, detection probability
   function detect(c, s, view) {
-    const { sp, heading, truth, tt } = view;
+    const { sp, heading, truth, tt, t } = view;
     const seen = [];
     truth.forEach((o) => {
       if (o.id === s.node) return;
       const tg = targetAt(c, o, tt);
       if (!tg) return;
-      const dx = tg.x - sp.x, dy = tg.y - sp.y, r = Math.hypot(dx, dy);
-      if (r > s.range || r < s.minRange || r < 1) return;
-      const h = c.hostileById[o.id]; // a hostile's signature scales how well each sensor type sees it
+      const dx = tg.x - sp.x, dy = tg.y - sp.y, r = Math.hypot(dx, dy), sq = sensorAt(c, s, t, sp, tg);
+      if (r > sq.range || r < sq.minRange || r < 1) return;
+      const h = c.pathById[o.id]; // a hostile's or clutter object's signature scales how well each sensor type sees it
       if (s.kind === 'RF' && h && !h.emits) return; // a silent hostile is invisible to RF
       const az = Math.atan2(dy, dx);
       if (heading !== null && Math.abs(wrapPi(az - heading)) > s.fov / 2) return;
-      if (c.rn() > detectionProb(s, h, r)) return;
-      seen.push({ x: tg.x, y: tg.y, vx: tg.vx, vy: tg.vy, r, az, n: 1, o: Object.assign({}, o, { alt: h ? h.alt : undefined }) });
+      if (c.rn() > detectionProb(sq, h, r)) return;
+      seen.push({ x: tg.x, y: tg.y, vx: tg.vx, vy: tg.vy, r, az, n: 1, sq, o: Object.assign({}, o, { alt: h ? h.alt : undefined }) });
     });
     return seen;
   }
-  function detectionProb(s, hostile, r) {
-    const sig = hostile ? (hostile.sig[SIG_KEY[s.kind]] || 1) : 1;
+  // the sensor as the weather on this line of sight leaves it; a weather that never changes was applied once, in buildSensors
+  function sensorAt(c, s, t, sp, tg) {
+    return jammedRf(c, weatherSensor(c, s, t, sp, tg), t, sp);
+  }
+  // RF receivers inside an active jamming zone are noisier
+  function jammedRf(c, s, t, sp) {
+    const m = s.kind === 'RF' && c.zones.length ? Jamming.rfNoiseMult(c.zones, sp, t) : 1;
+    return m > 1 ? Object.assign({}, s, { nm: s.nm * m }) : s;
+  }
+  function weatherSensor(c, s, t, sp, tg) {
+    if (c.wxStatic) return s;
+    const effects = Weather.activeEffects(Weather.conditionsBetween(c.wx, [sp.x, sp.y], [tg.x, tg.y], t));
+    const q = Weather.sensorQuality(s.mod, effects);
+    const clutter = s.kind === 'RAD' ? Math.max(clutterRate(s.mod, effects), s.faFloor || 0) : 0;
+    return Object.assign({}, s, { range: s.sm.range_m * q.range, pd: Math.min(1, s.sm.pd * q.pd), nm: q.noise, clutter });
+  }
+  function detectionProb(s, obj, r) { // obj: the hostile or clutter object, none for a friendly
+    const v = obj && obj.sig[SIG_KEY[s.kind]], sig = v === undefined ? 1 : v; // a signature of 0 means unseen, not "missing"
     return Math.min(1, s.pd * sig) * (1 - (1 - s.pdFar) * (r / s.range) * (r / s.range)); // detections thin out with distance
   }
-  function addClutter(c, s, view, raw) {
-    const { sp, heading, t, isGround } = view;
+  function addClutter(c, base, view, raw) {
+    const { sp, heading, t, isGround } = view, s = sensorAt(c, base, t, sp, sp); // false alarms follow the weather at the sensor
     if (!s.clutter || c.rcl() >= s.clutter * s.every * DT) return;
     const half = heading === null ? Math.PI : s.fov / 2, a = (heading || 0) + (c.rcl() * 2 - 1) * half;
     const rr = s.minRange + Math.sqrt(c.rcl()) * (s.range - s.minRange);
@@ -456,9 +488,13 @@
   function noteLink(c, node, ok) { // smoothed share of messages that got through
     c.linkQ[node] = 0.97 * c.linkQ[node] + 0.03 * (ok ? 1 : 0);
   }
+  // base loss, raised to the loss of any active jamming zone the node is inside
+  function lossFor(c, node, t) {
+    return c.zones.length ? Jamming.lossAt(c.zones, c.loss, nodePos(c, node, t), t) : c.loss;
+  }
   function sendMessage(c, node, payload, t, latency) {
     if (c.tap) c.tap(payload);
-    const ok = c.rnet() >= c.loss;
+    const ok = c.rnet() >= lossFor(c, node, t);
     noteLink(c, node, ok);
     if (!ok) return;
     const dly = c.delay > 0 ? Math.max(0, c.delay * (1 + 0.3 * gauss(c.rnet))) : 0;
@@ -696,6 +732,7 @@
     const sqSum = match.reduce((acc, m) => acc + m[2] * m[2], 0);
     const rmse10 = rollingRmse(c, match.length ? [sqSum / match.length, 1] : [0, 0]);
     flagFriendlies(c, t, truth, hostileTracks, usedA);
+    flagClutter(c, t, truth, hostileTracks, usedA);
     const countErr = hostileTracks.length - trueHost.length;
     if (t >= c.EVAL[0] && t <= c.EVAL[1]) addToSummary(c.n, sqSum, match.length, countErr);
     return { trueHost, match, rmse10, countErr };
@@ -736,16 +773,31 @@
     for (let i = Math.max(0, c.sqHist.length - 100); i < c.sqHist.length; i++) { ws += c.sqHist[i][0] * c.sqHist[i][1]; wn += c.sqHist[i][1]; }
     return wn ? Math.sqrt(ws / wn) : null;
   }
-  function flagFriendlies(c, t, truth, hostileTracks, usedA) {
+  // hostile tracks not matched to a true hostile but sitting on an object of this kind; each track is reported once
+  function falseHostiles(c, truth, hostileTracks, usedA, kind, flag) {
+    const found = [];
     hostileTracks.forEach((a) => {
       if (usedA.has(a.id)) return;
       const tr = c.tracks.find((x) => x.id === a.id);
-      if (!tr || tr.ffa) return;
-      const fr = truth.find((o) => o.kind === 'friendly' && Math.hypot(o.x - a.x, o.y - a.y) < 40);
-      if (!fr) return;
-      tr.ffa = true; c.n.ffa++;
+      if (!tr || tr[flag]) return;
+      const o = truth.find((q) => q.kind === kind && Math.hypot(q.x - a.x, q.y - a.y) < 40);
+      if (o) { tr[flag] = true; found.push([a, o]); }
+    });
+    return found;
+  }
+  function flagFriendlies(c, t, truth, hostileTracks, usedA) {
+    falseHostiles(c, truth, hostileTracks, usedA, 'friendly', 'ffa').forEach(([a, fr]) => {
+      c.n.ffa++;
       c.alerts.push({ t, sev: 'crit', text: 'Friendly ' + fr.id + ' flagged as hostile (' + a.id + ')' });
       c.timeline.push({ t, label: 'FFA', color: 'red' });
+    });
+  }
+  // a bird or vehicle tracked as hostile is a false alarm
+  function flagClutter(c, t, truth, hostileTracks, usedA) {
+    falseHostiles(c, truth, hostileTracks, usedA, 'clutter', 'cfa').forEach(([a, o]) => {
+      c.n.cfa++;
+      c.alerts.push({ t, sev: 'warn', text: 'Clutter ' + o.type + ' ' + o.id + ' tracked as hostile (' + a.id + ')' });
+      c.timeline.push({ t, label: 'clutter', color: 'amber' });
     });
   }
 
@@ -987,12 +1039,12 @@
         }
       }
       const n = grp.length, avg = (key) => grp.reduce((acc, g) => acc + g[key], 0) / n;
-      out.push({ x: avg('x'), y: avg('y'), vx: avg('vx'), vy: avg('vy'), r: avg('r'), az: avg('az'), n, o: grp[0].o });
+      out.push({ x: avg('x'), y: avg('y'), vx: avg('vx'), vy: avg('vy'), r: avg('r'), az: avg('az'), n, sq: grp[0].sq, o: grp[0].o });
     }
     return out;
   }
 
   const SCEN = prepare(DEFAULT_SCENARIO), DEFAULT_ASSIGN = SCEN.assign;
-  global.Sim = { run, prepare, DT, T_END, NF, EVAL, WEATHERS, PLATFORMS, MODULES, DEFAULT_SCENARIO, SCEN, DEFAULT_ASSIGN };
+  global.Sim = { run, prepare, DT, T_END, NF, EVAL, PLATFORMS, MODULES, DEFAULT_SCENARIO, SCEN, DEFAULT_ASSIGN };
   if (typeof module !== 'undefined') module.exports = global.Sim;
 })(typeof window !== 'undefined' ? window : globalThis);
