@@ -346,7 +346,9 @@
     const policy = c.P.behavior || (c.P.scenario?.config?.drone_behavior) || {};
     c.traffic = new Traffic(c.P.traffic || c.P.scenario?.config?.traffic_behaviors, world.targets, world.friendlies, DT);
     c.classifier = new FriendFoe.AutomaticEstimator(Behavior.configFor([world.c2.x, world.c2.y], policy),
-      { beacon_rate_hz: world.beacon.rate_hz || 2 }, fleet.map((f) => f.id));
+      // safe mode (as pipeline/behaviour.py): steady transit alone never makes a track peaceful, because a hostile that
+      // flies straight looks the same; on the scenarios 62 to 70 % of the tracks on real hostiles were called peaceful
+      { beacon_rate_hz: world.beacon.rate_hz || 2, peaceful_min_updates: c.P.motionPeaceful ? 0 : 1e9 }, fleet.map((f) => f.id));
   }
   // commands to send, in time order: from the run parameters if given, otherwise from the scenario
   function scriptedCommands(P, world) {
@@ -842,7 +844,8 @@
   function isStale(tr, t) {
     const silent = t - tr.lastUpd;
     const tentative = tr.status === 'tentative';
-    return (tentative && silent > 1.5) || (!tentative && silent > 8) || tr.P[0] + tr.P[5] > 40000;
+    // a track that was confirmed once and lost its support is a real object going back to tentative: it lives as long as a confirmed one
+    return (tentative && silent > (tr.confirmedOnce ? 8 : 1.5)) || (!tentative && silent > 8) || tr.P[0] + tr.P[5] > 40000;
   }
   // a track riding on a beacon-known friendly is that friendly, not a new object
   function ridesOnFriend(c, tr, t) {
@@ -900,7 +903,7 @@
     const v = tr.classification || { cls: 'unknown', class_prob: 0.5, p_hostile: 0.5, p_friendly: 0.5 };
     const cls = v.cls, pH = v.p_hostile, pF = v.p_friendly;
     return {
-      id: tr.id, cls, st: tr.status, x: tr.s[0], y: tr.s[1], vx: tr.s[2], vy: tr.s[3],
+      id: tr.id, cls, st: tr.status, once: !!tr.confirmedOnce, x: tr.s[0], y: tr.s[1], vx: tr.s[2], vy: tr.s[3],
       pxx: tr.P[0], pyy: tr.P[5], pxy: tr.P[1], pvv: tr.P[10] + tr.P[15],
       conf: v.class_prob, behavior: tr.behavior || {},
       age: t - tr.lastUpd, nodes: Object.keys(tr.srcs).filter((n) => t - tr.srcs[n] <= 2), pH, pF, born: tr.born,
