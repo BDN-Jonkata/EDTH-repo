@@ -7,7 +7,7 @@ from tracker.ekf import identity_like, predict, scalar_update
 from tracker.measurement import BEARING, RANGE_BEARING, Measurement, Pose2D, from_observation
 from tracker.models import apply_measurement, fix_from_range_bearing, gate_cost, triangulate
 from tracker.poses import PoseBook
-from tracker.tracker import Tracker, TrackerConfig
+from tracker.tracker import Track, Tracker, TrackerConfig
 
 RADAR_AT_ORIGIN = Pose2D(0.0, 0.0)
 
@@ -191,5 +191,37 @@ class TestPoseBook(unittest.TestCase):
         self.assertEqual(book.pose("GS1", 5.0).sigma, 0.0)            # a ground sensor's position is known
 
 
+class TestDuplicateTracks(unittest.TestCase):
+    def two_tracks(self, config, offset, dv):
+        tracker = Tracker(config)
+        for k, (x, vx) in enumerate(((100.0, 10.0), (100.0 + offset, 10.0 + dv))):
+            tr = tracker._add(Track(f"T{k + 1}", [x, 50.0, vx, 0.0], identity_like([25.0, 25.0, 4.0, 4.0]), float(k), 0.0, confirmed=True))
+            tr.last_update = 0.0
+        tracker._t = 0.0
+        return tracker
+
+    def test_two_close_tracks_moving_alike_become_one_and_the_older_stays(self):
+        tracker = self.two_tracks(TrackerConfig(), offset=15.0, dv=1.0)
+        tracker._drop_duplicates()
+        self.assertEqual([tr.track_id for tr in tracker.tracks], ["T1"])
+
+    def test_close_tracks_with_different_velocities_are_two_targets(self):
+        tracker = self.two_tracks(TrackerConfig(), offset=15.0, dv=-25.0)
+        tracker._drop_duplicates()
+        self.assertEqual(len(tracker.tracks), 2)
+
+    def test_tracks_farther_apart_than_the_limit_stay_separate(self):
+        tracker = self.two_tracks(TrackerConfig(), offset=80.0, dv=0.0)
+        tracker._drop_duplicates()
+        self.assertEqual(len(tracker.tracks), 2)
+
+    def test_it_can_be_switched_off(self):
+        tracker = self.two_tracks(TrackerConfig(duplicate_distance_m=0.0), offset=5.0, dv=0.0)
+        tracker._drop_duplicates()
+        self.assertEqual(len(tracker.tracks), 2)
+
+
 if __name__ == "__main__":
     unittest.main()
+
+

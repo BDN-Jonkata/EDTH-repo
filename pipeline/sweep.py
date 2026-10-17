@@ -24,13 +24,14 @@ from friend_foe.sweep import LOSSES, Setup, load_preset, make_scenario_and_truth
 from pipeline.behaviour import automatic_estimator
 from pipeline.run import scored_frames
 from scoring.identification import identification
-from scoring.metrics import RunScore, ScoreConfig, score
+from scoring.metrics import RunScore, ScoreConfig, score, swap_log
+from scoring.swaps import summarise
 from sensors.quality import load_modules
 from scoring.sweep import COLUMNS, average_with_error, fmt_error, paired_difference
 from scoring.truth import with_recorded_samples
 
 WARMUP_S = 10.0
-OPTIONS = {"investigate": "investigate", "identity": "keep_identity", "distributed": "distributed", "cueing": "cue"}   # --paired name -> option
+OPTIONS = {"investigate": "investigate", "identity": "keep_identity", "distributed": "distributed", "cueing": "cue", "trust": "trust"}   # --paired name -> option
 
 
 def run_once(setup: Setup, index: int, weather: str, loss: float, behaviour: str = "", **options) -> RunScore:
@@ -57,6 +58,19 @@ def identification_ranges(scenario: dict) -> Dict[str, float]:
 
 def run_cell(setup: Setup, weather: str, loss: float, behaviour: str = "", **options) -> List[RunScore]:
     return [run_once(setup, i, weather, loss, behaviour, **options) for i in range(setup.seeds)]
+
+def swap_causes(setup: Setup, weather: str, loss: float, behaviour: str = "", **options) -> dict:
+    """Why the hostiles' IDs swap, summed over the seeds (scoring/swaps.py)."""
+    total: dict = {}
+    for i in range(setup.seeds):
+        scenario, truth = make_scenario_and_truth(setup, i, weather, loss, False)
+        recorded: dict = {}
+        frames = list(scored_frames(scenario, scenario["seed"], recorded=recorded, **options))
+        events = swap_log(with_recorded_samples(truth, recorded), frames, ScoreConfig(warmup_s=WARMUP_S))
+        for key, n in summarise(events).items():
+            total[key] = total.get(key, 0) + n
+    return total
+
 
 def print_table(title: str, rows) -> None:
     print(title)
@@ -87,9 +101,11 @@ def main() -> None:
     ap.add_argument("--investigate", action="store_true", help="send drones at suspicious tracks (pipeline/dispatch.py)")
     ap.add_argument("--keep-identity", action="store_true", help="run the predictor's identity keeper on the tracks")
     ap.add_argument("--cue", action="store_true", help="send the closest other drone at a bearing no track explains (pipeline/cueing.py)")
+    ap.add_argument("--trust", action="store_true", help="weight readings by link health and discount explained silence (health/)")
     ap.add_argument("--distributed", action="store_true", help="a tracker per node and a merger (pipeline/nodes.py)")
     ap.add_argument("--paired", choices=sorted(OPTIONS), help="compare with and without this on the same seeds")
     ap.add_argument("--losses", default=",".join(str(x) for x in LOSSES), help="comma-separated message-loss levels")
+    ap.add_argument("--swaps", action="store_true", help="print why the hostiles' IDs swap (scoring/swaps.py) instead of the table")
     ap.add_argument("--csv")
     args = ap.parse_args()
     losses = [float(x) for x in args.losses.split(",")]
@@ -97,7 +113,11 @@ def main() -> None:
     header = (f"preset={args.preset} seed set={args.seed_set} seeds={args.seeds} weather={args.weather} "
               f"birds={args.birds} vehicles={args.vehicles} behaviour={args.behaviour}")
     base = {"investigate": args.investigate, "keep_identity": args.keep_identity, "distributed": args.distributed,
-            "cue": args.cue}
+            "cue": args.cue, "trust": args.trust}
+    if args.swaps:
+        for loss in losses:
+            print(f"loss {loss}: {swap_causes(setup, args.weather, loss, args.behaviour, **base)}")
+        return
     if args.paired:
         flag = OPTIONS[args.paired]
         rows = [(loss, paired_difference(run_cell(setup, args.weather, loss, args.behaviour, **{**base, flag: False}),

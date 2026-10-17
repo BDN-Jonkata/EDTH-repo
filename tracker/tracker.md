@@ -1,4 +1,4 @@
-﻿# tracker module
+# tracker module
 
 Multi-target tracker: Kalman filter on native sensor readings, gated association, track management.
 
@@ -44,6 +44,8 @@ Standard errors over the 20 seeds: about ±0.01 to 0.02 on the tracked share, ±
 
 How to read it: a hostile is tracked a bit more than half the time, and the ceiling is not the tracker alone. On one tuning seed a hostile was seen by any sensor 75 to 85 % of the time it was present and by a radar or microphone only about 50 to 60 % (the microphone array gives a bearing, not a range), because ranges are short, cameras and the radar look forward, and detection probability falls with distance. Once a track is confirmed it follows well (the timeline of one run is mostly unbroken); the losses are the late start and gaps. **ID swaps are mostly re-acquisitions**: a track dropped after 10 s and then started again has a new id, which scoring counts as a swap. The count error looks small because it nets missed hostiles against ghost tracks (its bias is negative: more hostiles missed than ghosts counted). At 90 % loss friendlies are flagged because their beacons are lost, as in [friend_foe.md](../friend_foe/friend_foe.md); fewer false tracks at high loss is just fewer readings.
 
+- **Duplicate tracks.** Two non-friend tracks within 30 m of each other and within 6 m/s in velocity are one target: the older stays. Found with the swap log (most ID swaps were a hostile flipping between two tracks 20 to 40 m apart); 30 tuning seeds at 0 % loss: false tracks -0.31±0.05, OSPA -4.4 m, count error -0.17, hostiles tracked and ID swaps unchanged (`TrackerConfig.duplicate_distance_m`, 0 turns it off).
+
 ## Where the 43 % goes (tuning seeds, 0 % loss, hostile-present seconds after the warmup)
 
 | Share | What |
@@ -63,6 +65,8 @@ So about three quarters of the gap is physical: nothing sees the hostile, or onl
 - **Longer time to live (10 s instead of 6)** and **4 readings to confirm**: a small gain on the tuning seeds (tracked 56 to 59 %, ID swaps 4.0 to 3.8) that did not show on the test seeds (57 %, 5.6 swaps). The 10 s stays as the default; read it as no measurable change.
 - **Where position error comes from** (first check): not the beacon poses, clock error or latency for the position error itself (ideal poses and no degradations gave 16.0 and 14.6 m instead of 15.7 m). But the same check later showed ideal poses cut false tracks from 1.35 to 0.84 and ID swaps from 5.4 to 3.2 on the tuning seeds, which is what led to the smoothed poses with uncertainty described above.
 - **A higher process noise for friend tracks** and **lowering a coasting track's existence** (so the behaviour module ignores guesses): no gain; the second one even made friendlies look flagged at 70 % loss, because friend tracks whose beacons were lost fell below the estimator's existence cutoff. Removed.
+
+- **Crossing a moving node's own bearings over time** (parallax from a drone that moved 25 to 80 m): no effect, the angle stays under the 15 degree limit.
 
 ## Tuning and honesty
 
