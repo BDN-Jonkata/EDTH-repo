@@ -9,7 +9,7 @@ Done so far: catalog and PostgreSQL storage, scenario generator with four preset
 | 1 | Shared header on the mock's `meas` and `beacon` messages | One message format across modules; the codec and the channel emulator need it | done |
 | 2 | Clutter objects (birds, vehicles) | The tracker and friend/foe must not call them hostile; today there is only a false-alarm rate | done |
 | 3 | Jamming zones | Graceful degradation under electronic warfare is the point of the task | done |
-| 4 | Bandwidth limits | Link capacity makes "share compact tracks, not raw observations" matter | todo |
+| 4 | Bandwidth limits | Link capacity makes "share compact tracks, not raw observations" matter | done |
 | 5 | Scenario sweeps | A table of results over many seeds for tuning and the final test | blocked by scoring |
 | 6 | Moving ground units | Only if the mentor says ground units move | blocked by mentor |
 | 7 | Terrain and line of sight | Only if the mentor confirms terrain matters; the largest piece | blocked by mentor |
@@ -53,6 +53,8 @@ Done so far: catalog and PostgreSQL storage, scenario generator with four preset
 **Test:** with a low cap, delivered bytes per second never exceed it; with no cap, results are unchanged.
 
 **Risk:** only meaningful with the real channel emulator; build it in the mock first, then give the rule to the simulation owner as a spec. Count size without the mock-only `z` and `arr`. Today, as plain JSON, an `observation` is about 430 bytes and a `friendly_beacon` about 290 (unrounded numbers); the codec's rounding will lower that.
+
+**Done:** one cap for every node's link to C2 (`bandwidth_kbps`, null = none), checked by `_check_bandwidth` in `seeder/scenario.py`. The queue maths is in `ui/viewer/linkcap.js`: a message occupies the link for bytes / rate, in order, so delivered bytes in any window never exceed the cap; more than 2 s of backlog (assumed) drops the oldest; loss and jamming are drawn when a message leaves the link, so lost messages used their airtime. `sim.js` has `linkFor`, `drainLinks` (a stage before delivery) and `putOnChannel`; the run result gets `bandwidth` `{type: {count, bytes, avg_bytes, dropped}}` only when a cap is set; the viewer has a "Link cap per node" field. Simplifications, as planned: one cap for all nodes, no priority for beacons, Realistic mode only, commands share the drone's link. Measured on `challenge`: about 4 to 15 kbit/s per node and 45 for `GS2`; a 32 kbit/s cap drops about 13 %, 8 kbit/s about 55 %. Verified: 42 seeder tests (1 new); `test-bandwidth.js` (9 tests); 8 baseline and 6 command run hashes identical; `scenarios.js` unchanged.
 
 ## 5. Scenario sweeps
 
