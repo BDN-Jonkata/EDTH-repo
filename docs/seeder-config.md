@@ -43,7 +43,9 @@ Every scenario is fully defined by **one JSON config plus a seed**, so any run c
   "sensor_set": {"enabled_kinds": ["eo_camera", "thermal_camera", "microphone", "rf_receiver", "radar"]},
 
   "environment": {
-    "weather": "fog", "time_of_day": "day",
+    "weather": "fog:0.6+wind", "time_of_day": "day",
+    "weather_events": [{"weather": "rain", "t_start": 40, "t_end": 90, "zone": {"x": 500, "y": 500, "radius_m": 200}}],
+    "sky": {"date": "2026-06-21", "hour": 20.5, "lat": 50.45, "lon": 30.52, "time_scale": 60},
     "clutter": {"false_alarms_per_min": 2, "birds": 3, "vehicles": 1}
   },
 
@@ -65,7 +67,7 @@ Every scenario is fully defined by **one JSON config plus a seed**, so any run c
 | `friendlies` | Which catalog platforms, patrol pattern, whether they broadcast their own pose and uncertainty (beacon) |
 | `ground` | Ground sensor platforms and positions. Also optional moving ground units that carry sensors or act as clutter |
 | `sensor_set` | Which sensor kinds are switched on. Lets us run "camera + acoustic only" against "camera + radar" on the same seed |
-| `environment` | Weather and time of day (change each module differently, see the catalog `weather_effects`), clutter, terrain line-of-sight shadowing (not yet). `clutter.false_alarms_per_min` is random radar false alarms; `clutter.birds` and `clutter.vehicles` are how many real non-threat objects cross the area (0 to 10 each, default 0) |
+| `environment` | Weather and time of day (change each module differently, see the catalog `weather_effects`). `weather` can combine anomalies (`fog+wind`, with a strength such as `rain:0.6`); `weather_events[]` are anomalies that come and go, over a zone of the map; `sky` makes night follow the date, hour and place (it replaces `time_of_day`). Formats and rules: [data-formats.md](data-formats.md#weather-combinations-and-weather-events). The generator does not use any of this, it only checks and passes it on; the viewer applies it. Also clutter, terrain line-of-sight shadowing (not yet). `clutter.false_alarms_per_min` is random radar false alarms; `clutter.birds` and `clutter.vehicles` are how many real non-threat objects cross the area (0 to 10 each, default 0) |
 | `degradations` | Each has its own on/off and strength: clock offset and drift, node position and heading error, packet loss (random or bursty), latency, out-of-order delivery, node dropout |
 | `network` | Topology (mesh or neighbours only), bandwidth limits, jamming zones where links degrade |
 

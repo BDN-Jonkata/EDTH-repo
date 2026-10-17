@@ -56,15 +56,10 @@
       <button class="ibtn" id="newSeed" aria-label="New random seed"><svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true"><path d="M13 8a5 5 0 1 1-1.5-3.5M13 2v3h-3" fill="none" stroke="currentColor" stroke-width="1.5"/></svg></button>
     </div>
     <div class="fld">Weather
-      <div class="seg" role="radiogroup" aria-label="Weather" id="wxSeg">
-        <button role="radio" data-v="clear" aria-checked="true" class="on">Clear</button>
-        <button role="radio" data-v="fog" aria-checked="false">Fog</button>
-        <button role="radio" data-v="rain" aria-checked="false">Rain</button>
-        <button role="radio" data-v="wind" aria-checked="false">Wind</button>
-        <button role="radio" data-v="night" aria-checked="false">Night</button>
-      </div>
+      <div id="wxList"></div>
       <span id="wxNote" style="line-height:1.4"></span>
     </div>
+    <div class="fld" id="skyBox"></div>
     <fieldset class="comms" id="comms" disabled>
       <legend id="commsLegend">Comms impairments, locked in Optimistic</legend>
       <label class="fld"><span style="display:flex;justify-content:space-between">Message loss <span class="mono" style="color:#C9D1DB" id="lossVal">0%</span></span><input type="range" id="loss" min="0" max="100" value="0" style="width:100%;accent-color:#3FC1D9"></label>
@@ -203,8 +198,10 @@
 <script src="catalog.js"></script>
 <script src="scenarios.js"></script>
 <script src="messages.js"></script>
+<script src="weather.js"></script>
 <script src="drones.js"></script>
 <script src="sim.js"></script>
+<script src="weather-ui.js"></script>
 <script src="app.js"></script>
 </body>
 </html>

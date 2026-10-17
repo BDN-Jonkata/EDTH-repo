@@ -206,7 +206,37 @@ class Validation(unittest.TestCase):
         self.check(lambda c: c.update(degradations={"network": {"loss": 1.5}}), "loss must be between")
 
     def test_rejects_bad_weather(self):
-        self.check(lambda c: c.update(environment={"weather": "snow"}), "weather must be")
+        self.check(lambda c: c.update(environment={"weather": "snow"}), "weather must be clear or")
+
+    def test_accepts_combined_weather_events_and_sky(self):
+        cfg = load("challenge")
+        cfg.setdefault("environment", {}).update(
+            weather="fog:0.5+wind",
+            weather_events=[{"weather": "rain", "t_start": 40, "t_end": 80, "zone": {"x": 500, "y": 500, "radius_m": 100}}],
+            sky={"date": "2026-06-21", "hour": 20.5, "lat": 45.0, "lon": 0.0, "time_scale": 60})
+        env = sc.generate(cfg)[0]["environment"]
+        self.assertEqual(env["weather"], "fog:0.5+wind")
+        self.assertEqual(env["weather_events"][0]["zone"]["radius_m"], 100)
+        self.assertEqual(env["sky"]["time_scale"], 60)
+
+    def test_weather_does_not_change_the_paths(self):
+        plain, fogged = load("challenge"), load("challenge")
+        fogged.setdefault("environment", {}).update(weather="fog+rain", sky={"date": "2026-12-21", "hour": 17, "lat": 55, "lon": 0})
+        self.assertEqual(sc.generate(plain)[0]["targets"], sc.generate(fogged)[0]["targets"])
+
+    def test_rejects_bad_weather_forms(self):
+        for text in ("fog+fog", "fog:0", "fog:1.5", "clear+fog", "fog+"):
+            self.check(lambda c, text=text: c.setdefault("environment", {}).update(weather=text), "weather")
+
+    def test_rejects_bad_events(self):
+        self.check(lambda c: c.setdefault("environment", {}).update(weather_events=[{"t_start": 3}]), "missing")
+        self.check(lambda c: c.setdefault("environment", {}).update(weather_events=[{"weather": "fog", "t_start": 9, "t_end": 5}]), "end after")
+        self.check(lambda c: c.setdefault("environment", {}).update(weather_events=[{"weather": "fog", "zone": {"x": 1}}]), "missing")
+
+    def test_rejects_a_sky_without_a_place_or_date(self):
+        self.check(lambda c: c.setdefault("environment", {}).update(sky={"date": "2026-06-21", "hour": 20}), "sky needs")
+        self.check(lambda c: c.setdefault("environment", {}).update(sky={"date": "2026-13-45", "hour": 20, "lat": 1, "lon": 1}), "sky")
+        self.check(lambda c: c.setdefault("environment", {}).update(sky={"date": "2026-06-21", "hour": 24, "lat": 1, "lon": 1}), "hour")
 
     def test_rejects_ground_outside_area(self):
         self.check(lambda c: c.update(ground=[{"id": "G", "platform": "gs_radar_rf", "position": [2000, 5]}]), "outside the area")

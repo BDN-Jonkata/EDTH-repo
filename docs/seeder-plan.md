@@ -14,7 +14,7 @@ Done so far: catalog and PostgreSQL storage, scenario generator with four preset
 | 6 | Moving ground units | Only if the mentor says ground units move | blocked by mentor |
 | 7 | Terrain and line of sight | Only if the mentor confirms terrain matters; the largest piece | blocked by mentor |
 | 8 | Catalog verification | Replace assumed numbers with datasheet values | needs people |
-| 9 | Weather combinations, weather events, seasonal sky | Kris's `sensors/` already reads them; the seeder validator rejects them and the viewer has exclusive weather buttons | plan proposed, waiting for yes |
+| 9 | Weather combinations, weather events, seasonal sky | Kris's `sensors/` already reads them; the seeder validator rejects them and the viewer has exclusive weather buttons | done |
 
 ## 1. Shared header on `meas` and `beacon`
 
@@ -88,6 +88,8 @@ Requested by Kris (branch Krischo, commit 4336605). Format: "Weather combination
 - **`en_route` (Kris's item b):** the mapping in `docs/data-formats.md` was meant as you emit it: an accepted `goto` or `return` gives `assigned` then `en_route`, and the mock does the same. No change.
 
 **Order:** merge Krischo, then 1, 3, 4 (small), then 2 (largest), then docs.
+
+**Done:** Kris agreed to the plan and the four recommendations (JS port with shared cases and tolerance 1e-9, merge first, report-only catalog check). Validator: `_check_weather` in `seeder/scenario.py` calls `sensors.weather.weather_from_scenario` (repo root put on `sys.path`), so the generator only passes `weather`, `weather_events` and `sky` through. Viewer: `ui/viewer/weather.js` is the port (parse, strengths, product of effects, events, sun, `conditions_between`); `weather-ui.js` has the toggles with strengths and the sky controls; `sim.js` builds the sensors for the weather that never changes and looks the rest up per detection (`sensorAt`), including radar false alarms. Catalog: `seed_catalog.py --check` prints the combined-weather table (information only, from `sensors/report.py`); `sim.ident_range_m` added to every detection module (assumed: Kris's placeholder fractions of `range_m`: EO 0.6, thermal 0.5, RF 0.3, microphone 0.2, radar 0.2) and validated. Verified: 38 seeder tests; `test-weather.js` (all of `weather_cases.json`, plus simulation checks: an event over everything equals that weather all run, an event that starts at 60 s leaves the first minute as in clear weather, a far event changes nothing, a sky at midday equals clear and at midnight equals a fixed night); 8 baseline and 6 command run hashes identical; the 5 viewer views identical except the new controls; `scenarios.js` unchanged. Not done: the DB catalog and `db-dump.json.gz` were not refreshed for `ident_range_m` (needs the database: `python seeder/seed_catalog.py`, then `python seeder/dump.py export`); the Sensor limits table and coverage show the base weather only.
 
 ## Order and checkpoints
 
