@@ -45,6 +45,14 @@ Top level: `schema`, `id` (for example `hard-s3`), `name`, `seed`, `preset`, `de
 
 A hostile's (or clutter object's) position at time `t`: walk the waypoints linearly, then add a sideways wobble of amplitude `wobble_m` that fades to zero near each waypoint. The exact formula is `target_state` in [seeder/scenario.py](../seeder/scenario.py); do not rewrite it, import it.
 
+Viewer-only `config.traffic_behaviors[]` entries `{id, ally, mode, start_s}` override
+the named target's path after its actor start (`mode`: `follow` or `intercept`).
+They react to flown friendly trajectories; flags never control them. Use recorded
+viewer truth for these actors, as for commanded friendlies, rather than the
+seeder's scripted baseline. This metadata never crosses the inference boundary.
+Viewer run exports include `behaviorConfig` and `estimatorConfig`; the latter
+contains the actual identity/risk thresholds displayed in track details.
+
 ### Bandwidth limits
 
 `degradations.network.bandwidth_kbps` = `null` (no cap, the default) or a number above 0: what each node's link to C2 can carry, in kilobits per second. A message occupies the link for its size divided by the rate, one after another, so a link never delivers more than the cap in any window. Messages wait in order; when more than 2 s of data are waiting (an assumed number), the **oldest** waiting messages are dropped. A message the channel later loses (base loss or a jamming zone) still used its airtime. Size is the length of the message as JSON without the mock-only `z` and `arr`, unrounded, so it is an upper bound: today about 410 bytes for an `observation` and 275 for a `friendly_beacon`; the codec's float rounding will lower that. In the `challenge` preset the nodes send about 4 to 15 kbit/s each, and the radar-and-RF ground sensor `GS2` about 45; with a 32 kbit/s cap about 13 % of the messages are dropped, with 8 kbit/s about 55 %. Commands from C2 to a drone share that drone's link. The mock applies the cap in Realistic mode only; a run with a cap has a `bandwidth` entry in its result, `{type: {count, bytes, avg_bytes, dropped}}`, and a run without one has none. The seeder only checks the value; the rule is built in [ui/viewer/linkcap.js](../ui/viewer/linkcap.js) as a spec for the channel emulator.

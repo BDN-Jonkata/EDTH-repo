@@ -50,7 +50,10 @@ What it generates: friendly patrol loops, hostile paths (`straight`, `waypoints`
 `targets.benign_count` reserves part of the total for non-allied benign drones on
 an independent random stream. They fly transits, off-site orbits or hover without
 friendly beacons. The busy preset mixes four of these with four threat scenarios;
-`targets.behavior_demo` gives its non-crossing threats protected-area loiter/hover.
+`targets.behavior_demo` gives its non-crossing threats scripted loiter/hover near C2.
+The viewer's `traffic_behaviors` config overrides selected baseline paths with
+actors that follow or intercept moving allies; the seeder source and baseline
+truth generation do not implement those actors. Assessment has no protected zone.
 These are physical paths and scoring roles, never forced estimated flags. See
 [config options](../docs/seeder-config.md) and [behavior rules](../drone_behavior/drone_behavior.md).
 

@@ -8,7 +8,6 @@ from friend_foe.automatic import AutomaticEstimator
 from friend_foe.estimator import Beacon, EstimatorConfig, TrackState
 
 
-ZONE = {"x": 500.0, "y": 500.0, "radius_m": 150.0}
 CORRIDOR = {"start": [0.0, 100.0], "end": [1000.0, 100.0], "half_width_m": 30.0}
 
 
@@ -17,7 +16,7 @@ def state(t, x=500, y=500, vx=0, vy=0, **kw):
 
 
 def run(path, duration=30, dt=0.5, policy=None, beacon=False):
-    est = AutomaticEstimator(policy or BehaviorConfig(protected_zones=[ZONE]))
+    est = AutomaticEstimator(policy or BehaviorConfig())
     out = []
     for k in range(round(duration / dt) + 1):
         t = k * dt
@@ -38,32 +37,30 @@ def test_silence_cannot_verify_identity_but_sustained_safe_transit_can_be_peacef
     assert all(c.cls == 'unknown' for c in found if c.t < 15)
 
 
-def test_sustained_observed_intrusion_has_positive_evidence_and_explanation():
-    est, found = run(approach, duration=22)
-    assert found[-1].cls == "suspicious"
-    assert 0.65 < found[-1].p_hostile < 0.9
-    assert "sustained_protected_entry" in est.explain("opaque-track")["reasons"]
-    # An approach alone cannot cross the hostile threshold.
-    assert all(c.cls != "hostile" for c in found if c.t < 17)
+def test_transit_past_c2_is_not_a_threat_without_a_risky_encounter():
+    est, found = run(approach, duration=30)
+    assert found[-1].cls == "peaceful"
+    assert all(c.cls not in ("hostile", "suspicious") for c in found)
+    assert est.explain("opaque-track")["reasons"] == ["sustained_safe_transit"]
 
 
 def test_authorized_transit_is_peaceful_without_becoming_ally():
-    cfg = BehaviorConfig(protected_zones=[ZONE], corridors=[CORRIDOR])
+    cfg = BehaviorConfig(corridors=[CORRIDOR])
     _, found = run(lambda t: state(t, x=100 + 10 * t, y=100, vx=10), policy=cfg)
     assert found[-1].cls == "peaceful" and found[-1].p_hostile < 0.1
     assert all(c.cls != "friendly" for c in found)
 
 
-def test_risk_overrides_corridor_when_it_passes_through_a_protected_zone():
+def test_corridors_no_longer_depend_on_distance_from_c2():
     corridor = dict(CORRIDOR, start=[0, 500], end=[1000, 500])
-    _, found = run(approach, duration=22, policy=BehaviorConfig(protected_zones=[ZONE], corridors=[corridor]))
-    assert found[-1].cls == "suspicious"
-    assert all(c.cls != "peaceful" for c in found)
+    _, found = run(approach, duration=22, policy=BehaviorConfig(corridors=[corridor]))
+    assert found[-1].cls == "peaceful"
+    assert all(c.cls != "hostile" for c in found)
 
 
-def test_verified_identity_has_priority_even_when_it_maneuvers_in_protected_area():
+def test_verified_identity_stays_primary_and_stationary_motion_is_neutral():
     _, found = run(lambda t: state(t), duration=25, beacon=True)
-    assert found[-1].cls == "friendly" and found[-1].p_hostile > 0.9
+    assert found[-1].cls == "friendly" and found[-1].p_hostile == 0.5
     assert all(c.cls == "friendly" for c in found if c.t >= 2)
 
 
@@ -75,7 +72,7 @@ def test_known_preflight_roster_is_identity_evidence():
 
 @pytest.mark.parametrize('roster', [False, True])
 def test_friendly_losing_its_beacon_fades_to_unknown_and_recovers_without_suspicion(roster):
-    est = AutomaticEstimator(BehaviorConfig(protected_zones=[ZONE]), verified_ids=['opaque-track'] if roster else [])
+    est = AutomaticEstimator(BehaviorConfig(), verified_ids=['opaque-track'] if roster else [])
     lost = []
     for k in range(241):
         t = k / 2
@@ -96,7 +93,7 @@ def test_friendly_losing_its_beacon_fades_to_unknown_and_recovers_without_suspic
     assert found.cls == 'friendly'
 
 
-def test_erratic_turns_outside_protected_area_are_not_enemy_evidence():
+def test_erratic_turns_alone_are_not_enemy_evidence():
     _, found = run(lambda t: state(t, 100 + 20 * math.cos(t), 100 + 20 * math.sin(t),
                                   -20 * math.sin(t), 20 * math.cos(t)))
     assert all(c.cls not in ("hostile", "peaceful") for c in found)
@@ -115,14 +112,14 @@ def test_noisy_boundary_crossing_without_confident_entry_is_ambiguous():
 
 
 def test_predicted_and_replayed_states_decay_instead_of_adding_evidence():
-    est, found = run(lambda t: state(t), duration=22)
-    assert found[-1].cls == "hostile"
+    est, found = run(lambda t: state(t, x=100+10*t, y=100, vx=10), duration=22)
+    assert found[-1].cls == "peaceful"
     before = found[-1].p_hostile
     for t in [22.5, 23, 23.5]:
         tr = replace(state(t), observed_t=22)
         result = est.update(t, [tr], [])[0]
         assert est.explain(tr.track_id)["increment"] == 0
-        assert result.p_hostile < before
+        assert result.p_hostile > before
         before = result.p_hostile
     # After a gap, reacquisition has to establish a fresh continuous history.
     result = est.update(30, [state(30)], [])[0]
@@ -155,18 +152,18 @@ def test_frame_rate_does_not_change_behavior_probability():
 
 
 def test_evidence_reverses_after_a_genuine_behavior_change():
-    cfg = BehaviorConfig(protected_zones=[ZONE], corridors=[CORRIDOR])
-    est, found = run(lambda t: state(t), duration=20, policy=cfg)
-    assert found[-1].cls == "hostile"  # sustained loiter inside the protected zone
+    cfg = BehaviorConfig(corridors=[CORRIDOR])
+    est, found = run(lambda t: state(t, 100+10*t, 100, 10, 0), duration=20, policy=cfg)
+    assert found[-1].cls == "peaceful"
     classes = []
     for k in range(61):
-        t = 25 + k / 2
-        classes += est.update(t, [state(t, 100 + 10 * (t - 25), 100, 10, 0)], [])
-    assert classes[-1].cls == "peaceful"
+        t = 25 + k/2
+        classes += est.update(t, [state(t)], [])
+    assert classes[-1].cls == "unknown" and classes[-1].p_hostile == 0.5
 
 
 def test_opaque_ids_do_not_change_the_result():
-    a, b = AutomaticEstimator(BehaviorConfig(protected_zones=[ZONE])), AutomaticEstimator(BehaviorConfig(protected_zones=[ZONE]))
+    a, b = AutomaticEstimator(BehaviorConfig()), AutomaticEstimator(BehaviorConfig())
     for k in range(45):
         t = k / 2
         x = a.update(t, [approach(t)], [])[0]
@@ -187,21 +184,21 @@ def test_invalid_policy_is_rejected():
     with pytest.raises(ValueError):
         BehaviorConfig(corridors=[dict(CORRIDOR, end=CORRIDOR["start"])])
     with pytest.raises(ValueError):
-        BehaviorConfig(protected_zones=[dict(ZONE, radius_m=-1)])
+        BehaviorConfig(window_s=-1)
 
 
 def test_reappearing_id_does_not_inherit_expired_threat():
-    est, found = run(lambda t: state(t), duration=20)
-    assert found[-1].cls == "hostile"
+    est, found = run(lambda t: state(t, 100+10*t, 100, 10, 0), duration=20)
+    assert found[-1].cls == "peaceful"
     result = est.update(55, [state(55, x=100, y=100)], [])[0]
     assert result.cls == "unknown" and result.p_hostile == 0.5
 
 
 def test_custom_evidence_limit_and_ttl_do_not_create_opposite_evidence():
-    est = AutomaticEstimator(BehaviorConfig(protected_zones=[ZONE]), EstimatorConfig(llr_limit=1, memory_ttl_s=10))
+    est = AutomaticEstimator(BehaviorConfig(), EstimatorConfig(llr_limit=1, memory_ttl_s=10))
     for k in range(41):
         t = k / 2
-        est.update(t, [state(t)], [])
+        est.update(t, [state(t, 100+10*t, 100, 10, 0)], [])
     assert est.update(20.5, [state(20.5, x=100, y=100)], [])[0].p_hostile == 0.5
     assert est.update(35, [state(35, x=100, y=100)], [])[0].p_hostile == 0.5
 

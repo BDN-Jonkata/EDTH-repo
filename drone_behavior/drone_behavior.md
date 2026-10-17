@@ -1,129 +1,113 @@
 # Automatic drone behaviour assessment
 
-The Python reference is [patterns.py](patterns.py), connected to the team's
-two-axis estimator through [AutomaticEstimator](../friend_foe/automatic.py).
-The viewer uses [behavior.js](../ui/viewer/behavior.js) and
-[friend-foe.js](../ui/viewer/friend-foe.js); parity tests compare complete input
-sequences with the Python reference. No server call is needed per simulation frame.
+The Python reference is [patterns.py](patterns.py), with relative encounters in
+[encounters.py](encounters.py). [AutomaticEstimator](../friend_foe/automatic.py)
+feeds the team's two-axis classifier. The viewer ports both modules and compares
+complete trajectories with the Python reference.
 
-The team's five labels remain authoritative: `friendly`, `peaceful`, `unknown`,
-`suspicious`, and `hostile`.
-The module supplies positive hostile-like or negative peaceful-like evidence to
-`threat_llr`. Identity is separate: only verified roster sync or matching friendly
-beacons can establish an ally. Similar motion cannot verify identity. One identity
-can match one track per update, and reusing a packet cannot accumulate confidence.
+The five existing flags remain `friendly`, `peaceful`, `unknown`, `suspicious`
+and `hostile`. Identity comes from verified roster sync or fresh matching trusted
+beacons. Motion never establishes friendly identity.
 
-## Inputs and policy
+## Inputs
 
-Runtime inputs are observed position, velocity, position uncertainty, existence
-probability, state/observation times, received beacons, and our known protected
-areas and authorized corridors. IDs are opaque keys. Target/clutter roles, future
-waypoints, signatures, truth matches and scoring results are excluded.
+Only estimated position/velocity, uncertainty, existence, observation freshness,
+received trusted beacons and previously verified ally histories enter inference.
+There is no protected zone, C2-distance rule, boundary crossing rule or privileged
+scenario role. Absolute location cannot change an assessment. `for_area(c2)` is
+retained as a compatibility constructor and ignores C2. Optional authorized transit
+corridors remain a benign configuration input; none is configured by default.
 
-Default simulation policy protects a **150 m radius around the known C2**. This is
-an explicit scenario assumption, not a learned real-world safety boundary. Override
-it using `BehaviorConfig` in Python or `Sim.run({behavior: ...})` in JavaScript.
-`scenario.config.drone_behavior`, when supplied by the caller, also supplies policy.
-No corridor is authorized by default. Example policy:
+At most two samples per second form a 20 s window. Observation gaps over 2 s and
+association jumps reset history. Position sigma over 25 m or existence below 0.6
+adds no behavioral evidence. A 1.5 s velocity filter reduces derivative noise.
+Stale/predicted observations cannot accumulate evidence. Ally references must be
+fresh, sufficiently observed and verified; input ordering cannot change them.
 
-```json
-{
-  "protected_zones": [{"x": 500, "y": 500, "radius_m": 150}],
-  "corridors": [{"start": [0, 100], "end": [1000, 100], "half_width_m": 30, "max_speed_mps": 20}]
-}
-```
+## Encounter evidence
 
-The module samples at most twice per second, retains a 20 s history, requires
-4 s of usable history, and resets that history after a gap over 2 s. States with
-position sigma over 25 m or existence below 0.6 add no motion evidence. Lower
-uncertainty increases the weight of accepted evidence. The viewer passes the last
-associated measurement time as internal `observed_t`; coasting, replay and late
-packets do not count as new observations. A real tracker must provide equivalent
-freshness metadata. This optional field is internal, not a shared message change.
-Association jumps also start a new history. A 1.5 s velocity filter suppresses
-tracker derivative noise; heading, turn coherence and integrated displacement
-must describe a consistent observed path.
+Relative position and velocity predict closing rate, closest approach and time
+to intercept. This is risk evidence, not proof of intent. Relative-state/time
+prediction is also used in [NASA's detect-and-avoid work](https://software.nasa.gov/software/LAR-18464-1);
+our pursuit rules and numerical thresholds are simulation assumptions and do not
+implement or claim certification under that system.
 
-## Evidence rules
-
-| Observed pattern | Evidence before quality weighting |
+| Observed evidence | Score before uncertainty weighting |
 |---|---:|
-| Sustained approach predicted to enter a protected area | +1.2, insufficient by itself for a hostile flag |
-| Clearly observed outside-to-inside entry, then at least 2 s confidently inside | +1.5, supports suspicion rather than hostility |
-| At least 8 s loitering/hovering, mostly inside | +1.8, supports suspicion |
-| At least 18 s persistent loiter, at least 85% of history inside and currently deep inside | +3.4 |
-| Two observed outside-to-inside intrusions at least 4 s apart within the history | +3.4 |
-| At least 10 s within an authorized corridor, consistent direction/speed, progress at least 40 m, clear of protected areas and not converging | −3.2 |
-| At least 15–18 s consistent transit, position/velocity agreement, over 60 m progress, protected-area clearance and a non-converging course | ramps to −3.4; no corridor required |
-| At least 18 s coherent off-site orbit, over 100 m travel, consistent speed/turn and protected-area clearance | −3.3 |
-| Developing transit with less supporting evidence | −0.7, insufficient by itself for a peaceful flag |
-| Similar speed/turn pattern to a beacon-verified patrol | −0.5, insufficient by itself for a peaceful flag |
-| Erratic motion, missing identity, or ambiguous geometry | No directional motion evidence |
+| A sustained predicted intercept with a moving ally | +1.2, suspicion only |
+| Repeated distinct intercept approaches | +2.1, suspicion only |
+| Contact responds after at least two distinct ally course changes and follows its motion | +1.8 |
+| Responsive pursuit plus sustained faster closure toward an intercept, or repeated intercepts | +3.8 |
+| Consistent transit over 15–18 s, over 60 m progress and position/velocity agreement | ramps to −3.4 |
+| Consistent orbit over 18 s, over 100 m travel and position/velocity agreement | −3.3 |
+| Developing transit / similarity to a verified patrol | weak negative evidence only |
+| Hover, erratic motion, silence or unfamiliar identity alone | no hostile evidence |
 
-Protected-area tests include a two-sigma margin. Peaceful assessments additionally
-require a 40 m clearance margin throughout the history. A straight course is
-projected up to 60 s ahead; a mature coherent orbit uses its estimated circle so
-the tangent does not make its assessment flicker each revolution. Positive risk
-overrides peaceful evidence. Correlated approach/entry cues
-use the strongest score rather than summing. A rolling window represents one
-bounded evidence state: the hook supplies the change after the estimator's decay,
-not the same window's full score every frame. Scores therefore cannot grow toward
-certainty merely because rendering or tracker updates are frequent. Missing
-observations let evidence decay; TTL expiration clears both estimator and feature
-memory. The team's hysteresis selects flags without human approval.
+A single crossing cannot establish hostility. Close distance alone cannot either.
+A contact must react **after** our ally's maneuvers; zero-lag parallel flight and
+our investigator reacting to the contact do not establish responsive pursuit.
+A continuous circle is one maneuver, not many decisions. Poor relative precision
+or unresolved overlapping tracks cannot establish an intercept. Converging
+traffic blocks a premature peaceful assessment. Independent risk overrides benign
+motion; correlated cues use the strongest score, not a sum of duplicate cues.
 
-In the automatic pipeline, missing identity alone leaves a contact `unknown`.
-Suspicion additionally requires behavior score at least 0.65 (exit 0.55) and low
-identity confidence. Peaceful needs score at most 0.1 (exit 0.3); hostile needs at
-least 0.9 (exit 0.7). The raw beacon-only estimator retains its older silence rule
-for baseline comparisons. Neither smooth flight nor a peaceful assessment can
-establish `friendly` identity.
+The rolling window is one bounded evidence state. The hook sends its change after
+forgetting, rather than adding the whole score each frame. Frame rate therefore
+does not create confidence. Scores decay and history expires; a genuine breakoff
+can return a contact to unknown or peaceful.
+When a maneuver leaves the moving window, earlier encounter evidence decays with
+the configured 20 s time constant instead of vanishing on the next sample.
+Details explicitly mark this retained evidence and its age. Sustained safe
+transit/orbit can replace it; an association reset discards it.
 
-A missing beacon does not establish that a drone died or changed allegiance.
-The viewer marks a known-fleet track `coasting` after 1 s without an update and
-retains its last observation age. Fresh beacons restore `confirmed` tracking.
-Identity evidence fades according to link quality; when it no longer supports
-friendly and no behavior evidence supports another class, the flag is `unknown`.
-Coasting predictions and silence add no behavior evidence; without independent
-risk evidence they cannot create suspicion, hostility or an investigation request.
-Tracking status and the five assessment flags remain
-separate; a simulator dropout is not supplied to the classifier as evidence.
+## Automatic decisions and GUI percentages
 
-`p_friendly` and `p_hostile` are **independent simulation scores**, not a five-way
-distribution and not calibrated probabilities of real intent. A benign aircraft,
-bird or vehicle entering the protected area can trigger a threat assessment.
-Kinematically indistinguishable objects receive the same result. Clutter showing
-protected-area intrusion or loiter can still consume investigations; this baseline does not
-claim reliable bird/vehicle recognition. Calibration needs representative benign
-non-allied drone and clutter measurements, beyond scripted clean adapter tracks.
+The viewer displays the actual identity score (`p_friendly`) and behavior risk
+(`p_hostile`) beside every track, plus the selected flag's score when applicable.
+Details show these percentages, peaceful evidence (`1 − p_hostile`), observation
+quality, matched maneuvers, closure, response lag, reasons and the real thresholds.
+These independent simulation scores are not a calibrated five-way probability
+distribution and do not sum to 100%. Unknown has no invented probability.
 
-## Automatic investigations
+Identity is primary: enter friendly at 90%, retain at 70%. Otherwise behavior
+enters hostile at 90% (retain 70%) or peaceful at risk at most 10% (retain at most
+30%, subject to `peaceful_min_updates`). Suspicion additionally needs low identity
+(at most 30%, retain 40%) and risk at least 65% (retain 55%). Ambiguous history stays
+unknown. The raw beacon-only estimator keeps its older silence rule solely for
+baseline comparisons; the automatic pipeline requires behavioral risk.
 
-The viewer's [investigations.js](../ui/viewer/investigations.js) implements the
-existing request/status contract in process. A confirmed track must remain
-suspicious for 3 s. The closest available drone with a feasible sensor is selected,
-one per target. Catalog `ident_range_m` and weather at both ends determine its
-standoff goal, with a 40 m floor; an RF-only drone needs recent observed emitter
-evidence. The goal is not a guaranteed distance from an uncontrolled moving object.
-The fleet's 100 m mutual separation,
-braking reservations, acceleration and sensor-yaw limits remain in force.
+Known friendly tracks coast after 1 s without an update. Their identity can fade
+to unknown; missing beacons alone do not accuse them or dispatch an investigation.
+Fresh matching beacons restore identity. Simulator dropout is not an inference
+feature. Coasting describes tracking status separately from the assessment flag.
 
-Commands override automatic assignments. Loss of contact searches for 10 s, then
-returns to patrol. Friendly, peaceful or hostile assessments end identification
-and release the drone; these tracks continue to be tracked. Assignment, en-route,
-on-station, done and aborted states are recorded. Requests have a 30 s cooldown.
-This mock's investigation contract events are local; observation/beacon/command
-radio loss still uses the channel. Separate distributed delivery of investigation
-requests/statuses remains part of the future real modules.
+## Simulation and investigations
+
+The busy preset contains physical simulator actors that follow or intercept
+moving allies, alongside ordinary non-allied transit, orbit and hover. They react
+to actually flown trajectories; flags never control their scripts. This changes
+sensor observations, not estimator inputs or forced labels. The seeder source is
+unchanged. Its scripted truth remains the baseline; use the viewer's recorded
+truth for responsive actors, as for commanded friendly motion.
+
+Suspicion must persist for 3 s before the closest suitable available drone is
+assigned. Catalog/weather identification ranges, RF feasibility, one follower per
+target, command priority, cooldown and search/release behavior remain in force.
+An ally being approached is excluded from investigating that encounter; another
+available drone observes it while the approached ally keeps its mission.
+The fleet keeps its 100 m mutual separation, acceleration and sensor-turn limits.
+
+Kinematically indistinguishable benign and hostile objects receive the same
+assessment. Smooth flight cannot prove harmless intent; a contact without enough
+observable interaction can remain unknown/peaceful despite a hostile scenario role.
 
 ## Validation
-
-From the repository root:
 
 ```sh
 python3 -m pytest -q
 node ui/viewer/test-behavior.js
 node ui/viewer/test-assessments.js
+node ui/viewer/test-traffic.js
 node ui/viewer/test-investigations.js
 node ui/viewer/missions.test.js
 node ui/viewer/test-commands.js
@@ -131,22 +115,11 @@ node ui/viewer/test-messages.js
 node ui/viewer/test-weather.js
 node ui/viewer/test-clutter.js
 node ui/viewer/test-jamming.js
-python3 -m drone_behavior.evaluate --preset medium --seeds 1 7 83 --birds 2 --vehicles 2
+node ui/viewer/test-bandwidth.js
 ```
 
-The behavior parity test launches Python to produce reference sequences, using
-`python` on Windows and `python3` elsewhere. Set the `PYTHON` environment
-variable to a Python executable path to use a specific installation or virtual
-environment (the test invokes it directly, without a shell).
-Tests cover all five simultaneous labels in mixed sensor traffic, benign false flags,
-truth-role independence, history warmup, noisy transit/orbits, single versus repeated
-intrusions, noisy boundaries, erratic non-threat motion, rate dependence,
-coasting, friendly dropout/recovery without suspicion or dispatch, replay,
-identity priority, one-to-one matching, behavior changes, TTL,
-weather feasibility, dispatch/release/cooldown, and motion limits. Existing seeder
-seed separation remains unchanged: tune on 1–99; reserve 1000–1099 for final tests.
-
-The evaluation CLI prints both beacon-only and automatic metrics, including
-friendly/benign false flags, benign peaceful time, hostile-as-peaceful errors,
-detection delay and clutter/benign investigations. It uses the existing clean-track adapter, so its results are a
-logic check, not real-tracker accuracy or calibration evidence.
+The parity runner uses `python` on Windows and `python3` elsewhere; `PYTHON` can
+specify an executable path. Tests cover pursuit, reverse causality, crossings,
+parallel traffic, uncertain/stale references, identity priority, geography and
+input-order independence, dropout/recovery, replay, frame-rate invariance and
+motion limits. Tune on seeds 1–99; reserve 1000–1099 for final evaluation.

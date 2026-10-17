@@ -3,7 +3,15 @@
   "preset": "busy",
   "seed": 3,
   "seed_set": "tuning",
-  "description": "Mixed traffic: four non-allied benign drones and four threat scenarios, including transit, survey orbit, uncertain hover, protected-area loiter and crossings. The app estimates all five flags from observed behavior.",
+  "description": "Mixed traffic: benign transit, survey orbit and hover, plus simulated pursuit and intercept behavior toward moving allies. Assessment uses observed encounters, without protected zones.",
+  "traffic_behaviors": [
+    {"id": "H3", "ally": "F5", "mode": "follow", "start_s": 3},
+    {"id": "H4", "ally": "F1", "mode": "intercept", "start_s": 20}
+  ],
+  "ground": [
+    {"id": "GS1", "platform": "gs_radar_rf", "position": [100, 500], "heading_deg": 0},
+    {"id": "GS2", "platform": "gs_radar_rf", "position": [655, 460], "heading_deg": 284.5}
+  ],
   "targets": {
     "count": 8,
     "benign_count": 4,

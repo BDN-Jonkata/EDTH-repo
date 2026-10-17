@@ -19,7 +19,7 @@ Sensors report only their native fields (a camera gives bearing and elevation, n
 | Module | Owner | State |
 |--------|-------|-------|
 | `seeder/`, `scenarios/`, `common/` (codec, channel), viewer mock simulation | Orlin | Done. Catalog of 5 UAS and 2 ground sensors (PostgreSQL, shared as `db-dump.json.gz`). Scenario generator: one config plus seed gives `scenario.json` and a separate `truth.json`. Seven presets, clutter (birds, vehicles), weather combinations and events, jamming zones, bandwidth caps, seed sweeps. Python channel: loss (independent or bursty), delay, node clocks. Viewer (`ui/viewer`) runs a JavaScript mock simulation with commanded drone motion. |
-| `drone_behavior/` and the viewer's `investigations.js` | Emkata | Done. Judges motion from observed history and gives positive "hostile-like" or "peaceful-like" evidence to the estimator (`threat_llr`). It keeps identity separate (only beacons or a verified roster make a friendly). Protected area (150 m around C2 by default) and corridors are policy assumptions. Viewer has closest-drone investigation with ack, retry, release and cooldown. Python and JS parity tests. |
+| `drone_behavior/` and the viewer's `investigations.js` | Emkata | Done. Judges observed motion and gives hostile-like or peaceful-like evidence to the estimator (`threat_llr`), separately from verified identity. No protected zone: risk uses responsive pursuit and intercept behavior, with uncertainty gates and decaying encounter memory. Viewer shows identity/risk percentages and thresholds; another available drone investigates an approached ally's contact. Ack, retry, release and cooldown remain. Python and JS parity tests. |
 | `sensors/` | Kristian | Done. Weather (several anomalies at once, events that start/stop/cover a zone, season-based night), sensor quality, required standoff, observation models (range window, field of view, falling detection probability, signatures, honest native noise), beacon source. |
 | `friend_foe/` | Kristian | Done. Estimator with five classes (friendly, peaceful, unknown, suspicious, hostile), two evidence axes (beacon, behaviour), silence weighted by the measured beacon delivery rate, investigation trigger with weather-based standoff, drone-status mapping. |
 | `scoring/` | Kristian | Done. Optimal matching to `truth.json`; count error, position/velocity/heading error, OSPA, ID swaps, friendly and clutter false alarms. Only module allowed to read truth. Not done: reader for the viewer's result JSON. |
@@ -92,7 +92,7 @@ Reading them:
 
 **Stale numbers.** The investigation table in `pipeline/pipeline.md` (off vs on, e.g. 0 % loss: tracked 57 % off, 59 % on; false tracks 1.28 off, 1.93 on) was measured before the latest tracker fixes. Its "off" rows match the old tracker, not the table above. Re-run `python -m pipeline.sweep --paired investigate` before quoting it. What it showed then: a small, mixed effect; hostile tracked 2 to 4 points more at 0 and 50 % loss, but more false tracks and flagged friendlies; about 7 dispatches per run, of which 17 of 37 went to a real hostile, 16 to ghost tracks, 4 to a friendly (small sample). The dispatch eligibility rules were added after that and are not re-measured.
 
-The `--behaviour` run in `pipeline.md` (10 seeds, 15 % loss) is current for what it tests: with the behaviour module on or off the results were identical, because on real tracks it never called anything peaceful (clutter flagged 38 % either way). The scoring module's own sweep and `drone_behavior.evaluate` use the clean test adapter, so they show logic, not real accuracy.
+The `--behaviour` run in `pipeline.md` (10 seeds, 15 % loss) predates the zone-free encounter policy: with that earlier behaviour module on or off the results were identical, because on real tracks it never called anything peaceful (clutter flagged 38 % either way). It does not measure the new policy. The scoring module's own sweep and `drone_behavior.evaluate` use the clean test adapter, so they show logic, not real accuracy.
 
 ## 5. Still to do and weak spots
 
@@ -111,7 +111,7 @@ Known weak spots:
 - Friendlies are flagged at 90 % loss when beacons disappear.
 - Tracker is 2D, uses readings at arrival time (no out-of-order or latency handling), no sensor bias, no time sync, no pose estimation. All `TrackerConfig` values are guesses.
 - Weather affects sensors but does not change the tracker; catalog and weather numbers are assumptions, mostly unverified (only 3 of the catalog's datasheet entries are verified). Combined weather is a worst-case multiplication.
-- Behaviour policy (150 m protected zone around C2, no default corridors) is an assumption, and its scores are not calibrated probabilities.
+- Behaviour thresholds for pursuit and intercept risk are simulation assumptions, and scores are not calibrated probabilities. No protected zone or default corridor is configured.
 - No CI and no formatter.
 
 Tests: `python -m unittest discover -s seeder/tests`, `python seeder/seed_catalog.py --check`, `python -m pytest`, and the `node ui/viewer/test-*.js` files.

@@ -42,21 +42,21 @@ test('a signature of 0 is never detected', () => {
   assert.strictEqual(radarHitsOn(run(withClutter([vehicle(UNSEEN)])), 'V1'), 0);
 });
 
-test('ordinary vehicle transit does not become hostile just for crossing a protected area', () => {
+test('ordinary vehicle transit does not become hostile for its location', () => {
   const res = run(withClutter([vehicle(LOUD)]));
   assert.strictEqual(res.summary.cfa, 0);
   assert.ok(!res.alerts.some((a) => /Clutter vehicle V1 tracked as hostile/.test(a.text)));
 });
 
-test('a prolonged protected-area loiter by clutter is still counted as a false alarm', () => {
+test('a vehicle hovering near C2 does not become hostile without encounter evidence', () => {
   const hovering = vehicle(LOUD);
   const [cx, cy] = SCENARIOS.challenge.c2;
   hovering.waypoints = [[0, cx, cy], [120, cx, cy]];
   // GS1's radar faces this location, giving a continuous observed history. The
   // default GS2 radar's field of view does not cover C2 itself.
   const res = run(withClutter([hovering]), { GS1: 'gs_radar_rf' });
-  assert.ok(res.summary.cfa >= 1, 'cfa ' + res.summary.cfa);
-  assert.ok(res.alerts.some((a) => /Clutter vehicle V1 tracked as hostile/.test(a.text)));
+  assert.strictEqual(res.summary.cfa, 0);
+  assert.ok(!res.alerts.some((a) => /Clutter vehicle V1 tracked as hostile/.test(a.text)));
 });
 
 test('without clutter the summary has no cfa and the truth no clutter', () => {
