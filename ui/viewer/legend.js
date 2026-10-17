@@ -84,12 +84,22 @@
     return [[1, 'Link up', 'Solid. Under 10 % of messages lost.'], [0.7, 'Degraded', 'Dashed amber, with the % lost.'], [0.2, 'Poor', 'Dotted red, with the % lost.']].map((r) => row(linkIcon(r[0]), r[1], r[2]));
   }
 
+  // store-and-forward runs: a node cut off for 30 s or more, and readings that reach C2 late
+  function lateRows() {
+    const ring = (col, dash) => icon('<circle r="11" fill="' + col + '" fill-opacity="0.08" stroke="' + col + '" stroke-width="1.6" stroke-dasharray="' + dash + '"/>');
+    return [
+      row(ring('#FF5A5F', '5 4'), 'Node silent', 'Offline (4 s) or presumed dead (15 s): C2 cannot tell a lost link from a dead node.'),
+      row(ring('#9B7BFF', '2 3'), 'Isolated node', 'Silent for 30 s or more, yet alive and holding data. Pick it in Node health to see what it saw.'),
+      row(icon('<path d="M0 -8l6 8l-6 8l-6 -8z" fill="none" stroke="#F5B13D" stroke-width="1.5" stroke-dasharray="3 2"/>'), 'Late reading', 'Drawn where and when it was taken; solid once it has reached C2. Amber bars on the timeline show the gap it fills.'),
+    ];
+  }
   // symbols only the scenario's own JSON asks for
   function scenarioRows(f) {
     const sc = ctx.state.scenario, net = (sc.degradations && sc.degradations.network) || {}, rows = [];
     const zones = (net.jamming_zones || []).length, clutter = (sc.clutter || []).length;
     if (zones || showAll) rows.push(row(icon('<circle r="12" fill="#FF5A5F" fill-opacity="0.07" stroke="#FF5A5F" stroke-width="1.4" stroke-dasharray="3 4"/>'), 'Jamming zone', zones + ' in this scenario; messages from nodes inside are lost more often.'));
     if (clutter || showAll) rows.push(row(icon('<circle r="5" fill="none" stroke="#8B96A5" stroke-width="1.4" stroke-dasharray="2 2"/>'), 'Clutter', clutter + ' bird or vehicle objects: not threats; a hostile track on one is a false alarm.'));
+    if (ctx.state.res.storeForward || showAll) rows.push(...lateRows());
     if (f.cross || showAll) rows.push(row(icon('<circle r="12" fill="#F5B13D" fill-opacity="0.07" stroke="#F5B13D" stroke-width="1.6" stroke-dasharray="6 4"/>'), 'Predicted crossing', 'Where two hostile predictions meet: identity risk.'));
     return rows;
   }

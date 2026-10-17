@@ -23,6 +23,7 @@
   const Jamming = typeof window !== 'undefined' ? window.Jamming : require('./jamming.js');
   const LinkCap = typeof window !== 'undefined' ? window.LinkCap : require('./linkcap.js');
   const StoreFwd = typeof window !== 'undefined' ? window.StoreFwd : require('./storefwd.js');
+  const LateData = typeof window !== 'undefined' ? window.LateData : require('./latedata.js');
   const Behavior = typeof window !== 'undefined' ? window.Behavior : require('./behavior.js');
   const Traffic = typeof window !== 'undefined' ? window.Traffic : require('./traffic.js');
   const FriendFoe = typeof window !== 'undefined' ? window.FriendFoe : require('./friend-foe.js');
@@ -316,6 +317,7 @@
     world.targets.concat(world.clutter).forEach((h) => { c.pathById[h.id] = h; });
     setDropTimes(c, world, real);
     c.sf = storeForwardFor(world, real, c.nodes);
+    c.late = c.sf ? LateData.createLog() : null; // what each node took, and when C2 got it
     c.nodes.forEach((n) => { c.driftScale[n] = c.rn() * 2 - 1; c.linkQ[n] = 1; });
     addControllers(c, world, assign);
     shareFalseAlarmsAcrossRadars(c);
@@ -548,6 +550,7 @@
   function sendMessage(c, node, payload, t, latency, resend) {
     if (c.tap) c.tap(payload);
     if (c.sf && !resend && payload.header.source_id !== 'C2') StoreFwd.remember(c.sf.nodes[node], payload, t);
+    if (c.late && !resend && payload.type === 'observation') LateData.logSent(c.late, node, payload.header.seq, t, payload.z);
     if (c.link) LinkCap.enqueue(c.link, node, payload, t, latency);
     else putOnChannel(c, node, payload, t, latency);
   }
@@ -647,6 +650,7 @@
       if (m.type === 'node_status') return false;
       const late = t - m.header.t_sent > StoreFwd.LATE_S;
       if (late) c.sf.late[src]++;
+      if (m.type === 'observation') LateData.logArrived(c.late, src, m.header.seq, t);
       return !late || m.type === 'drone_state';
     });
   }
@@ -654,13 +658,14 @@
   function noteHealth(c, t) {
     if (!c.sf) return;
     c.nodes.forEach((n) => {
-      const before = c.sf.health[n], h = StoreFwd.health(c.sf.rx[n], t, before && before.state), node = c.sf.nodes[n];
+      const node = c.sf.nodes[n], before = c.sf.health[n];
+      const h = StoreFwd.health(c.sf.rx[n], t, before && before.state, alive(c, n, t) && StoreFwd.isOffline(node, t));
       c.sf.health[n] = Object.assign(h, { offline: StoreFwd.isOffline(node, t), buffered_s: Math.round(StoreFwd.bufferedS(node, t) * 10) / 10 });
       if (before && before.state !== h.state) noteHealthChange(c, n, before.state, h.state, t);
     });
     noteCatchUp(c, t);
   }
-  const isDown = (state) => state === 'offline' || state === 'presumed_dead';
+  const isDown = (state) => state === 'offline' || state === 'presumed_dead' || state === 'isolated';
   function noteHealthChange(c, n, from, to, t) {
     c.alerts.push({ t, sev: isDown(to) ? 'warn' : 'info', text: n + ' link ' + from.replace('_', ' ') + ' to ' + to.replace('_', ' ') });
     if (isDown(to) || isDown(from)) c.timeline.push({ t, label: n + ' ' + to.replace('_', ' '), color: isDown(to) ? 'red' : 'amber' });
@@ -681,7 +686,8 @@
       const s = c.sf.nodes[n].stats;
       nodes[n] = { stored: s.stored, resent: s.resent, expired: s.expired, late_arrivals: c.sf.late[n], still_held: c.sf.nodes[n].store.length };
     });
-    return { nodes, duplicates: c.sf.dups, outages: c.sf.outages };
+    const readings = LateData.lateReadings(c.late, StoreFwd.LATE_S);
+    return { nodes, duplicates: c.sf.dups, outages: c.sf.outages, late_s: StoreFwd.LATE_S, readings, revisions: c.lite ? [] : LateData.revise(readings, c.frames, DT, fixFromRangeAz) };
   }
   function faultTimeline(c) {
     c.faults.forEach((f) => {

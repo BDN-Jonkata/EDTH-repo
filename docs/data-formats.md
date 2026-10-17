@@ -185,6 +185,12 @@ Everything that crosses the channel is a message with a top-level `type` and a `
 | `covariance` | 3 × 3 position covariance |
 | `status` | only with store-and-forward on: `{offline, buffered_s, oldest_seq}`, see below |
 
+### Late readings
+
+Store-and-forward runs only. `storeForward.readings` lists every sensor reading that reached C2 more than `late_s` after it was taken, or never did, so the viewer can show what a node saw while it was cut off or delayed: `{node, seq, t, arr, k, module, m, sx, sy, rmax, ...}`. `t` is the true time the reading was taken, `arr` when C2 first got it (`null`: never). `m` is the native form: `bearing` (`b`, `sigB`), `rangeaz` (`b`, `r`, `sigB`, `sigR`) or `range` (`r`, `sigR`, a ring); `sx, sy` is the sensor's position. The live tracker does not take late readings in, so the frames stay what C2 had.
+
+`storeForward.revisions` is the history corrected by the late readings that did arrive: `{track, node, t, dx, dy}`, the position correction (metres) the reading gives the track it fits (gate 99 %, the same 2-D update a filter would make) in the recorded frame at `t`. The viewer applies them to the tracks, averaged and fading over 6 s, when "Late data loaded" is on. A correction is capped at 60 m (assumed). This is retrodiction on the recorded track states, not a re-run of the tracker.
+
 ### Store-and-forward messages
 
 Sent only when the scenario turns `degradations.store_forward` on.
@@ -230,7 +236,7 @@ Today the mock simulation ([ui/viewer/sim.js](../ui/viewer/sim.js), header in [m
 
 ## Saved simulation run (`simulations` table, `export-run.js` output)
 
-`{ params, scenario, result }`, where `result` has `frames`, `alerts`, `timeline`, `summary`, `sensors`. Frames are one per 0.1 s (`k`, `t`, `meas`, `tracks`, `truth`, `links`, `m` = metrics). `summary` = `{rmse, countErr, swaps, ffa}` (`ffa` = friendlies flagged hostile), plus `cfa` (clutter objects tracked as hostile) when the scenario has clutter. With store-and-forward on, the result also has `storeForward` = `{nodes: {node: {stored, resent, expired, late_arrivals, still_held}}, duplicates, outages: [{node, kind, t_start, t_end, catch_up_s}]}` (`catch_up_s`: from the end of a fault until the node holds nothing from before it), and each frame has `health` = `{node: {state, silent_s, loss, offline, buffered_s}}`. `state` is C2's view: `ok`, `degraded` (at least 30 % of the recent `seq` numbers missing, ok again below 20 %; at least 20 numbers needed), `offline` (nothing heard for 4 s) or `presumed_dead` (15 s; C2 cannot tell a dead node from a jammed one). The thresholds are assumptions. In `meas`, `clutter: true` marks a random false alarm, not a detection of a clutter object.
+`{ params, scenario, result }`, where `result` has `frames`, `alerts`, `timeline`, `summary`, `sensors`. Frames are one per 0.1 s (`k`, `t`, `meas`, `tracks`, `truth`, `links`, `m` = metrics). `summary` = `{rmse, countErr, swaps, ffa}` (`ffa` = friendlies flagged hostile), plus `cfa` (clutter objects tracked as hostile) when the scenario has clutter. With store-and-forward on, the result also has `storeForward` = `{nodes: {node: {stored, resent, expired, late_arrivals, still_held}}, duplicates, outages: [{node, kind, t_start, t_end, catch_up_s}]}` (`catch_up_s`: from the end of a fault until the node holds nothing from before it), and each frame has `health` = `{node: {state, silent_s, loss, offline, buffered_s}}`. `state` is C2's view: `ok`, `degraded` (at least 30 % of the recent `seq` numbers missing, ok again below 20 %; at least 20 numbers needed), `offline` (nothing heard for 4 s), `presumed_dead` (15 s; C2 cannot tell a dead node from a jammed one) or `isolated` (30 s or more, and the node itself is alive and cut off, as its own store says; a real C2 could only learn that afterwards, so this is the mock's view of the node, not C2's). The thresholds are assumptions. `storeForward` also has `late_s` (3 s: a reading older than this on arrival is late), `readings` and `revisions`, see [Late readings](#late-readings). In `meas`, `clutter: true` marks a random false alarm, not a detection of a clutter object.
 
 To save space, numbers are rounded and a list of same-shaped objects is stored as `{"cols": [...], "rows": [[...]]}`. Read it back with `unpack()` from [seeder/tables.py](../seeder/tables.py):
 
