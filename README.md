@@ -60,7 +60,7 @@ Phased, starting from the optimistic case. Status legend: ⬜ not started · �
 | 🟨 | Define shared message schema (observation, track, uncertainty, timestamp, source ID): header, beacon, `local_track` (with the optional `friend_id`), `bearing_report`, `c2_ack`, `node_status`, investigation and drone-command messages drafted in `docs/data-formats.md`; observation and final COP track not frozen |
 | 🟨 | Choose stack, simulation framework and message bus: Python, JSON Lines and PostgreSQL chosen; bus and the real simulation framework still open (a JavaScript mock simulation runs in the viewer) |
 | ✅ | Define scoring metrics and ground-truth format: `truth.json` format, metrics and the scoring module defined and done |
-| 🟨 | Set up environment, tooling, CI: Python environment, pytest and unittest suites, node tests, `.env` and PostgreSQL done; no CI and no formatter yet |
+| 🟨 | Set up environment, tooling, CI: Python environment, pytest and unittest suites, node tests, `.env` and PostgreSQL done; CI runs the Python and viewer tests on every push and pull request (`.github/workflows/tests.yml`, the commands were run locally, the workflow itself has not run on GitHub yet); no formatter yet |
 
 ### Phase 1 - Optimistic pipeline (clean data)
 

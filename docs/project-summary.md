@@ -72,7 +72,24 @@ Step by step (`pipeline/run.py`, clock step 0.1 s):
 
 **Who may read what.** Only `scoring/` reads `truth.json`. Tracker, friend/foe, behaviour and dispatch read `scenario.json` and the delivered messages. The sensor models and the beacon source are on the simulation side and need true positions, so the tracker never imports them.
 
-## 4. Historical measured results
+## 4. Measured results
+
+### 4a. Current (tuning seeds, `challenge` preset)
+
+`challenge` preset (the two-hostile crossing), 10 tuning seeds, clear weather, central tracker, 10 s warmup, no behaviour module. These are tuning-seed numbers; the reserved test seeds have not been run yet.
+
+| Message loss | Hostile tracked | Count error (abs.) | Position RMSE | ID swaps/run | False tracks/step | Friendlies flagged (of 5) |
+|--------------|-----------------|--------------------|---------------|--------------|-------------------|---------------------------|
+| 0 % | 71 % | 0.63 | 11.3 m | 0.30 | 0.35 | 0 |
+| 30 % | 69 % | 0.58 | 10.8 m | 0.50 | 0.19 | 0 |
+| 50 % | 67 % | 0.54 | 12.3 m | 0.50 | 0.18 | 0 |
+| 70 % | 64 % | 0.60 | 11.7 m | 0.30 | 0.07 | 0 |
+| 90 % | 30 % | 1.11 | 14.9 m | 1.10 | 0.06 | 0.30 |
+| 95 % | 7 % | 1.56 | 20.2 m | 0.20 | 0.01 | 0.20 |
+
+What changed since the numbers in 4b (see `tracker/tracker.md`): (1) the radar's radial speed (Doppler) is part of the association gate, so two hostiles passing within 10 m are no longer mixed up: ID swaps on this preset fell from 1.8 to 0.3 per run at 0 % loss; (2) a friendly's beacon track lives 60 s and is called friendly while the tracker keeps it: friendlies flagged at 90 to 95 % loss fell from 4 to 5 of 5 to 0.2 to 0.3; (3) a wider support window (5 s, 6 s) holds real tracks at high loss: hostile tracked +0.04 to +0.10 and the count error -0.07 to -0.22 at 70 to 90 % loss. The count is still wrong about 0.6 hostiles on average: a hostile is out of every sensor's reach about 20 % of the time and seen only by one bearing-only camera another 21 %.
+
+### 4b. Historical (before those changes)
 
 Source: `tracker/tracker.md` and `pipeline/pipeline.md`. These published historical values predate later changes and are preserved for comparison; they are not a current challenge-preset acceptance run. Test seeds, `medium` preset, clear weather, 20 seeds, 10 s warmup, no behaviour module (every track not confirmed friendly counts as hostile). Loss applies to every message, observations and beacons. See the [challenge audit](challenge-audit.md) for current checks.
 
@@ -103,22 +120,21 @@ The later zone-free integration measurement in `pipeline/pipeline.md` reports ra
 
 To do:
 
-- Demonstrate stable IDs and correct count through the required close crossing; tracker/fusion association remains a priority even though optional predictors are implemented.
-- Validate the optional distributed mode under intermittent links; peer-link topology, merger failover and distributed late-reading handling remain open.
-- Complete Python/viewer feature integration where required: Python store-and-forward and RF jamming noise, and a viewer for the Python COP.
-- Re-measure investigation and behavior with the current tracker, consistent count definitions and crossing-window metrics.
-- Run reproducible challenge acceptance and degradation sweeps, then the reserved final seed set after tuning is frozen; finish the demo and write-up.
+- Run the reserved test seeds once, after tuning is frozen, and report them with the degradation curve; finish the demo and write-up.
+- Label `hostile` from evidence (a camera's class hint from an investigating drone) instead of counting every track that is not friendly or peaceful; this needs the viewer's JavaScript estimator too (Emkata).
+- Cut the misses the sensors cause: a hostile is outside every sensor's reach about 20 % of the time and seen by one bearing-only camera another 21 %. Sector planning, moving the ground sensors and pulling the drones together were tried and did not help (`pipeline/pipeline.md` history); a second viewpoint through `--cue` helps by about 5 points but raises false tracks.
+- Validate the optional distributed mode under intermittent links (it tracks about 4 to 7 points of hostiles less than the central tracker); peer-link topology, merger failover and distributed late-reading handling remain open.
+- Python/viewer parity: the viewer's JavaScript tracker is a different implementation from the Python one (confirmation needs three viewpoints instead of two, different timeouts), and the viewer does not use `health.js`.
 
 Known weak spots:
 
-- Hostile tracked only about 58 % of the time even with no loss; limited by sensor coverage and one-bearing-only sightings.
-- ID swaps (about 4 per run) and ghost tracks (about 0.75 per step) remain; count error looks small partly because missed hostiles cancel ghosts.
-- Clutter: without a useful behaviour signal, birds and vehicles are counted as hostiles (38 % of clutter time) and attract drones. The behaviour module claims no bird or vehicle recognition.
-- Investigation does not identify anything yet (the estimator does not read camera class hints); the stand-in dispatcher wastes many flights on ghosts and leaves a patrol gap.
-- Friendlies are flagged at 90 % loss when beacons disappear.
-- Tracker is 2D and uses readings at arrival time by default. Optional central `--oosm` replays late readings; distributed replay, time sync, sensor bias and GNSS-denied pose estimation remain open. Clock offset/drift affects Python beacons, while native sensor observation timestamps remain ideal; full sensor-clock degradation is untested. All `TrackerConfig` values are assumptions.
-- Weather affects sensors but does not change the tracker; catalog and weather numbers are assumptions, mostly unverified (only 3 of the catalog's datasheet entries are verified). Combined weather is a worst-case multiplication.
-- Behaviour thresholds for pursuit and intercept risk are simulation assumptions, and scores are not calibrated probabilities. No protected zone or default corridor is configured.
-- No CI and no formatter.
+- Hostile tracked 64 to 71 % of the time up to 70 % loss (limited by what the sensors can see), 30 % at 90 % loss; count error about 0.6 hostiles.
+- Without a behaviour signal every non-friend track is counted as hostile; the Python pipeline never labels `hostile`. A track is `unknown` and counts as a threat. The viewer's estimator was calling real hostiles peaceful because steady transit looks safe; it now defaults to a safe mode in which motion alone cannot make a track peaceful.
+- Investigation does not identify anything yet (the estimator does not read camera class hints); `--cue` and `--investigate` raise the false tracks.
+- ID swaps are now rare on `challenge` (0.2 to 1.1 per run) and what is left are restarts; the metrics that look good by accident are listed in the project audit: the identification metric does not see the system's behaviour, position error is computed over matched tracks only, ID swaps are lowest when nothing is tracked.
+- Tracker is 2D and uses readings at arrival time by default. Optional central `--oosm`, `--timesync` and `--storefwd` exist; sensor bias and a GNSS-denied pose estimator remain open. All `TrackerConfig` values are assumptions.
+- Weather affects sensors but does not change the tracker; catalog and weather numbers are assumptions, mostly unverified (only 3 of the catalog's datasheet entries are verified).
+- Behaviour thresholds for pursuit and intercept risk are simulation assumptions, and scores are not calibrated probabilities.
+- Continuous integration runs the tests (`.github/workflows/tests.yml`); there is no formatter.
 
 Tests: `python -m unittest discover -s seeder/tests`, `python seeder/seed_catalog.py --check`, `python -m pytest`, and the `node ui/viewer/test-*.js` files.
