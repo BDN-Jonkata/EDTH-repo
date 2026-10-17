@@ -49,9 +49,9 @@ def test_no_beacon_is_suspicious_never_hostile():
 
 
 def test_hostile_needs_behaviour_evidence():
-    est = FriendFoeEstimator(behaviour_llr=lambda tr: -0.5)
+    est = FriendFoeEstimator(threat_llr=lambda tr: +0.5)
     last, _ = run(est, 40, lambda t: [track("X", t, (0, 0, 0))], lambda t: [])
-    assert last["X"].cls == "hostile"
+    assert last["X"].cls == "hostile" and last["X"].p_hostile > 0.9
 
 
 def test_early_updates_stay_unknown():
@@ -214,7 +214,7 @@ def test_no_request_for_friendly_or_hostile():
         t = k * DT
         tr = [track("A", t, (0, 0, 0))]
         assert trigger.update(t, est.update(t, tr, [beacon("A", t, (0, 0, 0))]), tr) == []
-    est = FriendFoeEstimator(behaviour_llr=lambda x: -0.5)
+    est = FriendFoeEstimator(threat_llr=lambda x: +0.5)
     trigger = make_trigger(min_suspicious_s=0.0)
     for k in range(60):
         t = k * DT
@@ -251,3 +251,74 @@ def test_fog_shrinks_requested_standoff():
     fog = drive_trigger(make_trigger(FOG, modules=CAMERA), 100)[0]
     assert fog["standoff_m"] < clear["standoff_m"]
     assert fog["weather_confidence"] < clear["weather_confidence"]
+
+
+# ---- peaceful: the mirror of suspicious, from positive behaviour evidence only
+
+def silent(est, steps=200):
+    return run(est, steps, lambda t: [track("X", t, (0, 0, 0))], lambda t: [])
+
+
+def test_peaceful_needs_behaviour_evidence_silence_alone_is_suspicious():
+    last, history = silent(FriendFoeEstimator())
+    assert last["X"].cls == "suspicious"
+    assert "peaceful" not in history["X"]
+    assert last["X"].p_hostile == 0.5
+
+
+def test_peaceful_like_behaviour_makes_a_silent_track_peaceful():
+    last, history = silent(FriendFoeEstimator(threat_llr=lambda tr: -0.5), 60)
+    assert last["X"].cls == "peaceful" and last["X"].p_hostile < 0.1
+    assert last["X"].class_prob > 0.9
+
+
+def test_peaceful_is_never_investigated():
+    est, trigger = FriendFoeEstimator(threat_llr=lambda tr: -0.5), make_trigger(min_suspicious_s=0.0)
+    for k in range(200):
+        t = k * DT
+        tr = [track("X", t, (0, 0, 0))]
+        assert trigger.update(t, est.update(t, tr, []), tr) == []
+
+
+def test_a_beacon_match_stays_friendly_whatever_the_behaviour_looks_like():
+    est = FriendFoeEstimator(threat_llr=lambda tr: +0.5)
+    last, _ = run(est, 60, lambda t: [track("A", t, (0, 0, 0))], lambda t: [beacon("A", t, (0, 0, 0))])
+    assert last["A"].cls == "friendly" and last["A"].p_hostile > 0.9
+
+
+def test_behaviour_that_changes_changes_the_class_peaceful_to_hostile_and_back():
+    mood = {"x": -0.5}
+    est = FriendFoeEstimator(threat_llr=lambda tr: mood["x"])
+    seen = []
+    for k in range(400):
+        t = k * DT
+        mood["x"] = -0.5 if t < 40 or t >= 120 else +0.5   # peaceful, then hostile-like, then peaceful again
+        seen.append(est.update(t, [track("X", t, (0, 0, 0))], [])[0].cls)
+    assert seen[int(35 / DT)] == "peaceful"
+    assert seen[int(70 / DT)] == "hostile"
+    assert seen[-1] == "peaceful"
+
+
+def test_old_behaviour_evidence_fades_so_a_quiet_track_returns_to_not_identified():
+    stop = {"at": 30.0}
+    est = FriendFoeEstimator(threat_llr=lambda tr: -0.5 if tr.t < stop["at"] else 0.0)
+    classes = [est.update(k * DT, [track("X", k * DT, (0, 0, 0))], [])[0].cls for k in range(400)]
+    assert classes[int(25 / DT)] == "peaceful"
+    assert classes[-1] == "suspicious"          # the silence is what is left
+
+
+def test_peaceful_does_not_flicker_around_its_threshold():
+    import random as _random
+    rng = _random.Random(2)
+    est = FriendFoeEstimator(threat_llr=lambda tr: -0.2 + rng.gauss(0, 0.3))
+    _, history = silent(est, 400)
+    after = history["X"][int(60 / DT):]
+    changes = sum(a != b for a, b in zip(after, after[1:]))
+    assert changes <= 4
+
+
+def test_hostile_behaviour_wins_over_silence_but_silence_alone_never_makes_hostile():
+    last, history = silent(FriendFoeEstimator(threat_llr=lambda tr: +0.5), 100)
+    assert last["X"].cls == "hostile"
+    _, history = silent(FriendFoeEstimator(), 400)
+    assert "hostile" not in history["X"]
