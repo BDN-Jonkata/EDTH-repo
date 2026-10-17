@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="48" height="48" viewBox="0 0 48 48" fill="none">
+  <title>Hostile assessed drone with threat badge</title>
+  <path d="M9 1h30l8 8v30l-8 8H9l-8-8V9Z" fill="#2A1012" stroke="#BA474E" stroke-width="1.5"/>
+  <path d="m13 13 22 22m0-22L13 35" stroke="#FF5A5F" stroke-width="4" stroke-linecap="round"/>
+  <g fill="#481B20" stroke="#FF9A9D" stroke-width="1.7">
+    <circle cx="12" cy="12" r="6"/><circle cx="36" cy="12" r="6"/>
+    <circle cx="12" cy="36" r="6"/><circle cx="36" cy="36" r="6"/>
+  </g>
+  <path d="m24 13 7 10-3 11h-8l-3-11Z" fill="#FF5A5F" stroke="#FFC4C6" stroke-width="1.5"/>
+  <path d="m21 23 3-4 3 4m-3 2v5" stroke="#481B20" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M34 29h8l5 5v8l-5 5h-8l-5-5v-8Z" fill="#FF5A5F" stroke="#2A1012" stroke-width="2"/>
+  <circle cx="38" cy="38" r="4" stroke="#2A1012" stroke-width="1.8"/>
+  <path d="M38 31v3m0 8v3m-7-7h3m8 0h3" stroke="#2A1012" stroke-width="1.8" stroke-linecap="round"/>
+</svg>

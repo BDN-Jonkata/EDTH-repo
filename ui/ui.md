@@ -68,6 +68,26 @@ Panels: **Sensor feed** shows the latest records the sensors reported (only thei
 
 Map: it fills its whole panel; the dashed square is the 1 km x 1 km area of operations, and you can pan and zoom past its edge.
 
+The fictional village backdrop (`viewer/village.js`) adds connected streets,
+street-facing homes with gardens and driveways, a market square, church, school,
+village green, farm buildings, fields, orchards and a bridge over the brook.
+Plots keep clear of streets, water and the community sites. Scenery is built once
+and stays fixed during playback; the Terrain layer switches it on and off.
+
+Track images use the estimated assessment: blue drone with an identity shield for
+friendly, teal drone with a check for peaceful, amber drone with a caution badge
+for suspicious, red drone with a threat badge for hostile, and a neutral question
+mark for an unknown object. The same SVG assets (`viewer/assets/track-icons/`)
+appear on the map, in the track list, selected-track details and legend. They
+update with classification during playback and scrubbing. Dotted outer rings mark
+tentative tracks; coasting tracks fade. Direction remains a separate velocity
+arrow. Scenario truth roles do not choose track images.
+
+C2 uses a violet command-center image with communications antennas. Ground nodes
+use a cyan sensor station on a tripod, with their node ID and actual sensor kinds
+below it. The same assets (`viewer/assets/infrastructure/`) appear in the legend.
+Silent and isolated-node rings sit outside the images so link status stays visible.
+
 ### Coordinated movement
 
 The patrol controller (`missions.js`) tracks observation opportunities on a 25 m grid. A cell is observed when its center falls inside an active drone-mounted sensor's range window and field of view at that sensor's sampling time. Weather-adjusted geometry applies; a successful detection is not required. Ground sensors contribute to tracking, but do not update patrol coverage history. Destinations stay at least 160 m from other drones and their goals. Patrols commit to useful legs for six seconds before replacing a covered destination, with reassessment at 1 Hz. This prevents sensor samples from continually reversing the flight direction.
