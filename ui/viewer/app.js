@@ -444,8 +444,9 @@
   }
   function tracksSvg(f) {
     const order = { friendly: 0, peaceful: 1, unknown: 2, suspicious: 3, hostile: 4 };
-    // a track that is not confirmed yet is often a radar false alarm that is gone a second later: hidden unless asked for
-    const shown = f.tracks.filter((t) => t.st !== 'tentative' || S.layers.tentative || t.id === S.sel);
+    // a track that was never confirmed is often a radar false alarm that is gone a second later: hidden unless asked for
+    // (one that was confirmed once and lost its support is a real object and stays)
+    const shown = f.tracks.filter((t) => t.st !== 'tentative' || t.once || S.layers.tentative || t.id === S.sel);
     return shown.sort((a, b) => order[a.cls] - order[b.cls]).map((t) => trackSvg(t, f, t.id === S.sel)).join('');
   }
 

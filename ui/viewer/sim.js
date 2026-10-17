@@ -844,7 +844,8 @@
   function isStale(tr, t) {
     const silent = t - tr.lastUpd;
     const tentative = tr.status === 'tentative';
-    return (tentative && silent > 1.5) || (!tentative && silent > 8) || tr.P[0] + tr.P[5] > 40000;
+    // a track that was confirmed once and lost its support is a real object going back to tentative: it lives as long as a confirmed one
+    return (tentative && silent > (tr.confirmedOnce ? 8 : 1.5)) || (!tentative && silent > 8) || tr.P[0] + tr.P[5] > 40000;
   }
   // a track riding on a beacon-known friendly is that friendly, not a new object
   function ridesOnFriend(c, tr, t) {
@@ -902,7 +903,7 @@
     const v = tr.classification || { cls: 'unknown', class_prob: 0.5, p_hostile: 0.5, p_friendly: 0.5 };
     const cls = v.cls, pH = v.p_hostile, pF = v.p_friendly;
     return {
-      id: tr.id, cls, st: tr.status, x: tr.s[0], y: tr.s[1], vx: tr.s[2], vy: tr.s[3],
+      id: tr.id, cls, st: tr.status, once: !!tr.confirmedOnce, x: tr.s[0], y: tr.s[1], vx: tr.s[2], vy: tr.s[3],
       pxx: tr.P[0], pyy: tr.P[5], pxy: tr.P[1], pvv: tr.P[10] + tr.P[15],
       conf: v.class_prob, behavior: tr.behavior || {},
       age: t - tr.lastUpd, nodes: Object.keys(tr.srcs).filter((n) => t - tr.srcs[n] <= 2), pH, pF, born: tr.born,
