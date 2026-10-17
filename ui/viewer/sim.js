@@ -30,6 +30,7 @@
   const FriendFoe = typeof window !== 'undefined' ? window.FriendFoe : require('./friend-foe.js');
   const Investigations = typeof window !== 'undefined' ? window.Investigations : require('./investigations.js');
   const Metrics = typeof window !== 'undefined' ? window.Metrics : require('./metrics.js');
+  const Assessment = typeof window !== 'undefined' ? window.Assessment : require('./assessment.js');
   const CAT = typeof CATALOG !== 'undefined' ? CATALOG : require('./catalog.js'); // eslint-disable-line no-undef
   const DT = 0.1;
   const T_END = 120;
@@ -314,6 +315,7 @@
       beaconEvery: Math.max(1, Math.round(10 / (world.beacon.rate_hz || 2))), beaconSigma: world.beacon.pos_sigma_m || 3,
       tracks: [], pending: [], friends: {}, alerts: [], frames: [], timeline: [], lastMatch: {}, sqHist: [], crossAlerted: {},
       beacons: {},
+      groundWatch: world.ground.map((g)=>({...g,goalHeading:g.heading,updated:0})),
       n: { hostile: 0, unk: 0, swaps: 0, ffa: 0, cfa: 0, bfa: 0, evalSq: 0, evalN: 0, evalVelocitySq: 0,
         evalHeadingSq: 0, evalHeadingN: 0, evalTruthN: 0, evalExactN: 0, evalCnt: 0, evalCntN: 0 },
     };
@@ -339,10 +341,13 @@
     });
     c.investigations = new Investigations.Controller(c.sensors, fleet.map((f) => f.id), c.wx,
       (s, sp, tg, t) => sensorAt(c, s, t, sp, tg), (m) => { if (c.tap) c.tap(m); }, c.seqs,
-      (id, t) => id === 'estimator' ? t : localTime(c, id, t));
+      (id, t) => id === 'estimator' ? t : localTime(c, id, t),
+      {cooperative:true,cueGround:(tr,t)=>cueGround(c,tr,t)});
     c.missions = new Mission.Controller(fleet, c.sensors, DT, (t, text) => {
       c.alerts.push({ t, text, sev: 'info' }); c.timeline.push({ t, label: text, color: 'amber' });
-    }, { requireInvestigation: true, geometry: (tr, d, t) => c.investigations.geometry(tr, d, t) });
+    }, { requireInvestigation: true, geometry: (tr, d, t) => c.investigations.geometry(tr, d, t),
+      coverage:{base:world.c2,ground:c.groundWatch,sensorAt:(s,sp,tg,t)=>sensorAt(c,s,t,sp,tg),isAlive:(id,t)=>alive(c,id,t)} });
+    c.assessment = new Assessment.Model(world.c2);
     const policy = c.P.behavior || (c.P.scenario?.config?.drone_behavior) || {};
     c.traffic = new Traffic(c.P.traffic || c.P.scenario?.config?.traffic_behaviors, world.targets, world.friendlies, DT);
     c.classifier = new FriendFoe.AutomaticEstimator(Behavior.configFor([world.c2.x, world.c2.y], policy),
@@ -372,6 +377,7 @@
 
   function stepFrame(c, k) {
     const t = k * DT;
+    c.groundWatch.forEach((g)=>{g.heading=wrapPi(g.heading+Math.max(-Math.PI/9*DT,Math.min(Math.PI/9*DT,wrapPi(g.goalHeading-g.heading))));});
     c.missions.drones.forEach((d) => { d.disabled = !alive(c, d.id, t); });
     c.missions.record(t);
     c.missions.observe(t, k, (id) => alive(c, id, t), (s, sp, tg) => sensorAt(c, s, t, sp, tg));
@@ -418,7 +424,9 @@
       params: Object.assign({}, c.P, { assign: c.assign, scenario: undefined, scenario_id: c.world.id }),
       T_END: c.T_END, DT, NF: c.NF, EVAL: c.EVAL, sensors: c.sensors.map(sensorInfo),
       missionConfig: { cellSize: Mission.CELL, areaSize: Mission.SIZE, separation: Mission.SEP,
-        patrolSpacing: Mission.COMFORT, maxAcceleration: Mission.ACCEL, maxYawDegSec: Mission.YAW_RATE * RAD2DEG },
+        patrolSpacing: Mission.COMFORT, maxAcceleration: Mission.ACCEL, maxYawDegSec: Mission.YAW_RATE * RAD2DEG,
+        coverage:{...c.missions.coverage.config},base:{...c.world.c2} },
+      assessmentConfig:{...c.assessment.config},
       behaviorConfig: c.classifier.behavior.config,
       estimatorConfig: { ...c.classifier.config },
       investigations: { requests: c.investigations.requests, statuses: c.investigations.statuses },
@@ -436,6 +444,7 @@
     return {
       t: f.t, k: f.k, truth: f.truth, tracks: f.snap, match: score.match.map((m) => [m[0], m[1]]),
       missions: c.missions.snapshot(), coverage: c.missions.cells.map((cell) => cell.last),
+      watch:c.missions.coverage.stats(f.t), groundWatch:c.groundWatch.map((g)=>({id:g.id,x:g.x,y:g.y,heading:g.heading})),
       meas: f.frameMeas.map((z) => ({ k: z.k, node: z.node, module: z.module, t: z.t, m: z.m, sx: z.sx, sy: z.sy, b: z.b, r: z.r, rmax: z.rmax, fields: z.fields, merged: !!z.merged, clutter: !!z.clutter })),
       links: Object.assign({}, c.linkQ), cross: f.cross,
       ...(c.sf ? { health: JSON.parse(JSON.stringify(c.sf.health)) } : {}),
@@ -448,10 +457,33 @@
   }
 
   // ---------------------------------------------------------------- world state
+  function cueGround(c,tr,t) {
+    if(t<(tr.nextGroundCue??-Infinity))return tr.groundCues||[];
+    tr.nextGroundCue=t+1; const cued=[];let quickest=Infinity;
+    c.groundWatch.forEach((g)=>{
+      if(!alive(c,g.id,t) || tr.assessment.source_nodes.includes(g.id) ||
+          c.missions.coverage.reserved.has(g.id) ||
+          (g.target && g.target!==tr.id && t-g.updated<3))return;
+      const usable=c.sensors.some((s)=>{
+        if(s.node!==g.id || s.kind==='RF')return false;
+        const q=sensorAt(c,s,t,g,{x:tr.s[0],y:tr.s[1]}),r=Math.hypot(tr.s[0]-g.x,tr.s[1]-g.y);
+        return q.pd>=0.15 && r>=q.minRange && r<=q.range*0.85;
+      });
+      if(!usable)return;
+      const heading=Math.atan2(tr.s[1]-g.y,tr.s[0]-g.x);
+      const check=c.missions.coverage.departure(g,g,heading,t);
+      // Ground turning does not need to obey the airborne anchor radius.
+      if(check.lostCells>0)return;
+      quickest=Math.min(quickest,Math.abs(wrapPi(heading-g.heading))/(Math.PI/9));
+      g.goalHeading=heading;g.target=tr.id;g.updated=t;cued.push(g.id);
+    });
+    tr.groundWait=quickest<=1.5?1.5:0;
+    tr.groundCues=cued;return cued;
+  }
   const alive = (c, node, t) => c.dropT[node] === undefined || t < c.dropT[node];
   const clockOffset = (c, node, t) => c.drift * c.driftScale[node] * (t / c.T_END);
   function nodePos(c, id, t) {
-    const g = c.world.ground.find((x) => x.id === id);
+    const g = c.groundWatch.find((x) => x.id === id);
     if (g) return { x: g.x, y: g.y, vx: 0, vy: 0, heading: g.heading };
     const f = c.world.friendlies.find((x) => x.id === id);
     return Object.assign({ alt: f.alt }, friendlyState(c, f, t));
@@ -764,6 +796,9 @@
     if (!tr.firstSources) tr.firstSources = {};
     tr.firstSources[rec.node] = Math.min(tr.firstSources[rec.node] ?? Infinity, rec.t);
     tr.observedT = Math.max(tr.observedT ?? -Infinity, rec.t);
+    const bucket=Math.floor(rec.t*2+1e-8);
+    tr.observations=(tr.observations||[]).filter((r)=>rec.t-r.t<=6 && !(r.node===rec.node && r.k===rec.k && r.bucket===bucket));
+    tr.observations.push({node:rec.node,k:rec.k,t:rec.t,sx:rec.sx,sy:rec.sy,m:rec.m,merged:rec.merged,bucket});
   }
   // bearing only: needs a second bearing from another node to fix a position
   function pairBearing(c, rec, t) {
@@ -835,6 +870,7 @@
     for (let dup = findDuplicate(c.tracks); dup; dup = findDuplicate(c.tracks)) {
       const keep = dup.replacement;
       Object.entries(dup.srcs).forEach(([key, time]) => { keep.srcs[key] = Math.max(keep.srcs[key] ?? -Infinity, time); });
+      keep.observations=(keep.observations||[]).concat(dup.observations||[]).filter((r)=>t-r.t<=6);
       if (!keep.firstSources) keep.firstSources = {};
       Object.entries(dup.firstSources || {}).forEach(([key, time]) => { keep.firstSources[key] = Math.min(keep.firstSources[key] ?? Infinity, time); });
       keep.observedT = Math.max(keep.observedT ?? -Infinity, dup.observedT ?? -Infinity);
@@ -889,9 +925,16 @@
     const beacons = Object.values(c.beacons).filter((b) => t - b.t <= 2);
     const found = c.classifier.update(t, inputs, beacons);
     const byId = new Map(c.tracks.map((tr) => [tr.id, tr]));
-    found.forEach((v) => {
+    found.forEach((original) => {
+      let v=original;
       const tr = byId.get(v.track_id), prev = tr.cls;
+      const reviewed=c.assessment.update(t,tr,v); v=reviewed.decision;
+      tr.assessment=reviewed.review;
       tr.classification = v; tr.cls = v.cls; tr.behavior = c.classifier.explain(v.track_id);
+      if(reviewed.reasons.length)tr.behavior={...tr.behavior,reasons:[...(tr.behavior.reasons||[]),...reviewed.reasons]};
+      if(tr.kind!=='frd' && tr.status!=='tentative' && tr.assessment.state==='insufficient_evidence' && !tr.reviewAlerted) {
+        tr.reviewAlerted=true;c.alerts.push({t,sev:'warn',text:tr.id+' review overdue: insufficient independent observations; coverage retained'});
+      }
       if (v.cls !== prev && ['hostile', 'peaceful', 'suspicious'].includes(v.cls)) {
         c.alerts.push({ t, sev: v.cls === 'hostile' ? 'warn' : 'info',
           text: tr.id + ' assessed ' + v.cls + ': ' + (v.cls === 'suspicious' ? 'identity unverified; ' : '') +
@@ -906,6 +949,7 @@
       id: tr.id, cls, st: tr.status, once: !!tr.confirmedOnce, x: tr.s[0], y: tr.s[1], vx: tr.s[2], vy: tr.s[3],
       pxx: tr.P[0], pyy: tr.P[5], pxy: tr.P[1], pvv: tr.P[10] + tr.P[15],
       conf: v.class_prob, behavior: tr.behavior || {},
+      assessment:tr.assessment?{...tr.assessment,source_nodes:tr.assessment.source_nodes.slice()}:null,
       age: t - tr.lastUpd, nodes: Object.keys(tr.srcs).filter((n) => t - tr.srcs[n] <= 2), pH, pF, born: tr.born,
     };
   }

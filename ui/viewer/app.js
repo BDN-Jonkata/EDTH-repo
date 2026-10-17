@@ -17,7 +17,9 @@
     resembles_verified_patrol_only: 'Similar movement does not verify identity', converging_traffic: 'Course converges with observed traffic',
     sustained_collision_course: 'Sustained predicted intercept with a moving ally', repeated_intercept_approaches: 'Repeated intercept approaches',
     responsive_pursuit: 'Follows repeated course changes made by an ally', pursuit_with_intercept_risk: 'Responsive pursuit with aggressive closure / intercept risk',
-    recent_encounter_evidence: 'Earlier encounter evidence is decaying' };
+    recent_encounter_evidence: 'Earlier encounter evidence is decaying',
+    corroborated_inbound_course: 'Independent sensors corroborate a sustained course toward C2',
+    recent_corroborated_approach: 'Recent corroborated approach; assessment is decaying' };
   const classColor = (cls) => ({ friendly: COL.f, hostile: COL.h, suspicious: COL.u, peaceful: '#5FD0C0', unknown: '#A9B3BF' }[cls] || COL.u);
   const percent = (value) => (Math.max(0, Math.min(1, value)) * 100).toFixed(1) + '%';
   const Y = (n) => 1000 - n; // world North -> svg y
@@ -247,7 +249,7 @@
   const KDASH = { EO: '5 4', IR: '4 3', MIC: '1 4', RAD: '8 3', RF: '2 5' };
   // Patrol drones face their motion; followers and searchers can yaw to observe.
   function nodeState(f, id) {
-    const g = scen().ground.find((q) => q.id === id);
+    const g = (f.groundWatch || scen().ground).find((q) => q.id === id);
     if (g) return { x: g.x, y: g.y, heading: g.heading };
     const o = f.truth.find((q) => q.id === id);
     return o ? { x: o.x, y: o.y, heading: o.heading === undefined ? Math.atan2(o.vy, o.vx) : o.heading } : null;
@@ -354,9 +356,10 @@
     $('cover').innerHTML = S.layers.cover ? coverageSvg(f) : '';
     $('coverageAge').innerHTML = S.layers.coverageAge && f.coverage ? f.coverage.map((last, i) => {
       const age = last < 0 ? 1 : Math.min(1, (f.t - last) / 60);
-      const color = last < 0 ? '#FF5A5F' : age > 0.5 ? '#F5B13D' : '#3FC1D9';
+      const inside=!f.watch || Math.hypot(i%40*25+12.5-scen().c2.x,Math.floor(i/40)*25+12.5-scen().c2.y)<=f.watch.radius_m;
+      const color = !inside ? '#6F7B89' : last < 0 ? '#FF5A5F' : age > 0.5 ? '#F5B13D' : '#3FC1D9';
       return '<rect x="' + (i % 40 * 25) + '" y="' + (975 - Math.floor(i / 40) * 25) + '" width="25" height="25" fill="' + color + '" opacity="' + (0.08 + age * 0.22) + '"/>';
-    }).join('') : '';
+    }).join('')+(f.watch?'<circle data-watch-area="true" cx="'+scen().c2.x+'" cy="'+Y(scen().c2.y)+'" r="'+f.watch.radius_m+'" fill="none" stroke="#3FC1D9" stroke-dasharray="7 5" stroke-opacity="0.6"/>':'') : '';
     $('missions').innerHTML = S.layers.missions ? (f.missions || []).map((m) => {
       const d = f.truth.find((q) => q.id === m.id);
       if (!d || !m.destination) return '';
@@ -367,7 +370,9 @@
       (m.target ? ' → ' + m.target : '') + (m.destination ? ' · E' + pad4(m.destination.x) + ' N' + pad4(m.destination.y) : '') +
       (m.blocked ? ' · yielding' : '') + '</div>').join('');
     const observed = f.coverage ? f.coverage.filter((last) => last >= 0).length : 0;
-    $('coverageStatus').textContent = (observed / 16).toFixed(1) + '% observed · ' + S.res.missionConfig.separation + ' m minimum separation' +
+    const watch=f.watch;
+    $('coverageStatus').textContent = (watch ? 'Active watch '+watch.area_km2.toFixed(2)+' km² · '+Math.round(100*watch.fresh/Math.max(1,watch.total))+'% fresh / '+watch.fresh_s+' s · '+watch.blind+' stale/unseen cells · ' : '')+
+      (observed / 16).toFixed(1) + '% of full map observed · ' + S.res.missionConfig.separation + ' m minimum separation' +
       (S.layers.coverageAge ? ' · red: unvisited · amber: older · cyan: recent (60 s scale)' : '');
     $('jam').innerHTML = S.layers.net ? jammingSvg(f) : '';
     const links = [];
@@ -553,7 +558,7 @@
       ['friendly', 'Identity ≥ ' + percent(cfg.friendly_enter), 'retain ≥ ' + percent(cfg.friendly_exit)],
       ['hostile', 'Risk ≥ ' + percent(cfg.hostile_enter), 'retain ≥ ' + percent(cfg.hostile_exit)],
       ['peaceful', 'Risk ≤ ' + percent(cfg.peaceful_enter), 'retain ≤ ' + percent(cfg.peaceful_exit)],
-      ['suspicious', 'Identity ≤ ' + percent(cfg.suspicious_enter) + ' and risk ≥ ' + percent(cfg.suspicious_threat_enter),
+      ['suspicious', 'Identity ≤ ' + percent(cfg.suspicious_enter) + ' and risk ≥ ' + percent(cfg.suspicious_threat_enter) + '; or corroborated inbound course',
         'retain identity ≤ ' + percent(cfg.suspicious_exit) + ', risk ≥ ' + percent(cfg.suspicious_threat_exit)],
       ['unknown', 'No decisive label / insufficient history', 'Needs fresh, usable observations'],
     ];
@@ -564,11 +569,16 @@
         .map((c) => '<div style="display:flex;flex-direction:column;gap:2px"><span style="font-size:11px;color:#8B96A5">' + c[0] + '</span><span class="mono" style="font-size:13px">' + c[1] + '</span></div>').join('') + '</div>' +
       '<div style="display:flex;flex-direction:column;gap:6px"><span style="font-size:11px;color:#8B96A5">Contributing sensors (last 2 s)</span><div class="mono" style="display:flex;flex-wrap:wrap;gap:6px;font-size:11px">' + sources + '</div></div>' +
       '<div style="display:flex;flex-direction:column;gap:6px"><span style="font-size:11px;color:#8B96A5">Automatic assessment · independent scores</span>' +
-      [['Verified identity', t.pF, '#5B9BFF'], ['Behavior risk', t.pH, '#FF5A5F'], ['Peaceful evidence', 1-t.pH, '#5FD0C0'], ['Observation quality', t.behavior.quality || 0, '#A9B3BF']].map(([name, value, color]) =>
+      [['Verified identity', t.pF, '#5B9BFF'], ['Behavior risk', t.pH, '#FF5A5F'], ['Peaceful evidence', 1-t.pH, '#5FD0C0'], ['Observation quality', t.behavior.quality || 0, '#A9B3BF'],
+        ['Sensor corroboration',t.assessment?.confidence||0,'#3FC1D9']].map(([name, value, color]) =>
         '<div style="display:flex;justify-content:space-between;font-size:11px"><span>' + name + '</span><span class="mono">' + (value * 100).toFixed(1) + '%</span></div>' +
         '<div role="meter" aria-label="' + name + '" aria-valuemin="0" aria-valuemax="100" aria-valuenow="' + (value * 100).toFixed(1) + '" style="height:7px;background:#1B222C"><div style="height:100%;width:' + value * 100 + '%;background:' + color + '"></div></div>').join('') +
       '<span style="font-size:11px;color:#C9D1DB">Observed pattern: ' + (PATTERN_NAME[t.behavior.pattern] || 'Collecting history') +
       ' · ' + (t.behavior.observed_s || 0).toFixed(1) + ' s usable history</span>' +
+      (t.assessment?'<div data-review-state="'+t.assessment.state+'" style="font-size:11px;color:#C9D1DB">Review: '+t.assessment.state.replace(/_/g,' ')+(t.assessment.needs_observer?' · '+t.assessment.elapsed_s.toFixed(1)+' / '+t.assessment.deadline_s+' s':'')+
+        (t.assessment.inbound?' · approaching C2':'')+'<br>Fresh nodes: '+(t.assessment.source_nodes.join(', ')||'none')+
+        (t.assessment.ground_cues?.length?' · ground cue: '+t.assessment.ground_cues.join(', '):'')+
+        (t.assessment.dispatch_blocked?'<br>Observer held: '+t.assessment.dispatch_blocked.replace(/_/g,' '):'')+'</div>':'')+
       (t.behavior.features?.reference_track_id ? '<span style="font-size:11px;color:#C9D1DB">Compared with ' + t.behavior.features.reference_track_id + ' · ' + t.behavior.features.response_count + ' matched responses · ' + t.behavior.features.response_lag_s + ' s response lag · ' + t.behavior.features.closing_m.toFixed(1) + ' m closed</span>' : '') +
       '<span style="font-size:11px;color:#8B96A5">' + ((t.behavior.reasons || ['insufficient_history']).map((v) => REASON_NAME[v] || v.replace(/_/g, ' ')).join(' · ')) + '</span>' +
       (t.behavior.retained_risk ? '<span style="font-size:11px;color:#C9D1DB">Earlier encounter · ' + t.behavior.retained_risk.age_s.toFixed(1) + ' s ago · ' + t.behavior.retained_risk.reasons.map((v) => REASON_NAME[v] || v.replace(/_/g, ' ')).join(' · ') + ' · score decaying</span>' : '') +

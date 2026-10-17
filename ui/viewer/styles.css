@@ -139,7 +139,7 @@ footer.bar { background: #0F141A; border-top: 1px solid #222A35; padding: 12px 1
 .late-toggle span { color: #6F7B89; font-size: 11px; }
 .tbl tr.pick { cursor: pointer; }
 .tbl tr.pick:hover td { background: #141B24; }
-.late-body { display: flex; flex-direction: column; gap: 6px; font-size: 12px; }
+.late-body { display: flex; flex-direction: column; gap: 6px; font-size: 12px; min-width: 0; overflow-x: auto; }
 .late-card { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; padding: 6px 8px; border: 1px solid #3A2A2D; border-left: 3px solid #FF5A5F; background: #1A1316; color: #D5DBE3; }
 .late-card.iso { border-color: #3A3350; border-left-color: #9B7BFF; background: #15131F; }
 .late-note { color: #8B96A5; font-size: 11px; }

@@ -16,7 +16,16 @@ const tests = [];
 const test = (name, fn) => tests.push([name, fn]);
 const run = (scenario, extra) => Sim.run(Object.assign({ seed: 7, mode: 'realistic', weather: 'clear', loss: 10, delayMs: 100, driftMs: 0, scenario }, extra));
 let outage = null;
-const outageRun = () => outage || (outage = run(SCENARIOS.outage));
+function outageScenario() {
+  const sc=JSON.parse(JSON.stringify(SCENARIOS.outage));
+  // The transport fixture must actually observe during its outage, independent
+  // of which way a coverage patrol points a forward camera. Use native omni
+  // RF/acoustics here; the production preset and controller remain unchanged.
+  const f2=sc.friendlies.find(f=>f.id==='F2'),passive=sc.friendlies.find(f=>f.platform==='px4_quad_passive');
+  f2.platform='px4_quad_passive';f2.sensors=JSON.parse(JSON.stringify(passive.sensors));
+  return sc;
+}
+const outageRun = () => outage || (outage = run(outageScenario()));
 
 // ------------------------------------------------------------ the log and the corrections
 test('a reading is late when it arrives long after it was taken, or never', () => {
@@ -88,7 +97,7 @@ test('late readings give corrections on tracks that exist, in the time the readi
 test('the live picture is unchanged by the log: no store-and-forward, no readings; lite runs have no revisions', () => {
   const plain = run(SCENARIOS.challenge);
   assert.strictEqual(plain.storeForward, undefined);
-  const lite = Sim.run({ seed: 7, mode: 'realistic', weather: 'clear', loss: 10, delayMs: 100, driftMs: 0, scenario: SCENARIOS.outage }, { lite: true });
+  const lite = Sim.run({ seed: 7, mode: 'realistic', weather: 'clear', loss: 10, delayMs: 100, driftMs: 0, scenario: outageScenario() }, { lite: true });
   assert.deepStrictEqual(lite.storeForward.revisions, []);
   assert.strictEqual(lite.summary.rmse, outageRun().summary.rmse, 'logging changes nothing the tracker sees');
 });
