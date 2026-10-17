@@ -16,6 +16,8 @@ from typing import Dict, Iterator, List, Optional
 
 from common.channel import Channel
 from common.codec import Sequencer
+from health.monitor import HealthMonitor
+from health.trust import weighted
 from friend_foe.estimator import Beacon, FriendFoeEstimator, TrackState, for_scenario
 from pipeline.dispatch import Investigator
 from fusion.hub import BearingHub
@@ -48,9 +50,10 @@ class Frame:
 
 class Pipeline:
     def __init__(self, scenario: dict, seed: int = 0, tracker_config: Optional[TrackerConfig] = None,
-                 investigate: bool = False, distributed: bool = False, cue: bool = False):
+                 investigate: bool = False, distributed: bool = False, cue: bool = False, trust: bool = False):
         """`investigate` lets the drones be commanded (`pipeline/fleet.py`) and adds the investigator that
-        commands them (`pipeline/dispatch.py`); without it every drone flies its patrol loop. `distributed`
+        commands them (`pipeline/dispatch.py`); without it every drone flies its patrol loop. `trust` weights each
+        reading by how healthy its node's link is and leaves out late ones (`health/`; central tracker only). `distributed`
         replaces the one central tracker by a tracker per node and a merger (`pipeline/nodes.py`). `cue` also
         sends the closest other drone at a bearing nothing explains (`pipeline/cueing.py`); it implies the
         commanded drones and the investigator."""
@@ -67,6 +70,8 @@ class Pipeline:
         self.nodes = NodeTrackers(tracker_config, sequencers) if distributed else None
         self.merger = Merger() if distributed else None
         self.hub = BearingHub(tracker_config) if distributed else None
+        self.health = HealthMonitor()                  # judges every node's link from what the channel delivers
+        self.use_trust = trust and not distributed     # the distributed mode's observations skip the channel, so their seq has gaps
 
     def step(self, t: float) -> Frame:
         if self.fleet is not None:
@@ -79,12 +84,13 @@ class Pipeline:
         for beacon in self.beacons.at(t):
             self.channel.send(beacon, t)
         delivered = self.channel.deliver(t)
+        self.health.observe_all(delivered, t)
         beacons = [m for m in delivered if m["type"] == "friendly_beacon"]
         for b in beacons:
             self.poses.note_beacon(b)
         if self.nodes is not None:
             return self._distributed_step(t, observations, beacons, delivered)
-        readings = self._readings([m for m in delivered if m["type"] == "observation"])
+        readings = self._readings([m for m in delivered if m["type"] == "observation"], t)
         tracks = self.tracker.step(t, readings, beacons)
         return Frame(t, tracks, beacons, len(readings), readings)
 
@@ -96,12 +102,16 @@ class Pipeline:
         self.merger.ingest(delivered + self.hub.step(t, delivered))
         return Frame(t, self.merger.step(t), beacons, len(readings), readings)
 
-    def _readings(self, observations: List[dict]) -> list:
+    def _readings(self, observations: List[dict], t: float = 0.0) -> list:
         out = []
         for obs in observations:
+            if self.use_trust and self.health.is_late(t - obs["t_obs"]):
+                continue                                  # too old for the live picture
             module = self.modules[obs["sensor_id"]]
             pose = self.poses.pose(obs["header"]["source_id"], obs["t_obs"])
             m = from_observation(obs, pose, module)
+            if m is not None and self.use_trust:
+                m = weighted(m, self.health.trust(obs["header"]["source_id"], t, t - obs["t_obs"]))
             if m is not None:
                 out.append(m)
         return out
@@ -141,16 +151,20 @@ def _beacon(m: dict) -> Beacon:
 def scored_frames(scenario: dict, seed: int = 0, tracker_config: Optional[TrackerConfig] = None,
                   estimator: Optional[FriendFoeEstimator] = None, investigate: bool = False,
                   stats: Optional[dict] = None, recorded: Optional[dict] = None,
-                  keep_identity: bool = False, distributed: bool = False, cue: bool = False) -> Iterator[tuple]:
+                  keep_identity: bool = False, distributed: bool = False, cue: bool = False,
+                  trust: bool = False) -> Iterator[tuple]:
     """(t, [Estimate]) for the scoring module: the tracker's confirmed tracks with the estimator's class.
 
     With `investigate`, suspicious tracks send drones out; when the run ends `stats` (if given) is filled with
     the dispatcher's counts (requests, dispatched, on_station, done, aborted), and `recorded` (if given) with
     each drone's real trajectory as `[t, x, y, vx, vy]` rows, which scoring needs because the drones left
     the scripted patrol in `truth.json` (see `scoring.truth.with_recorded_samples`). `keep_identity` runs the
-    predictor's identity keeper (`predictor/identity.py`) on the tracks, so a re-acquired target keeps its ID."""
+    predictor's identity keeper (`predictor/identity.py`) on the tracks, so a re-acquired target keeps its ID.
+    `trust` weights readings by link health and lets a cut-off friendly's silence count for less (`health/`)."""
     estimator = estimator or FriendFoeEstimator(for_scenario(scenario))
-    pipeline = Pipeline(scenario, seed, tracker_config, investigate, distributed, cue)
+    pipeline = Pipeline(scenario, seed, tracker_config, investigate, distributed, cue, trust)
+    if trust:        # a missing beacon of a node whose link is down is not evidence against the drone
+        getattr(estimator, "estimator", estimator).silence_explained = pipeline.health.explains_silence
     keeper = IdentityKeeper() if keep_identity else None
     pending: List[Beacon] = []
     classes: Dict[str, str] = {}
