@@ -98,7 +98,7 @@ def test_full_loss_delivers_no_beacons_and_partial_loss_some():
 
 def test_bursty_loss_has_the_configured_average_but_longer_runs():
     import random
-    from friend_foe.scenario_adapter import _Loss
+    from common.channel import Loss as _Loss
 
     def run_lengths(burst):
         loss, n = _Loss(random.Random(4), 0.3, burst), 20000

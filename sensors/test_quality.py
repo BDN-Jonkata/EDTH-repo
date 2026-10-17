@@ -1,7 +1,6 @@
 import pytest
 
 from sensors.quality import (
-    IDENT_FRACTION,
     best_standoff,
     detection_modules,
     load_modules,
@@ -26,8 +25,9 @@ def standoff(module, name):
     return required_standoff(module, POS, 0.0, UniformWeather(PRESETS[name]))
 
 
-def test_every_detection_kind_has_an_identification_fraction():
-    assert {m["kind"] for m in DETECTION} <= set(IDENT_FRACTION)
+def test_every_detection_module_has_an_identification_range_inside_its_detection_range():
+    for m in DETECTION:
+        assert 0 < m["sim"]["ident_range_m"] <= m["sim"]["range_m"]
 
 
 def test_clear_day_is_full_capability():

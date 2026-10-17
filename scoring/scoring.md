@@ -10,7 +10,7 @@ Status: scoring of one run is done and tested (hand-made cases and one seeder ru
 |------|----------|
 | [metrics.py](metrics.py) | `score(truth, frames, config)` returns a `RunScore`; `Estimate` is one track at one time step |
 | [truth.py](truth.py) | Reads `truth.json` (`edth.truth/2`); only the scoring module may. Interpolates between samples; an object outside the area has no state |
-| [assign.py](assign.py) | Optimal one-to-one assignment (Hungarian) with a distance gate, pure Python |
+| [common/assignment.py](../common/assignment.py) | Optimal one-to-one assignment (Hungarian) with a distance gate, pure Python; shared with the tracker |
 | [tracks.py](tracks.py) | `frames_from_local_tracks` (the `local_track` messages in [data-formats.md](../docs/data-formats.md)) and `frames_from_estimator` (the friend/foe test adapter) |
 | [run.py](run.py) | `python -m scoring.run truth.json tracks.jsonl [--gate 50] [--warmup 10]` |
 | [sweep.py](sweep.py) | `python -m scoring.sweep --set test --seeds 20 [--birds N --vehicles N] [--csv file]`: the friend/foe estimator on generated scenarios over beacon loss, scored with these metrics |
