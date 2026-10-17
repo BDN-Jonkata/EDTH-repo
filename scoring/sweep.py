@@ -22,7 +22,8 @@ from scoring.metrics import RunScore, ScoreConfig, score
 from scoring.tracks import frames_from_estimator
 
 COLUMNS = ("count_error_mean_abs", "count_error_bias", "ospa_m", "pos_rmse_m", "id_swaps", "hostile_detected_frac",
-           "friendlies_flagged", "friendly_flag_frac", "clutter_flagged_frac", "false_tracks_mean")
+           "friendlies_flagged", "friendly_flag_frac", "clutter_flagged_frac", "false_tracks_mean", "ident_covered_frac",
+           "ident_delay_s")
 WARMUP_S = 10.0
 
 

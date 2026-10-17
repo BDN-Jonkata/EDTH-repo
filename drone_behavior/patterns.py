@@ -8,7 +8,7 @@ import math
 from dataclasses import dataclass, field
 from typing import Optional
 
-from drone_behavior.encounters import assess as assess_encounter
+from drone_behavior.encounters import assess as assess_encounter, maneuvers
 
 
 @dataclass
@@ -111,6 +111,7 @@ class BehaviorModel:
         self.verified = set()
         self._profiles = {}
         self._allies = {}
+        self._ally_maneuvers = {}
 
     def begin(self, t):
         if not math.isfinite(t) or t < self.now:
@@ -125,6 +126,7 @@ class BehaviorModel:
                         t - self.memory[k]["history"][-1]["t"] <= self.config.max_gap_s and
                         self.memory[k]["history"][-1]["t"] - self.memory[k]["history"][0]["t"] >= 8}
         self._profiles = {k: _features(self.memory[k]["history"]) for k in self._allies}
+        self._ally_maneuvers = {k: maneuvers(h) for k, h in self._allies.items()}   # once per ally, not per track
 
     def __call__(self, tr):
         cfg, t = self.config, self.now
@@ -192,7 +194,7 @@ class BehaviorModel:
         for ally_id, history in self._allies.items():
             if ally_id == track_id:
                 continue
-            score, cues, details, blocked = assess_encounter(motion, history)
+            score, cues, details, blocked = assess_encounter(motion, history, self._ally_maneuvers[ally_id])
             converging = converging or blocked
             quality = _mean([s["existence"] for s in history]) / (1 + (_mean([s["sigma"] for s in history]) / 15) ** 2)
             if score * quality > risk:

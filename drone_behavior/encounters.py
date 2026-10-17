@@ -5,6 +5,9 @@ prediction alone supports suspicion; hostility also needs responsive pursuit.
 No geography, scenario roles, future paths or target IDs enter this module.
 """
 import math
+from bisect import bisect_left
+
+_TIME = lambda sample: sample['t']
 
 
 def at(series, t):
@@ -12,13 +15,8 @@ def at(series, t):
         return None
     if len(series) == 1:
         return series[0]
-    lo, hi = 1, len(series)-1
-    while lo < hi:
-        mid = (lo+hi)//2
-        if series[mid]['t'] >= t - 1e-8:
-            hi = mid
-        else:
-            lo = mid+1
+    # The first sample at or after t, never the first one: same result as a hand-written binary search, in C.
+    lo = min(max(bisect_left(series, t - 1e-8, key=_TIME), 1), len(series) - 1)
     a, b = series[lo-1], series[lo]
     w = max(0, min(1, (t - a['t']) / (b['t'] - a['t'])))
     return {k: a[k] + w * (b[k] - a[k]) for k in ('x', 'y', 'vx', 'vy', 'sigma')}
@@ -46,7 +44,8 @@ def maneuvers(series):
     return events
 
 
-def assess(contact, ally):
+def assess(contact, ally, ally_maneuvers=None):
+    """`ally_maneuvers` is `maneuvers(ally)` when the caller has it already (it depends on the ally only)."""
     pairs = [(s, at(ally, s['t'])) for s in contact]
     pairs = [(s, a) for s, a in pairs if a is not None]
     empty = {'response_count': 0, 'closing_m': 0.0, 'intercept_episodes': 0, 'response_lag_s': 0.0}
@@ -84,13 +83,14 @@ def assess(contact, ally):
     risk, reasons = (1.2, ['sustained_collision_course']) if episodes and current['hazard'] else (0.0, [])
     if episodes >= 2:
         risk, reasons = 2.1, ['repeated_intercept_approaches']
-    events = maneuvers(ally)
+    events = maneuvers(ally) if ally_maneuvers is None else ally_maneuvers
     # Compare the same time interval for every lag. A pursuer must follow our
     # maneuvers later; our investigator following the contact has the reverse lag.
     times = [s['t'] for s, _ in pairs if max(contact[0]['t'], ally[0]['t']) + 3 <= s['t'] <= min(contact[-1]['t'], ally[-1]['t']) - 3]
     fits = []
+    ally_at = {t: at(ally, t) for t in times}      # the same ally sample for every lag
     for lag in (-3, -2, -1, 0, 1, 2, 3):
-        comparisons = [(at(contact, t + lag), at(ally, t)) for t in times]
+        comparisons = [(at(contact, t + lag), ally_at[t]) for t in times]
         usable = [(s, a) for s, a in comparisons if s and a and min(math.hypot(s['vx'], s['vy']), math.hypot(a['vx'], a['vy'])) >= 2]
         fits.append((sum(1 - cosine(s, a) for s, a in usable) / len(usable) if len(usable) >= 8 else 2.0, lag))
     best_error, lag = min(fits)

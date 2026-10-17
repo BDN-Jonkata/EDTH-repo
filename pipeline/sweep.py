@@ -16,33 +16,46 @@ seed noise.
 
 import argparse
 import csv
+from dataclasses import replace
 from pathlib import Path
 from typing import Dict, List
 
-from friend_foe.automatic import AutomaticEstimator
 from friend_foe.sweep import LOSSES, Setup, load_preset, make_scenario_and_truth, seeder_scenario
+from pipeline.behaviour import automatic_estimator
 from pipeline.run import scored_frames
+from scoring.identification import identification
 from scoring.metrics import RunScore, ScoreConfig, score
+from sensors.quality import load_modules
 from scoring.sweep import COLUMNS, average_with_error, fmt_error, paired_difference
 from scoring.truth import with_recorded_samples
 
 WARMUP_S = 10.0
-OPTIONS = {"investigate": "investigate", "identity": "keep_identity", "distributed": "distributed"}   # --paired name -> option
+OPTIONS = {"investigate": "investigate", "identity": "keep_identity", "distributed": "distributed", "cueing": "cue"}   # --paired name -> option
 
 
-def run_once(setup: Setup, index: int, weather: str, loss: float, behaviour: bool = False, **options) -> RunScore:
-    """`behaviour` puts the automatic drone-behaviour module (`drone_behavior/`) behind the estimator's threat hook.
+def run_once(setup: Setup, index: int, weather: str, loss: float, behaviour: str = "", **options) -> RunScore:
+    """`behaviour` ("safe" or "raw", see `pipeline/behaviour.py`) puts the automatic drone-behaviour module
+    (`drone_behavior/`) behind the estimator's threat hook; True counts as "safe".
     `options` go to `scored_frames`: `investigate` sends drones at suspicious tracks and scores against the
     trajectories they really flew; `keep_identity` runs the predictor's identity keeper; `distributed` runs a
     tracker per node and the merger instead of one central tracker."""
     scenario, truth = make_scenario_and_truth(setup, index, weather, loss, False)
-    estimator = AutomaticEstimator.for_scenario(scenario) if behaviour else None
+    estimator = automatic_estimator(scenario, motion_peaceful=behaviour == "raw") if behaviour else None
     recorded: dict = {}
     frames = list(scored_frames(scenario, scenario["seed"], estimator=estimator, recorded=recorded, **options))
-    return score(with_recorded_samples(truth, recorded), frames, ScoreConfig(warmup_s=WARMUP_S))
+    truth = with_recorded_samples(truth, recorded)
+    covered, delay = identification(truth, identification_ranges(scenario), WARMUP_S)
+    return replace(score(truth, frames, ScoreConfig(warmup_s=WARMUP_S)), ident_covered_frac=covered, ident_delay_s=delay)
 
 
-def run_cell(setup: Setup, weather: str, loss: float, behaviour: bool = False, **options) -> List[RunScore]:
+def identification_ranges(scenario: dict) -> Dict[str, float]:
+    """Each friendly drone's best identification range, from the catalog's `sim.ident_range_m` (assumed numbers)."""
+    modules = load_modules()
+    return {f["id"]: max(modules[s["module"]]["sim"].get("ident_range_m", 0.0) for s in f["sensors"])
+            for f in scenario["friendlies"]}
+
+
+def run_cell(setup: Setup, weather: str, loss: float, behaviour: str = "", **options) -> List[RunScore]:
     return [run_once(setup, i, weather, loss, behaviour, **options) for i in range(setup.seeds)]
 
 def print_table(title: str, rows) -> None:
@@ -68,9 +81,12 @@ def main() -> None:
     ap.add_argument("--weather", default="clear")
     ap.add_argument("--birds", type=int, default=0)
     ap.add_argument("--vehicles", type=int, default=0)
-    ap.add_argument("--behaviour", action="store_true", help="use the automatic drone-behaviour module")
+    ap.add_argument("--behaviour", nargs="?", const="safe", choices=["safe", "raw"],
+                    help="use the automatic drone-behaviour module: `safe` (the default when given) never lets motion "
+                         "alone call a track peaceful, `raw` is the module's own behaviour (pipeline/behaviour.py)")
     ap.add_argument("--investigate", action="store_true", help="send drones at suspicious tracks (pipeline/dispatch.py)")
     ap.add_argument("--keep-identity", action="store_true", help="run the predictor's identity keeper on the tracks")
+    ap.add_argument("--cue", action="store_true", help="send the closest other drone at a bearing no track explains (pipeline/cueing.py)")
     ap.add_argument("--distributed", action="store_true", help="a tracker per node and a merger (pipeline/nodes.py)")
     ap.add_argument("--paired", choices=sorted(OPTIONS), help="compare with and without this on the same seeds")
     ap.add_argument("--losses", default=",".join(str(x) for x in LOSSES), help="comma-separated message-loss levels")
@@ -80,7 +96,8 @@ def main() -> None:
     setup = Setup(load_preset(args.preset), args.seed_set, args.seeds, None, args.birds, args.vehicles)
     header = (f"preset={args.preset} seed set={args.seed_set} seeds={args.seeds} weather={args.weather} "
               f"birds={args.birds} vehicles={args.vehicles} behaviour={args.behaviour}")
-    base = {"investigate": args.investigate, "keep_identity": args.keep_identity, "distributed": args.distributed}
+    base = {"investigate": args.investigate, "keep_identity": args.keep_identity, "distributed": args.distributed,
+            "cue": args.cue}
     if args.paired:
         flag = OPTIONS[args.paired]
         rows = [(loss, paired_difference(run_cell(setup, args.weather, loss, args.behaviour, **{**base, flag: False}),
