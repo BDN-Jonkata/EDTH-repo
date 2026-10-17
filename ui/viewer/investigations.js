@@ -11,10 +11,11 @@
       confidence: Math.min(1, q.range * q.pd), feasible: maximum >= Math.max(20, sm.min_range_m) };
   }
   class Controller {
-    constructor(sensors, fleetIds, weather, sensorAt, emit, seqs, clock = (_, t) => t) {
+    constructor(sensors, fleetIds, weather, sensorAt, emit, seqs, clock = (_, t) => t, options = {}) {
       this.sensors = sensors.filter((s) => fleetIds.includes(s.node));
       this.weather = weather; this.sensorAt = sensorAt; this.emit = emit || (() => {}); this.seqs = seqs;
       this.clock = clock;
+      this.options=options;
       this.since = new Map(); this.blocked = new Map(); this.active = new Map(); this.requests = []; this.statuses = [];
     }
     message(source, type, body, t) {
@@ -23,19 +24,31 @@
     }
     update(t, tracks) {
       const live = new Set(tracks);
+      const needsReview=(tr)=>tr.cls==='suspicious' || (this.options.cooperative && tr.kind!=='frd' && tr.cls==='unknown' &&
+        tr.status!=='tentative' && tr.assessment?.needs_observer && t-tr.born>=(tr.assessment.inbound?2:5));
       this.active.forEach((task, tr) => {
-        if (!live.has(tr) || tr.cls !== 'suspicious') this.finish(tr, task, t, live.has(tr) ? 'done' : 'aborted');
+        if (!live.has(tr) || !needsReview(tr) || (this.options.cooperative && tr.assessment?.corroborated &&
+            tr.behavior?.reasons?.includes('corroborated_inbound_course')))
+          this.finish(tr, task, t, live.has(tr) ? 'done' : 'aborted');
       });
-      this.since.forEach((_, tr) => { if (!live.has(tr) || tr.cls !== 'suspicious') this.since.delete(tr); });
+      this.since.forEach((_, tr) => { if (!live.has(tr) || !needsReview(tr)) this.since.delete(tr); });
       this.blocked.forEach((until, tr) => { if (!live.has(tr) && t >= until) this.blocked.delete(tr); });
-      tracks.forEach((tr) => {
+      tracks.slice().sort((a,b)=>Number(!!b.assessment?.inbound)-Number(!!a.assessment?.inbound) || a.born-b.born).forEach((tr) => {
         tr.investigation = null;
-        if (tr.cls !== 'suspicious' || tr.status === 'tentative') return;
+        if (!needsReview(tr) || tr.status === 'tentative') return;
+        if(this.options.cooperative && tr.assessment?.needs_observer && this.options.cueGround) {
+          tr.assessment.ground_cues=this.options.cueGround(tr,t);
+          if(tr.assessment.ground_cues.length && tr.groundRequested===undefined)tr.groundRequested=t;
+          if(tr.assessment.ground_cues.length && t-tr.groundRequested<(tr.groundWait??1.5))return;
+        }
+        if(this.options.cooperative && tr.assessment?.corroborated && tr.behavior?.reasons?.includes('corroborated_inbound_course'))return;
         if (!this.since.has(tr)) this.since.set(tr, t);
-        if (t - this.since.get(tr) < 3 - 1e-8) return;
+        const wait=this.options.cooperative && tr.assessment?.inbound?0:3;
+        if (t - this.since.get(tr) < wait - 1e-8) return;
         let task = this.active.get(tr);
         if (!task) {
           if (t < (this.blocked.get(tr) ?? -1)) return;
+          if(this.options.cooperative && this.active.size>=2)return;
           const byModule = {}, effects = W.activeEffects(this.weather.at([tr.s[0], tr.s[1], 0], t));
           this.sensors.forEach((s) => { byModule[s.module] = standoff(s.mod, effects); });
           const values = Object.values(byModule).sort((a, b) => Number(b.feasible) - Number(a.feasible) || b.max_range_m - a.max_range_m);
@@ -47,7 +60,7 @@
             t_requested: t, standoff_m: best.recommended_m, standoff_by_module: byModule,
             weather_confidence: best.confidence, feasible: best.feasible,
           }, t);
-          this.requests.push(request); this.blocked.set(tr, t + 30);
+          this.requests.push(request); this.blocked.set(tr, t + (this.options.cooperative ? 3 : 30));
           if (!best.feasible) return;
           task = { request, drone: null, state: null, updated: -Infinity };
           this.active.set(tr, task);
@@ -63,14 +76,18 @@
       // would reverse the encounter and compromise the motion evidence.
       const references = [tr.behavior?.features?.reference_track_id, tr.behavior?.retained_risk?.features?.reference_track_id];
       if (references.includes(drone.id)) return null;
+      if(this.options.cooperative && tr.assessment?.needs_observer && task.drone!==drone.id &&
+          tr.assessment.source_nodes.includes(drone.id))return null;
       // Re-evaluate along the actual line of sight, including local weather events.
       const choices = this.sensors.filter((s) => s.node === drone.id).map((s) => {
         if (s.kind === 'RF' && !Object.entries(tr.srcs).some(([key, seen]) => key.endsWith(' RF') && t - seen <= 3))
           return { feasible: false }; // RF can identify only an observed emitter, never a silent object by assumption
         const q = this.sensorAt(s, drone, { x: tr.s[0], y: tr.s[1] }, t);
-        const maximum = s.sm.ident_range_m * q.range / s.sm.range_m;
-        const distance = Math.max(SAFE_STANDOFF_M, s.minRange, 0.7 * maximum);
-        return { sensor: s, distance, maximum, feasible: q.pd > 0 && maximum >= distance };
+        const corroborating=this.options.cooperative && tr.assessment?.needs_observer;
+        const maximum = corroborating ? q.range*0.85 : s.sm.ident_range_m * q.range / s.sm.range_m;
+        const current=Math.hypot(tr.s[0]-drone.x,tr.s[1]-drone.y);
+        const distance = Math.max(SAFE_STANDOFF_M, s.minRange, Math.min(corroborating?current:Infinity,0.7 * maximum));
+        return { sensor: s, distance, maximum, corroborating, feasible: q.pd > 0 && maximum >= distance };
       }).filter((q) => q.feasible).sort((a, b) => b.maximum - a.maximum);
       return choices[0] || null;
     }
@@ -97,7 +114,7 @@
     }
     finish(tr, task, t, state) {
       if (task.drone) this.status(tr, task, state, t);
-      this.active.delete(tr); tr.investigation = null; this.blocked.set(tr, t + 30);
+      this.active.delete(tr); tr.investigation = null; this.blocked.set(tr, t + (this.options.cooperative ? 3 : 30));
     }
   }
   global.Investigations = { Controller, standoff, SAFE_STANDOFF_M };

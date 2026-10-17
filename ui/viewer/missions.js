@@ -2,6 +2,7 @@
  * estimates only; this module never receives hostile ground truth. */
 (function (global) {
   'use strict';
+  const Coverage = typeof window !== 'undefined' ? window.Coverage : require('./coverage.js');
   const CELL = 25, SIZE = 1000, SEP = 100, COMFORT = 160, LOOK = 5;
   const ACCEL = 2, YAW_RATE = 20 * Math.PI / 180, LEG_HOLD = 6;
   const clamp = (v) => Math.max(0, Math.min(SIZE, v));
@@ -53,6 +54,8 @@
       this.cells = Array.from({ length: (SIZE / CELL) ** 2 }, (_, i) => ({
         x: (i % 40 + 0.5) * CELL, y: (Math.floor(i / 40) + 0.5) * CELL, last: -1,
       }));
+      this.coverage = options.coverage ? new Coverage.Planner(this.drones,sensors,this.cells,options.coverage) : null;
+      this.admissions = new Map();
     }
     record(t) {
       this.drones.forEach((d) => d.history.push({ t, x: d.x, y: d.y, vx: d.vx, vy: d.vy, heading: d.heading }));
@@ -79,14 +82,15 @@
     }
     observe(t, k, isAlive = () => true, sensorAt = (s) => s) {
       this.sensors.forEach((base) => {
-        const d = this.drones.find((q) => q.id === base.node);
+        if(this.coverage && base.kind==='RF')return;
+        const d = this.drones.find((q) => q.id === base.node) || this.coverage?.ground.find((q)=>q.id===base.node);
         if (!d || !isAlive(d.id) || k % base.every) return;
         this.cells.forEach((c) => {
           const dx = c.x - d.x, dy = c.y - d.y, r = Math.hypot(dx, dy);
           if (r > (base.sm?.range_m ?? base.range) || r < base.minRange) return;
           const s = sensorAt(base, d, c);
-          if (s.pd <= 0) return;
-          if (r < s.minRange || r > s.range) return;
+          if (s.pd < (this.coverage ? 0.15 : 1e-9)) return;
+          if (r < s.minRange || r > s.range * (this.coverage ? this.coverage.config.range_fraction : 1)) return;
           if (s.pointing !== 'omni' && Math.abs(wrap(Math.atan2(dy, dx) - d.heading)) > s.fov / 2) return;
           c.last = t;
         });
@@ -97,6 +101,7 @@
       if (d.target !== target) d.followSensor = null;
       if (mode === 'search') d.searchHeading = d.heading;
       d.mode = mode; d.target = target; d.cell = null; d.goal = null; d.nextPlan = 0;
+      if(mode!=='patrol')d.coverageHold=false;
       this.emit(t, d.id + ' ' + mode + (target ? ' ' + target.id : ''));
     }
     // Source timestamps are measurement times, not delayed arrival times.
@@ -109,6 +114,23 @@
         .sort((a, b) => tr.srcs[b] - tr.srcs[a] || a.localeCompare(b));
       const kind = keys.length ? keys[0].slice(id.length + 1) : null;
       return this.sensors.find((s) => s.node === id && s.kind === kind);
+    }
+    admission(tr,d,t) {
+      const geometry=this.options.geometry(tr,d,t);
+      if(!geometry || !this.coverage)return geometry;
+      const cached=this.admissions.get(d.id+' '+tr.id);
+      if(cached && t-cached.t<0.5)return cached.value;
+      const dx=tr.s[0]-d.x,dy=tr.s[1]-d.y,r=Math.hypot(dx,dy)||1;
+      const desired=geometry.corroborating && r<=geometry.maximum && r>=40 ? {x:d.x,y:d.y} :
+        {x:tr.s[0]+tr.s[2]-dx/r*geometry.distance,y:tr.s[1]+tr.s[3]-dy/r*geometry.distance};
+      const goal=this.coverage.bound(desired);
+      const distance=Math.hypot(goal.x-tr.s[0],goal.y-tr.s[1]),heading=Math.atan2(tr.s[1]-goal.y,tr.s[0]-goal.x);
+      const check=this.coverage.departure(d,goal,heading,t);
+      const feasible=distance>=40 && distance<=geometry.maximum && check.allowed;
+      if(!feasible && tr.assessment)tr.assessment.dispatch_blocked=check.reason||'outside_identification_range';
+      const value=feasible?{...geometry,goal,backups:check.backups}:null;
+      this.admissions.set(d.id+' '+tr.id,{t,value});
+      return value;
     }
     update(t, tracks) {
       const active = new Set(tracks);
@@ -159,7 +181,7 @@
           const owner = this.drones.find((d) => d.target === tr);
           if (owner && owner.mode === 'follow') return;
           const eligible = this.drones.filter((d) => d.mode === 'patrol' &&
-            (this.options.requireInvestigation ? this.options.geometry(tr, d, t) !== null : t - this.contact(tr, d.id) <= 1));
+            (this.options.requireInvestigation ? this.admission(tr, d, t) !== null : t - this.contact(tr, d.id) <= 1));
           eligible.sort((a, b) => {
             if (this.options.requireInvestigation) return Math.hypot(tr.s[0] - a.x, tr.s[1] - a.y) -
               Math.hypot(tr.s[0] - b.x, tr.s[1] - b.y) || a.id.localeCompare(b.id);
@@ -169,11 +191,18 @@
           if (!eligible.length) return;
           if (owner) this.transition(owner, 'patrol', null, t);
           const d = eligible[0];
+          if(this.coverage)d.coverageBackups=this.admission(tr,d,t)?.backups||[];
           d.lastEstimate = { x: tr.s[0], y: tr.s[1], vx: tr.s[2], vy: tr.s[3], t };
           this.transition(d, 'follow', tr, t);
         });
+      if(this.coverage) {
+        this.coverage.reserved=new Set(this.drones.filter((d)=>d.target).flatMap((d)=>d.coverageBackups||[]));
+        this.coverage.ground.filter(g=>this.coverage.reserved.has(g.id)).forEach(g=>{g.goalHeading=g.heading;});
+        this.coverage.plan(t);
+      }
       this.drones.forEach((d) => {
         if (d.mode === 'patrol') {
+          if(this.coverage)return;
           // Seeing a destination while approaching it must not reverse the drone
           // every sensor frame. Commit to a leg, then reassess at 1 Hz.
           if (t < d.nextPlan) return;
@@ -199,19 +228,21 @@
           d.assignedAt = t;
         } else if (d.mode === 'follow') {
           const tr = d.target;
-          const geometry = this.options.geometry ? this.options.geometry(tr, d, t) : null;
+          const geometry = this.options.geometry ? this.admission(tr, d, t) : null;
           if (this.options.requireInvestigation && !geometry) { this.transition(d, 'patrol', null, t); return; }
           if (!d.followSensor || t - (tr.srcs[d.id + ' ' + d.followSensor.kind] ?? -Infinity) > 2)
             d.followSensor = this.moduleFor(tr, d.id);
           const s = d.followSensor, e = d.lastEstimate;
           const distance = geometry ? geometry.distance : s ? Math.max(s.minRange + 5, s.range * 0.5) : 60;
           const dx = e.x - d.x, dy = e.y - d.y, r = Math.hypot(dx, dy) || 1;
-          d.goal = { x: clamp(e.x + e.vx - dx / r * distance), y: clamp(e.y + e.vy - dy / r * distance) };
+          d.goal = geometry?.goal || { x: clamp(e.x + e.vx - dx / r * distance), y: clamp(e.y + e.vy - dy / r * distance) };
+          d.coverageBackups=geometry?.backups||[];
           d.desiredHeading = Math.atan2(dy, dx);
         } else if (d.lastEstimate) {
           const e = d.lastEstimate, dt = Math.min(3, t - e.t);
           const a = (t - d.searchStart) * Math.PI / 12;
           d.goal = { x: clamp(e.x + e.vx * dt + 40 * Math.cos(a)), y: clamp(e.y + e.vy * dt + 40 * Math.sin(a)) };
+          if(this.coverage)d.goal=this.coverage.bound(d.goal);
           d.desiredHeading = d.searchHeading + (t - d.searchStart) * Math.PI / 18;
         }
       });
@@ -230,7 +261,7 @@
         const desired = { vx: Math.cos(a) * speed, vy: Math.sin(a) * speed };
         const preferred = { ...desired };
         this.drones.forEach((other) => {
-          if (other === d) return;
+          if (other === d || d.coverageHold) return;
           const rx = d.x - other.x, ry = d.y - other.y, r = Math.hypot(rx, ry);
           if (r < COMFORT + 50) {
             const weight = d.speed * Math.max(0, (COMFORT + 50 - r) / (COMFORT + 50 - SEP));
@@ -283,7 +314,7 @@
         d.ax = (v.vx - d.vx) / this.dt; d.ay = (v.vy - d.vy) / this.dt;
         d.vx = v.vx; d.vy = v.vy;
         d.x = clamp(d.x + d.vx * this.dt); d.y = clamp(d.y + d.vy * this.dt);
-        const desiredHeading = d.mode === 'patrol' ?
+        const desiredHeading = d.mode === 'patrol' && !this.coverage ?
           (Math.hypot(d.vx, d.vy) > 1 ? Math.atan2(d.vy, d.vx) : d.heading) : (d.desiredHeading ?? d.heading);
         const delta = wrap(desiredHeading - d.heading);
         d.heading = wrap(d.heading + Math.max(-d.yawRate * this.dt, Math.min(d.yawRate * this.dt, delta)));
