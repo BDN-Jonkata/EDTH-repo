@@ -149,6 +149,18 @@ class EventWeather:
         return Conditions(format_weather(effects), self.base.time_of_day)
 
 
+def conditions_between(
+    provider: WeatherProvider, sensor_position: Sequence[float], target_position: Sequence[float], t: float
+) -> Conditions:
+    """The weather a detection sees: the strongest strength of each effect at the sensor and at the
+    target, so a fog bank over either end of the line of sight counts. (Sensor quality is looked up
+    per detection, not once per run.)"""
+    effects = provider.at(sensor_position, t).active_effects()
+    for name, strength in provider.at(target_position, t).active_effects().items():
+        effects[name] = max(effects.get(name, 0.0), strength)
+    return Conditions(format_weather(effects), "day")
+
+
 MIN_NIGHT_STRENGTH = 0.01   # below this the sky counts as light
 
 
