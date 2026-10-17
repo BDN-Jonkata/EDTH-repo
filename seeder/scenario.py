@@ -37,6 +37,8 @@ CLUTTER_KINDS = {
                 "signature": {"eo": 1.3, "thermal": 1.5, "acoustic": 1.5, "rf": 0.0, "radar": 1.5}},
 }
 MAX_CLUTTER_PER_KIND = 10  # keep runs fast
+JAM_REQUIRED = ("x", "y", "radius_m", "loss")
+JAM_OPTIONAL = ("t_start", "t_end", "rf_noise_mult")
 
 DEFAULT_CONFIG = {
     "name": "scenario",
@@ -237,6 +239,41 @@ def _check_environment(cfg):
     errors += _check_weather(cfg["environment"])
     if not 0 <= cfg["degradations"]["network"]["loss"] <= 1:
         errors.append("degradations.network.loss must be between 0 and 1")
+    return errors + _check_jamming(cfg["degradations"]["network"].get("jamming_zones", []))
+
+
+def _is_number(v):
+    return isinstance(v, (int, float)) and not isinstance(v, bool)
+
+
+def _check_jamming(zones):
+    """Each zone: {x, y, radius_m, loss, t_start?, t_end?, rf_noise_mult?}; messages of a node inside lose more."""
+    if not isinstance(zones, list):
+        return ["degradations.network.jamming_zones must be a list"]
+    errors = []
+    for i, z in enumerate(zones):
+        where = "jamming_zones[%d]" % i
+        if not isinstance(z, dict):
+            errors.append(where + " must be an object")
+            continue
+        errors += [where + ".%s is required and must be a number" % k for k in JAM_REQUIRED if not _is_number(z.get(k))]
+        errors += [where + ".%s must be a number" % k for k in JAM_OPTIONAL if k in z and not _is_number(z[k])]
+        errors += _check_jamming_values(where, z)
+    return errors
+
+
+def _check_jamming_values(where, z):
+    ok = lambda k: _is_number(z.get(k))  # noqa: E731
+    errors = []
+    if ok("radius_m") and z["radius_m"] <= 0:
+        errors.append(where + ".radius_m must be positive")
+    if ok("loss") and not 0 <= z["loss"] <= 1:
+        errors.append(where + ".loss must be between 0 and 1")
+    if ok("rf_noise_mult") and z["rf_noise_mult"] < 1:
+        errors.append(where + ".rf_noise_mult must be at least 1")
+    start = z.get("t_start", 0)
+    if ok("t_end") and _is_number(start) and z["t_end"] <= start:
+        errors.append(where + ".t_end must be after t_start")
     return errors
 
 

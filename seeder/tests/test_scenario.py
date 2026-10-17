@@ -238,6 +238,27 @@ class Validation(unittest.TestCase):
         self.check(lambda c: c.setdefault("environment", {}).update(sky={"date": "2026-13-45", "hour": 20, "lat": 1, "lon": 1}), "sky")
         self.check(lambda c: c.setdefault("environment", {}).update(sky={"date": "2026-06-21", "hour": 24, "lat": 1, "lon": 1}), "hour")
 
+    def test_accepts_and_passes_on_jamming_zones(self):
+        cfg = load("challenge")
+        zone = {"x": 500, "y": 500, "radius_m": 150, "loss": 0.8, "t_start": 40, "t_end": 80, "rf_noise_mult": 3}
+        cfg["degradations"] = {"network": {"jamming_zones": [zone]}}
+        self.assertEqual(sc.generate(cfg)[0]["degradations"]["network"]["jamming_zones"], [zone])
+
+    def test_jamming_does_not_change_the_paths(self):
+        plain, jammed = load("challenge"), load("challenge")
+        jammed["degradations"] = {"network": {"jamming_zones": [{"x": 1, "y": 2, "radius_m": 50, "loss": 1}]}}
+        self.assertEqual(sc.generate(plain)[0]["targets"], sc.generate(jammed)[0]["targets"])
+
+    def test_rejects_bad_jamming_zones(self):
+        def zones(*z):
+            return lambda c: c.setdefault("degradations", {}).update(network={"jamming_zones": list(z)})
+        self.check(zones({"x": 1, "y": 2, "radius_m": 0, "loss": 0.5}), "radius_m must be positive")
+        self.check(zones({"x": 1, "y": 2, "radius_m": 5, "loss": 1.5}), "loss must be between")
+        self.check(zones({"x": 1, "y": 2, "radius_m": 5, "loss": 0.5, "t_start": 9, "t_end": 5}), "t_end must be after")
+        self.check(zones({"x": 1, "y": 2, "radius_m": 5, "loss": 0.5, "rf_noise_mult": 0.5}), "at least 1")
+        self.check(zones({"x": 1}), "is required")
+        self.check(lambda c: c.setdefault("degradations", {}).update(network={"jamming_zones": "all"}), "must be a list")
+
     def test_rejects_ground_outside_area(self):
         self.check(lambda c: c.update(ground=[{"id": "G", "platform": "gs_radar_rf", "position": [2000, 5]}]), "outside the area")
 

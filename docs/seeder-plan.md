@@ -8,7 +8,7 @@ Done so far: catalog and PostgreSQL storage, scenario generator with four preset
 |---|------|-----|--------|
 | 1 | Shared header on the mock's `meas` and `beacon` messages | One message format across modules; the codec and the channel emulator need it | done |
 | 2 | Clutter objects (birds, vehicles) | The tracker and friend/foe must not call them hostile; today there is only a false-alarm rate | done |
-| 3 | Jamming zones | Graceful degradation under electronic warfare is the point of the task | todo |
+| 3 | Jamming zones | Graceful degradation under electronic warfare is the point of the task | done |
 | 4 | Bandwidth limits | Link capacity makes "share compact tracks, not raw observations" matter | todo |
 | 5 | Scenario sweeps | A table of results over many seeds for tuning and the final test | blocked by scoring |
 | 6 | Moving ground units | Only if the mentor says ground units move | blocked by mentor |
@@ -43,6 +43,8 @@ Done so far: catalog and PostgreSQL storage, scenario generator with four preset
 **Test:** a node inside a zone loses messages at the zone rate and one outside does not; zone times respected; presets without zones unchanged. Add a `jammed` preset only after the numbers are checked in the viewer.
 
 **Risk:** the sender position is used to decide membership, so a moving drone enters and leaves a zone mid-run; test that case.
+
+**Done:** `_check_jamming` in `seeder/scenario.py` (x, y, radius_m and loss required; t_start, t_end and rf_noise_mult optional; the generator only passes zones on). `ui/viewer/jamming.js` has the zone maths; `sim.js` takes the loss from `lossFor` in `sendMessage` (same single random draw per message, only the threshold changes) and `jammedRf` raises RF noise through `sensorAt`; the map draws active zones as red dashed circles. Zones apply in Realistic mode only. Verified: 41 seeder tests (3 new); `test-jamming.js` (7 tests: a node inside loses at the zone rate and one outside does not, start and end times, a drone flying through is jammed only while inside, RF noise, optimistic mode, empty list equals no zones); 8 baseline and 6 command run hashes identical; `scenarios.js` unchanged; a temporary preset with a zone showed correctly in the viewer. No `jammed` preset yet, as planned: add one after you have seen the numbers.
 
 ## 4. Bandwidth limits
 

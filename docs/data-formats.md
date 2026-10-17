@@ -39,10 +39,14 @@ Top level: `schema`, `id` (for example `hard-s3`), `name`, `seed`, `preset`, `de
 | `beacon` | friendly position beacons: `enabled`, `rate_hz`, `pos_sigma_m` |
 | `sensor_set.enabled_kinds` | which sensor kinds exist in this run |
 | `environment` | `weather` (`clear`, `fog`, `rain`, `wind`, `night`, or a combination, see [Weather combinations](#weather-combinations-and-weather-events)), `time_of_day`, optional `weather_events[]` and `sky`, `clutter` = `{false_alarms_per_min, birds, vehicles}` (the last two are object counts, 0 to 10) |
-| `degradations` | `clock`, `pose`, `network` (`loss`, `burst`, `latency_ms`, `out_of_order`, `topology`, `jamming_zones`), `dropout[]` = `{node, t}` |
+| `degradations` | `clock`, `pose`, `network` (`loss`, `burst`, `latency_ms`, `out_of_order`, `topology`, `jamming_zones[]`, see [Jamming zones](#jamming-zones)), `dropout[]` = `{node, t}` |
 | `config` | the config that produced it |
 
 A hostile's (or clutter object's) position at time `t`: walk the waypoints linearly, then add a sideways wobble of amplitude `wobble_m` that fades to zero near each waypoint. The exact formula is `target_state` in [seeder/scenario.py](../seeder/scenario.py); do not rewrite it, import it.
+
+### Jamming zones
+
+`degradations.network.jamming_zones[]` = `{x, y, radius_m, loss, t_start?, t_end?, rf_noise_mult?}`: a circle of the map (metres) where, while active, the messages **sent by or to a node inside** lose more often. `loss` is the share lost, 0 to 1, and a message uses the higher of the base `network.loss` and the loss of every active zone the node is in (overlapping zones: the highest). `t_start` defaults to 0 and `t_end` to the end of the run (`t_end` must be after `t_start`). `rf_noise_mult` (at least 1, default 1) multiplies the noise of RF receivers inside the zone. Membership uses the node's true position and the true time, not its drifted clock, so a drone that flies in and out is jammed only while inside; for a command from C2 the node is the receiving drone. Beacons are lost like every other message, which is what friend/foe must survive: silence alone is not proof of hostility. The seeder only checks and passes the zones on (they do not change any path); the mock simulation applies them in Realistic mode only, since they are a comms degradation. The numbers are assumptions.
 
 ### Weather combinations and weather events
 
