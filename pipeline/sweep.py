@@ -24,7 +24,8 @@ from friend_foe.sweep import LOSSES, Setup, load_preset, make_scenario_and_truth
 from pipeline.behaviour import automatic_estimator
 from pipeline.run import scored_frames
 from scoring.identification import identification
-from scoring.metrics import RunScore, ScoreConfig, score
+from scoring.metrics import RunScore, ScoreConfig, score, swap_log
+from scoring.swaps import summarise
 from sensors.quality import load_modules
 from scoring.sweep import COLUMNS, average_with_error, fmt_error, paired_difference
 from scoring.truth import with_recorded_samples
@@ -58,6 +59,19 @@ def identification_ranges(scenario: dict) -> Dict[str, float]:
 def run_cell(setup: Setup, weather: str, loss: float, behaviour: str = "", **options) -> List[RunScore]:
     return [run_once(setup, i, weather, loss, behaviour, **options) for i in range(setup.seeds)]
 
+def swap_causes(setup: Setup, weather: str, loss: float, behaviour: str = "", **options) -> dict:
+    """Why the hostiles' IDs swap, summed over the seeds (scoring/swaps.py)."""
+    total: dict = {}
+    for i in range(setup.seeds):
+        scenario, truth = make_scenario_and_truth(setup, i, weather, loss, False)
+        recorded: dict = {}
+        frames = list(scored_frames(scenario, scenario["seed"], recorded=recorded, **options))
+        events = swap_log(with_recorded_samples(truth, recorded), frames, ScoreConfig(warmup_s=WARMUP_S))
+        for key, n in summarise(events).items():
+            total[key] = total.get(key, 0) + n
+    return total
+
+
 def print_table(title: str, rows) -> None:
     print(title)
     print(" | ".join(["loss"] + [c.replace("_", " ") for c in COLUMNS]))
@@ -90,6 +104,7 @@ def main() -> None:
     ap.add_argument("--distributed", action="store_true", help="a tracker per node and a merger (pipeline/nodes.py)")
     ap.add_argument("--paired", choices=sorted(OPTIONS), help="compare with and without this on the same seeds")
     ap.add_argument("--losses", default=",".join(str(x) for x in LOSSES), help="comma-separated message-loss levels")
+    ap.add_argument("--swaps", action="store_true", help="print why the hostiles' IDs swap (scoring/swaps.py) instead of the table")
     ap.add_argument("--csv")
     args = ap.parse_args()
     losses = [float(x) for x in args.losses.split(",")]
@@ -98,6 +113,10 @@ def main() -> None:
               f"birds={args.birds} vehicles={args.vehicles} behaviour={args.behaviour}")
     base = {"investigate": args.investigate, "keep_identity": args.keep_identity, "distributed": args.distributed,
             "cue": args.cue}
+    if args.swaps:
+        for loss in losses:
+            print(f"loss {loss}: {swap_causes(setup, args.weather, loss, args.behaviour, **base)}")
+        return
     if args.paired:
         flag = OPTIONS[args.paired]
         rows = [(loss, paired_difference(run_cell(setup, args.weather, loss, args.behaviour, **{**base, flag: False}),

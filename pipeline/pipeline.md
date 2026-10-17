@@ -45,6 +45,27 @@ The cueing of this module's classes: tracks classed `friendly` or `peaceful` get
 Reading it: in safe mode the behaviour module changes nothing on these tracks (identical to the baseline), because with real tracks and non-reacting hostiles it finds neither pursuit nor, once peaceful is off, anything else to say; its friendly identity from beacons was already right. The merge therefore adds nothing over the hand-off alone (the identification gain is the same; the count error is a little worse, within noise). The behaviour module's value is in the viewer's simulation with pursuing actors, which this Python pipeline cannot test.
 
 Speed: the module is about 4 times slower than the plain estimator (36 s against 9 s for 8 runs). `encounters.assess` is most of it. Two exact optimisations were made (a C binary search in `at`, and the ally's manoeuvres computed once per ally, not once per track and ally) and a 3-run snapshot of every class is identical before and after, but they save only about 15 %; a bigger saving would have to skip far-away allies, which changes results.
+## Injected faults (Orlin's `sensor_faults[]`)
+
+The channel now applies `degradations.sensor_faults[]` and the older `dropout[]` ([common/channel.py](../common/channel.py), `Faults`): `dropout` stops a node's messages for good, `link_outage` drops them in a window, `delay_burst` delays them. They apply whenever the scenario lists them. Not modelled: store-and-forward (nodes resending what C2 missed): the pipeline has no history to put late messages in, and the tracker uses readings at their arrival time, so a resent reading could not be used live anyway.
+
+**Result** (the `outage` preset: F2's link cut 30 to 60 s, GS2 delayed 4 s from 70 to 85 s, F4 dead from 100 s; 8 seeds with the faults removed against with them, 10 s warmup, tuning seeds):
+
+| | Hostile tracked | False tracks | Count error | OSPA | Friendlies flagged (of 5) |
+|-|-----------------|--------------|-------------|------|---------------------------|
+| central, no faults | 0.60 | 0.59 | 1.12 | 62 m | 0 |
+| central, change with faults | -0.02±0.01 | +0.54±0.21 | +0.43±0.16 | +8.3±3.2 m | **+1.75±0.25** |
+| distributed, no faults | 0.58 | 0.77 | 1.21 | 65 m | 0 |
+| distributed, change with faults | -0.10±0.02 | +0.01±0.03 | +0.18±0.08 | +7.6±1.9 m | **+1.75±0.16** |
+
+The headline is the friendlies: of the two drones the faults hit (F2 while cut, F4 once dead) about 1.75 are flagged as threats. Their beacons stop, so the estimator's identity fades to `unknown`, which scoring counts as hostile, although the drone is still seen by the other nodes. This is the "silence is not proof of hostility" case of [friend_foe.md](../friend_foe/friend_foe.md), now measured with real faults. The distributed mode also loses 10 points of hostiles (a node's tracks stop reaching the merger while it is cut off). Not yet fixed.
+## Why the hostiles' IDs swap, and what was tried after that
+
+`python -m pipeline.sweep --swaps` sorts every ID swap into a cause ([scoring/swaps.py](../scoring/swaps.py); 20 tuning seeds, `medium`, 0 % loss, 65 swaps): **ghost 36** (the hostile's old track is still alive but on nothing: a duplicate track 20 to 40 m from the hostile), **crossing 20** (two hostiles trade tracks), restart 4, other 3, pickup 2. Only about 9 % are a dropped track starting again, so the predictor's identity keeper (re-acquisition) could not have helped, which is what its test showed.
+
+- **Duplicate tracks merged** ([tracker.md](../tracker/tracker.md)): 30 tuning seeds, 0 % loss, change: false tracks -0.31±0.05, OSPA -4.4±1.0 m, count error -0.17±0.05, hostiles tracked unchanged; ID swaps unchanged. On by default (30 m, 6 m/s).
+- **A moving node's own bearings crossed over time** (parallax, one sensor 1 to 4 s apart, baselines 25 to 80 m): no effect at all, because the crossing angle stays under the 15 degree limit. Removed.
+- **Making the hand-off cheaper** (12 tuning seeds, 0 % loss, change from no drones): stricter track age, position error or a two-node condition changed nothing beyond noise. What changes the cost is how many drones leave the patrol: 2 active and 6 s on station (current): false tracks +0.39±0.08, time to a drone in range -11.5±2.4 s; **1 active and 3 s: false tracks +0.08±0.06, count error +0.08±0.04, time -7.9±2.2 s**; 3 active: false tracks +0.62±0.10. The 1 active, 3 s setting keeps most of the speed for almost no cost to the picture, but it is **not confirmed** on other seeds and the 3 s on station is an assumption, so the defaults of `Dispatcher` (`max_active=2`, `dwell_s=6`) were not changed.
 Sweep options: `--investigate`, `--keep-identity` (the [predictor](../predictor/predictor.md)'s identity keeper), `--distributed`, `--cue`, and `--paired investigate|identity|distributed|cueing` to compare with and without one on the same seeds. All are off by default.
 
 ```

@@ -48,6 +48,8 @@ class TrackerConfig:
     beacon_velocity_sigma_mps: float = 1.0
     friend_accel_noise_mps2: float = 3.0   # process noise of a friendly's beacon track
     beacon_trust_s: float = 2.0            # while a friend's last beacon is this recent, sensor readings of it are only absorbed
+    duplicate_distance_m: float = 30.0     # two non-friend tracks this close and alike in velocity are one target (0 = off)
+    duplicate_speed_mps: float = 6.0       # "alike in velocity": within this
 
 
 @dataclass
@@ -88,6 +90,7 @@ class Tracker:
         leftovers = self._associate(t, measurements)
         self._initiate(t, leftovers)
         self._life_cycle(t)
+        self._drop_duplicates()
         return [tr for tr in self.tracks if tr.confirmed]
 
     def _predict(self, t: float) -> None:
@@ -195,6 +198,23 @@ class Tracker:
             elif tr.friend_id is not None:
                 del self.friends[tr.friend_id]
         self.tracks = keep
+
+    def _drop_duplicates(self) -> None:
+        """Keep the older of two non-friend tracks that sit on one target: close together and moving alike.
+        Such duplicates, 20 to 40 m from each other, were the largest source of ghost tracks in the scoring's logs."""
+        limit, speed = self.config.duplicate_distance_m, self.config.duplicate_speed_mps
+        if limit <= 0:
+            return
+        tracks = [tr for tr in self.tracks if tr.friend_id is None]
+        dropped = set()
+        for i, a in enumerate(tracks):
+            for b in tracks[i + 1:]:
+                if id(a) in dropped or id(b) in dropped:
+                    continue
+                if (math.hypot(a.state[0] - b.state[0], a.state[1] - b.state[1]) <= limit
+                        and math.hypot(a.state[2] - b.state[2], a.state[3] - b.state[3]) <= speed):
+                    dropped.add(id(b) if (a.confirmed, -a.born) >= (b.confirmed, -b.born) else id(a))
+        self.tracks = [tr for tr in self.tracks if id(tr) not in dropped]
 
     def _supported(self, tr: Track, t: float) -> bool:
         window = self.config.support_window_s

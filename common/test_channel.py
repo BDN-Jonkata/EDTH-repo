@@ -33,6 +33,40 @@ class TestChannel(unittest.TestCase):
         self.assertAlmostEqual(ch.lost / ch.sent, 0.3, delta=0.03)
         self.assertEqual(len(ch.deliver(1.0)), ch.sent - ch.lost)
 
+    def faulty(self, *faults, dropout=()):
+        s = scenario()
+        s["degradations"]["sensor_faults"] = list(faults)
+        s["degradations"]["dropout"] = list(dropout)
+        return Channel(s)
+
+    def test_a_link_outage_cuts_one_node_only_while_it_lasts(self):
+        ch = self.faulty({"node": "F2", "kind": "link_outage", "t_start": 10.0, "t_end": 20.0})
+        for t in (5.0, 15.0, 25.0):
+            ch.send(message("F2", int(t)), t)
+        ch.send(message("F3", 99), 15.0)
+        self.assertEqual(sorted(m["header"]["seq"] for m in ch.deliver(60.0)), [5, 25, 99])
+
+    def test_a_dropout_is_for_good_including_the_older_dropout_list(self):
+        ch = self.faulty({"node": "F4", "kind": "dropout", "t_start": 10.0}, dropout=[{"node": "F5", "t": 3.0}])
+        ch.send(message("F4", 1), 9.0)
+        ch.send(message("F4", 2), 100.0)
+        ch.send(message("F5", 3), 2.0)
+        ch.send(message("F5", 4), 4.0)
+        self.assertEqual(sorted(m["header"]["seq"] for m in ch.deliver(200.0)), [1, 3])
+
+    def test_a_delay_burst_delays_what_the_node_sends_inside_the_window(self):
+        ch = self.faulty({"node": "GS2", "kind": "delay_burst", "t_start": 10.0, "t_end": 20.0, "extra_ms": 4000})
+        ch.send(message("GS2", 1), 12.0)
+        ch.send(message("GS2", 2), 25.0)
+        self.assertEqual([m["header"]["seq"] for m in ch.deliver(13.0)], [])
+        self.assertEqual([m["header"]["seq"] for m in ch.deliver(16.1)], [1])
+        self.assertEqual([m["header"]["seq"] for m in ch.deliver(25.1)], [2])
+
+    def test_a_scenario_with_no_faults_behaves_as_before(self):
+        ch = Channel({"degradations": {"network": {"enabled": False}}})
+        ch.send(message("F1"), 0.0)
+        self.assertEqual(len(ch.deliver(0.0)), 1)
+
     def test_disabled_network_loses_nothing(self):
         ch = Channel(scenario(loss=0.9, enabled=False))
         for n in range(100):

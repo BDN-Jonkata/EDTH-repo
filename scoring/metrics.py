@@ -100,6 +100,8 @@ class _Accum:
         self.false_tracks: List[int] = []
         self.last_track: Dict[str, str] = {}           # object id -> track id it was last matched to
         self.id_swaps = 0
+        self.swap_events: List[dict] = []              # one per ID swap, with the context that explains it
+        self.seen_tracks = set()                       # every track id scored so far
         self.frames: Dict[Tuple[str, bool], int] = {}  # (kind, matched to a counted track) -> object-steps
         self.flagged_friendlies = set()
 
@@ -120,18 +122,34 @@ def _heading_error_deg(est: Estimate, state: State) -> Optional[float]:
     return (diff + 180.0) % 360.0 - 180.0
 
 
-def _track_hostile(acc: _Accum, est: Estimate, obj: TruthObject, state: State) -> None:
+def _track_hostile(acc: _Accum, est: Estimate, obj: TruthObject, state: State) -> bool:
+    """Adds the track's errors; returns True if this is an ID swap (the object had another track before)."""
     acc.pos_sq.append(_dist(est, state) ** 2)
     acc.vel_sq.append((est.vx - state[2]) ** 2 + (est.vy - state[3]) ** 2)
     heading = _heading_error_deg(est, state)
     if heading is not None:
         acc.heading_sq.append(heading ** 2)
     previous = acc.last_track.get(obj.id)
-    if previous is not None and previous != est.track_id:
-        acc.id_swaps += 1
+    swapped = previous is not None and previous != est.track_id
+    acc.id_swaps += swapped
+    return swapped
 
 
-def _score_step(acc: _Accum, ests: Sequence[Estimate], present, config: ScoreConfig) -> None:
+def _log_swap(acc: _Accum, t: float, obj: TruthObject, state: State, est: Estimate, ests: Sequence[Estimate],
+              matches, present) -> None:
+    old = acc.last_track[obj.id]
+    on = matches[old][0].kind if old in matches else None       # what the old track is on now, if anything
+    others = [math.hypot(s[0] - state[0], s[1] - state[1]) for o, s in present if o.kind == "hostile" and o.id != obj.id]
+    old_est = next((e for e in ests if e.track_id == old), None)
+    acc.swap_events.append({"t": t, "object": obj.id, "old": old, "new": est.track_id,
+                           "old_to_object_m": _dist(old_est, state) if old_est else None,
+                           "new_to_old_m": math.hypot(est.x - old_est.x, est.y - old_est.y) if old_est else None,
+                           "old_alive": any(e.track_id == old for e in ests), "old_on": on,
+                           "new_seen_before": est.track_id in acc.seen_tracks,
+                           "nearest_other_hostile_m": min(others) if others else None})
+
+
+def _score_step(acc: _Accum, ests: Sequence[Estimate], present, config: ScoreConfig, t: float = 0.0) -> None:
     matches = match_step(ests, present, config.gate_m, acc.last_track, config.continuity_m)
     est_by_id = {e.track_id: e for e in ests}
     track_on = {obj.id: est_by_id[track_id] for track_id, (obj, _) in matches.items()}
@@ -139,7 +157,8 @@ def _score_step(acc: _Accum, ests: Sequence[Estimate], present, config: ScoreCon
         est = track_on.get(obj.id)
         acc.object_step(obj, est is not None and est.counted)
         if est is not None and obj.kind == "hostile":
-            _track_hostile(acc, est, obj, state)
+            if _track_hostile(acc, est, obj, state):
+                _log_swap(acc, t, obj, state, est, ests, matches, present)
         if est is not None:
             acc.last_track[obj.id] = est.track_id
     counted = [e for e in ests if e.counted]
@@ -147,6 +166,7 @@ def _score_step(acc: _Accum, ests: Sequence[Estimate], present, config: ScoreCon
     acc.count_err.append(len(counted) - len(hostile_xy))
     acc.ospa.append(ospa(hostile_xy, [(e.x, e.y) for e in counted], config.ospa_cutoff_m, config.ospa_order))
     acc.false_tracks.append(sum(e.track_id not in matches for e in counted))
+    acc.seen_tracks.update(e.track_id for e in ests)
     acc.steps += 1
 
 
@@ -177,11 +197,19 @@ def _summary(acc: _Accum) -> RunScore:
     )
 
 
-def score(truth: dict, frames: Iterable[Tuple[float, Sequence[Estimate]]], config: Optional[ScoreConfig] = None) -> RunScore:
-    """`frames` are (t, estimates at t) in time order, for example from `scoring.tracks`."""
-    config = config or ScoreConfig()
+def _run(truth: dict, frames: Iterable[Tuple[float, Sequence[Estimate]]], config: ScoreConfig) -> _Accum:
     objects, acc = load_truth(truth), _Accum()
     for t, ests in frames:
         if t >= config.warmup_s:
-            _score_step(acc, ests, present_at(objects, t), config)
-    return _summary(acc)
+            _score_step(acc, ests, present_at(objects, t), config, t)
+    return acc
+
+
+def score(truth: dict, frames: Iterable[Tuple[float, Sequence[Estimate]]], config: Optional[ScoreConfig] = None) -> RunScore:
+    """`frames` are (t, estimates at t) in time order, for example from `scoring.tracks`."""
+    return _summary(_run(truth, frames, config or ScoreConfig()))
+
+
+def swap_log(truth: dict, frames: Iterable[Tuple[float, Sequence[Estimate]]], config: Optional[ScoreConfig] = None) -> List[dict]:
+    """Every ID swap of a hostile with its context; `scoring/swaps.py` sorts them into causes."""
+    return _run(truth, frames, config or ScoreConfig()).swap_events

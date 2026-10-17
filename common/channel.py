@@ -3,7 +3,7 @@
 Driven by a scenario's `degradations` (`network`, `clock`), each only when its `enabled` is true. Used by
 the test adapter in `friend_foe/` and by the pipeline in `tracker/`. Assumptions, since the scenario only
 gives ranges: bursty loss is a two-state chain with a mean burst of `MEAN_BURST` messages and the
-configured average loss; a node's clock offset is a random sign times a value in `offset_ms`, and its
+configured average loss; sensor faults (`degradations.sensor_faults[]` and the older `dropout[]`) cut a node's link or delay it; a node's clock offset is a random sign times a value in `offset_ms`, and its
 drift a random sign times `drift_ppm`. Not modelled: jamming zones, node dropout, topology.
 """
 
@@ -56,6 +56,33 @@ def network_settings(scenario: dict) -> Tuple[float, bool, Tuple[float, float]]:
     return net.get("loss", 0.0), bool(net.get("burst")), (lo, hi)
 
 
+class Faults:
+    """Injected data loss, from `degradations.sensor_faults[]` and the older `dropout[]` = {node, t}.
+
+    A fault is for the messages a node *sends* (the pipeline sends nothing to nodes): `dropout` stops them for
+    good from `t_start`, `link_outage` drops them between `t_start` and `t_end`, `delay_burst` delays them by
+    `extra_ms` in that window. Applied whenever the scenario lists them, like the viewer's Realistic mode.
+    """
+
+    def __init__(self, scenario: dict):
+        degradations = scenario["degradations"]
+        listed = list(degradations.get("sensor_faults", []))
+        listed += [{"node": d["node"], "kind": "dropout", "t_start": d["t"]} for d in degradations.get("dropout", [])]
+        self.faults: Dict[str, List[dict]] = {}
+        for f in listed:
+            self.faults.setdefault(f["node"], []).append(f)
+
+    def _active(self, node: str, t: float):
+        for f in self.faults.get(node, []):
+            if f["t_start"] <= t and ("t_end" not in f or t < f["t_end"]):
+                yield f
+
+    def cuts(self, node: str, t: float) -> bool:
+        return any(f["kind"] in ("dropout", "link_outage") for f in self._active(node, t))
+
+    def extra_delay_s(self, node: str, t: float) -> float:
+        return sum(f["extra_ms"] for f in self._active(node, t) if f["kind"] == "delay_burst") / 1000.0
+
 class Channel:
     """Messages go in with `send`, come out of `deliver` after their delay, minus the lost ones.
 
@@ -66,6 +93,7 @@ class Channel:
         self.rng = random.Random(seed)
         self.loss, self.burst, self.delay_ms = network_settings(scenario)
         self.links: Dict[str, Loss] = {}
+        self.faults = Faults(scenario)
         self._queue: List[Tuple[float, int, dict]] = []
         self._order = itertools.count()
         self.sent = self.lost = 0
@@ -74,10 +102,10 @@ class Channel:
         source = message["header"]["source_id"]
         link = self.links.setdefault(source, Loss(self.rng, self.loss, self.burst))
         self.sent += 1
-        if link.drops():
+        if link.drops() or self.faults.cuts(source, t):
             self.lost += 1
             return
-        arrival = t + extra_delay_s + self.rng.uniform(*self.delay_ms) / 1000.0
+        arrival = t + extra_delay_s + self.faults.extra_delay_s(source, t) + self.rng.uniform(*self.delay_ms) / 1000.0
         heapq.heappush(self._queue, (arrival, next(self._order), message))
 
     def deliver(self, t: float) -> List[dict]:
