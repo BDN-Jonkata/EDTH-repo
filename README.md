@@ -52,19 +52,20 @@ Phased, starting from the optimistic case. Status legend: ⬜ not started · �
 
 | Status | Task |
 |--------|------|
-| 🟨 | Folder structure and docs (concept, system design) |
+| ✅ | Folder structure and docs (concept, system design) |
 | ⬜ | Decide fusion topology (hybrid proposed) and module boundaries |
 | 🟨 | Define shared message schema (observation, track, uncertainty, timestamp, source ID): header, beacon, track, investigation and drone-command messages drafted in `docs/data-formats.md`; observation and final COP track not frozen |
 | 🟨 | Choose stack, simulation framework and message bus: Python, JSON Lines and PostgreSQL chosen; bus and the real simulation framework still open (a JavaScript mock simulation runs in the viewer) |
-| 🟨 | Define scoring metrics and ground-truth format: `truth.json` format, metrics and the scoring module defined and done |
+| ✅ | Define scoring metrics and ground-truth format: `truth.json` format, metrics and the scoring module defined and done |
 | 🟨 | Set up environment, tooling, CI: Python environment, pytest and unittest suites, node tests, `.env` and PostgreSQL done; no CI and no formatter yet |
 
 ### Phase 1 - Optimistic pipeline (clean data)
 
 | Status | Task |
 |--------|------|
-| 🟨 | Seeder: sensor and platform catalog, PostgreSQL storage, scenario generator (friendly patrols, ground sensors, hostile and non-allied benign paths, planned close crossing, seven presets, tuning and test seeds) done; also clutter objects (birds, vehicles), weather combinations, weather events and a seasonal sky, jamming zones and bandwidth limits in the config, and scenario sweeps (`python seeder/generate.py scenarios/hard.json --sweep tuning`, one folder per seed); a worksheet for verifying the catalog numbers (`python seeder/unverified.py`); terrain and moving ground units are not in the generator (waiting for the mentor) |
-| 🟨 | Simulation: the viewer runs a JavaScript mock simulation (2D map with terrain/height display, crossing, commanded drone motion, clutter objects, per-detection weather with a sky control, jamming zones, per-node link bandwidth caps; the Sensor limits table and coverage follow the weather at the sensor); the real simulation module is not started |
+| ✅ | Seeder: sensor and platform catalog, PostgreSQL storage, scenario generator (friendly patrols, ground sensors, hostile and non-allied benign paths, planned close crossing, seven presets, tuning and test seeds) done; also clutter objects (birds, vehicles), weather combinations, weather events and a seasonal sky, jamming zones and bandwidth limits in the config, and scenario sweeps (`python seeder/generate.py scenarios/hard.json --sweep tuning`, one folder per seed); a worksheet for verifying the catalog numbers (`python seeder/unverified.py`); terrain and moving ground units wait for the mentor and are not part of this row |
+| ✅ | Mock simulation: the viewer runs a JavaScript simulation (2D map with terrain/height display, crossing, commanded drone motion, clutter objects, per-detection weather with a sky control, jamming zones, per-node link bandwidth caps; the Sensor limits table and coverage follow the weather at the sensor) |
+| ⬜ | Real simulation module (Python, with the channel emulator wired in); the mock above is the reference for its rules, including jamming zones and bandwidth caps |
 | ✅ | Network channel (`common/channel.py`): loss (independent or bursty, per sender), delay and node clocks from the scenario's `degradations`; jamming zones, node dropout and topology not modelled in Python (the viewer's mock simulation has a channel with jamming zones) |
 | ✅ | Sensor observation models (`sensors/observe.py`, `native.py`, `beacons.py`): range window, field of view, detection probability, signatures, weather per detection, native fields with honest noise; the viewer's mock simulation has its own JavaScript version |
 | ✅ | Baseline tracker (`tracker/`): central Kalman tracker on native readings, gated association, radar or two-bearing start, support rules, friendly beacon tracks; tested. Weak spot: a hostile is tracked 57 % of the time, see [tracker.md](tracker/tracker.md) |
