@@ -66,7 +66,8 @@ Phased, starting from the optimistic case. Status legend: ⬜ not started · �
 | 🟨 | Network channel emulator: the mock simulation has a lossy channel; the real emulator is not started |
 | 🟨 | Sensor models: the mock simulation enforces sensor limits and native outputs from the catalog; the `sensors/` observation models are not started (weather and quality are done) |
 | 🟨 | Baseline tracker: only a mock tracker in the viewer simulation (an example of the shape, not a reference tracker); the real tracker is not started |
-| 🟨 | Friend/Foe: friendly ID/position beacon matching (estimator done and tested on synthetic data and on seeder-generated scenarios through a test adapter; not yet fed by the real tracker) |
+| ✅ | Friend/Foe estimator: beacon matching, delivery-rate-weighted silence, `peaceful` class and behaviour hook (`threat_llr`), tested on synthetic data and seeder scenarios through a test adapter (`friend_foe/`) |
+| ⬜ | Feed the friend/foe estimator from the real tracker (the adapter is a stand-in) |
 | 🟨 | Scoring harness implementing the metrics: the viewer shows metrics; the scoring module is not started |
 
 **Exit criteria:** correct hostile count, no ID swaps through the crossing, zero friendlies flagged, on clean data.
@@ -78,8 +79,10 @@ Phased, starting from the optimistic case. Status legend: ⬜ not started · �
 | ⬜ | Per-node local trackers sharing compact tracks |
 | ⬜ | Track merge with covariance intersection |
 | ⬜ | Drone Behaviour module: friendly pattern + hostile presumption |
-| 🟨 | Weather effects in sensor models (conditions from `scenario.json`, including several anomalies at once and anomalies that start, end and cover a zone; per-module quality and sensor hierarchy built on the catalog's `weather_effects`, done and tested; not yet applied to simulated observations; the seeder and viewer accept only one weather at a time) |
-| 🟨 | Suspicious class and trigger; weather-based standoff distance per catalog module (done and tested; the trigger also reads drone acks through `DroneStatusMapper`; not yet connected to the real tracker) |
+| ✅ | Weather model (`sensors/`): several anomalies at once, anomalies that start, end and cover a zone, seasonal sun for day and night, per-module quality and sensor hierarchy from the catalog's `weather_effects`, shared golden cases for the JS port; tested |
+| 🟨 | Apply weather to simulated observations: the seeder and viewer accept only one weather at a time (A is adding combinations, events and sky); `sim.ident_range_m` still to come |
+| ✅ | Suspicious class, investigation trigger and weather-based standoff per catalog module; reads drone acks through `DroneStatusMapper`; tested |
+| ⬜ | Connect the trigger to the real tracker and the drone-behaviour module |
 | 🟨 | Closest-drone investigation of suspicious tracks: commanded drone motion with ack and retry exists in the mock simulation (`goto`, `hold`, `return_to_patrol`, flight limits); the drone-behaviour module that picks the drone is not started |
 
 ### Phase 3 - Prediction
@@ -97,7 +100,8 @@ Phased, starting from the optimistic case. Status legend: ⬜ not started · �
 | ⬜ | Clock drift and time-sync handling |
 | ⬜ | Position uncertainty (GNSS-denied) |
 | ⬜ | Missing data, delay, out-of-order messages |
-| 🟨 | Message-loss sweep (0 → high %) with degradation curves: done for the friend/foe estimator (`python -m friend_foe.sweep`, results in `friend_foe/friend_foe.md`); not for the whole pipeline |
+| ✅ | Message-loss sweep for the friend/foe estimator, with weather and clutter (`python -m friend_foe.sweep`, results in `friend_foe/friend_foe.md`) |
+| ⬜ | Message-loss sweep for the whole pipeline |
 
 ### Phase 5 - Evaluation and delivery
 
