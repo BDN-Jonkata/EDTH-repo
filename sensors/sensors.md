@@ -2,7 +2,18 @@
 
 Sensor models (camera bearing, acoustic, RF, radar) including weather effects. Each outputs observations with honest covariances.
 
-Status: weather conditions (single, combined and changing over time and place), sensor quality, required standoff and a weather report done, built on the seeder catalog; observation models not started. See [system design](../docs/system-design.md).
+Status: weather conditions (single, combined and changing over time and place), sensor quality, required standoff and a weather report done, built on the seeder catalog; observation models and the beacon source done and tested (Python, mirroring the viewer's mock). See [system design](../docs/system-design.md).
+
+## Observation models
+
+| File | Contents |
+|------|----------|
+| [observe.py](observe.py) | `ObservationSource(scenario, seed).at(t)`: the `observation` messages the nodes' sensors produce at `t`. Detection by range window, field of view (forward sensors look where the drone heads), detection probability that falls with distance and scales with the object's signature, weather at that detection, silent hostiles invisible to RF, radar resolution cells, radar false alarms |
+| [native.py](native.py) | The native fields and honest noise each sensor type reports (camera bearing and elevation, microphone level, array bearing, RF bearing and RSSI, radar range, azimuth, Doppler) |
+| [world.py](world.py) | Where nodes and objects are at `t`, from `scenario.json` through the seeder's own motion formulas |
+| [beacons.py](beacons.py) | `BeaconSource`: friendly position beacons with the beacon noise, pose error and the drone's own clock |
+
+This is the simulation side: it needs the true positions, so the tracker never imports it. Messages leave undelayed; [common/channel.py](../common/channel.py) loses and delays them. Numbers are the catalog's (assumptions unless `verified`); the classifier hint, signal levels and false-alarm placement are the mock's simplifications.
 
 ## What exists
 
@@ -25,7 +36,7 @@ Anomalies that come and go: `EventWeather(base, events)` answers for a position 
 
 **Finding:** the catalog check only tests single weathers. In combination, platforms lose every working detection module: fog and rain leave `anafi_thermal` with none, fog and wind (or rain, wind and night) leave `mini4pro` and `gs_eo_acoustic` with none (camera hurt by fog, microphone by wind), and fog, rain and wind at night leave 4 of 7 platforms without one. The radar and RF platforms survive everything.
 
-The one number the catalog lacks is how much of a module's detection range is good enough to identify an object. `IDENT_FRACTION` in `quality.py` is a **placeholder** per module kind; the clean fix is a field such as `sim.ident_range_m` in the catalog, after which the placeholder goes away. Like the catalog numbers, it is an assumption.
+How close an object must be to be identified comes from the catalog field `sim.ident_range_m` (assumed, like the other catalog numbers); the placeholder fraction `IDENT_FRACTION` that stood in for it is gone.
 
 ## Not done yet
 

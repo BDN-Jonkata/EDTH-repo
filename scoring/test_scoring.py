@@ -4,7 +4,7 @@ import math
 import unittest
 
 from common.seeder_import import ensure_seeder_on_path
-from scoring.assign import assign
+from common.assignment import assign
 from scoring.metrics import Estimate, ScoreConfig, ospa, score
 from scoring.tracks import frames_from_estimator, frames_from_local_tracks
 from scoring.truth import load_truth

@@ -250,11 +250,19 @@ def _check_environment(cfg):
     errors += _check_weather(cfg["environment"])
     if not 0 <= cfg["degradations"]["network"]["loss"] <= 1:
         errors.append("degradations.network.loss must be between 0 and 1")
-    return errors + _check_jamming(cfg["degradations"]["network"].get("jamming_zones", []))
+    return errors + _check_bandwidth(cfg["degradations"]["network"]) + _check_jamming(cfg["degradations"]["network"].get("jamming_zones", []))
 
 
 def _is_number(v):
     return isinstance(v, (int, float)) and not isinstance(v, bool)
+
+
+def _check_bandwidth(net):
+    """bandwidth_kbps: null (no cap) or what each node's link to C2 can carry."""
+    kbps = net.get("bandwidth_kbps")
+    if kbps is None or (_is_number(kbps) and kbps > 0):
+        return []
+    return ["degradations.network.bandwidth_kbps must be null or a number above 0"]
 
 
 def _check_jamming(zones):

@@ -310,6 +310,14 @@ class Validation(unittest.TestCase):
         self.check(zones({"x": 1}), "is required")
         self.check(lambda c: c.setdefault("degradations", {}).update(network={"jamming_zones": "all"}), "must be a list")
 
+    def test_bandwidth_cap_is_null_or_positive(self):
+        for kbps in (None, 8, 0.5):
+            cfg = load("challenge")
+            cfg["degradations"] = {"network": {"bandwidth_kbps": kbps}}
+            self.assertEqual(sc.generate(cfg)[0]["degradations"]["network"]["bandwidth_kbps"], kbps)
+        for kbps in (0, -5, "fast", True):
+            self.check(lambda c, kbps=kbps: c.setdefault("degradations", {}).update(network={"bandwidth_kbps": kbps}), "bandwidth_kbps")
+
     def test_rejects_ground_outside_area(self):
         self.check(lambda c: c.update(ground=[{"id": "G", "platform": "gs_radar_rf", "position": [2000, 5]}]), "outside the area")
 

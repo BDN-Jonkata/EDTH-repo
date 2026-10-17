@@ -11,17 +11,15 @@ TEST STAND-IN for the real pipeline, until the simulation and tracker exist:
   `clock` (per-node offset and drift stamp the beacon's `t_sent`) and `pose`
   (position error added to the beacon and to the tracks, reported as honest sigma).
 
-Assumptions, since the scenario only gives ranges: bursty loss is a two-state
-chain with a mean burst of `MEAN_BURST` messages and the configured average
-loss; a node's clock offset is a random sign times a value in `offset_ms`, and
-its drift a random sign times `drift_ppm`. Not modelled: jamming zones, node
-dropout, topology. It never reads `truth.json`.
+The loss and clock models and their assumptions are in `common/channel.py`.
+Not modelled: jamming zones, node dropout, topology. It never reads `truth.json`.
 """
 
 import math
 import random
 from typing import Dict, Iterator, List, Tuple
 
+from common.channel import Clock, Loss
 from common.seeder_import import ensure_seeder_on_path
 from friend_foe.estimator import Beacon, TrackState
 
@@ -29,39 +27,6 @@ ensure_seeder_on_path()
 import scenario as seeder_scenario  # noqa: E402  (seeder/scenario.py)
 
 Frame = Tuple[float, List[TrackState], List[Beacon]]
-MEAN_BURST = 5.0   # assumed mean length of a loss burst, in messages
-
-
-class _Loss:
-    """Packet loss with the configured average, independent or bursty (two-state chain)."""
-
-    def __init__(self, rng: random.Random, loss: float, burst: bool):
-        self.rng, self.loss, self.burst, self.bad = rng, loss, burst, False
-        self.p_bad_to_good = 1.0 / MEAN_BURST
-        self.p_good_to_bad = loss * self.p_bad_to_good / (1 - loss) if 0 < loss < 1 else 0.0
-        if self.p_good_to_bad > 1.0:   # very high loss: lengthen the bursts instead
-            self.p_good_to_bad, self.p_bad_to_good = 1.0, (1 - loss) / loss
-
-    def drops(self) -> bool:
-        if not self.burst:
-            return self.rng.random() < self.loss
-        flip = self.p_bad_to_good if self.bad else self.p_good_to_bad
-        if self.rng.random() < flip:
-            self.bad = not self.bad
-        return self.bad
-
-
-class _Clock:
-    """A node's local clock: random offset and drift, as the scenario's ranges allow."""
-
-    def __init__(self, rng: random.Random, clock: dict):
-        on = clock.get("enabled", False)
-        lo, hi = clock.get("offset_ms", [0, 0]) if on else (0, 0)
-        self.offset_s = rng.choice((-1, 1)) * rng.uniform(lo, hi) / 1000.0
-        self.drift = rng.choice((-1, 1)) * clock.get("drift_ppm", 0) * 1e-6 if on else 0.0
-
-    def local(self, t: float) -> float:
-        return t * (1.0 + self.drift) + self.offset_s
 
 
 class _Feed:
@@ -75,8 +40,8 @@ class _Feed:
         self.track_sigma = math.hypot(track_sigma, pose_err)
         self.beacon_sigma = math.hypot(scenario["beacon"]["pos_sigma_m"], pose_err)
         ids = [f["id"] for f in scenario["friendlies"]]
-        self.links = {i: _Loss(self.rng, loss, bool(net.get("burst"))) for i in ids}
-        self.clocks = {i: _Clock(self.rng, deg["clock"]) for i in ids}
+        self.links = {i: Loss(self.rng, loss, bool(net.get("burst"))) for i in ids}
+        self.clocks = {i: Clock(self.rng, deg["clock"]) for i in ids}
         self.next_beacon: Dict[str, float] = {i: 0.0 for i in ids}
         self.in_flight: List[Tuple[float, Beacon]] = []   # (arrival time, beacon)
 

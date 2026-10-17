@@ -10,7 +10,7 @@ import math
 from dataclasses import dataclass
 from typing import Dict, Iterable, List, Optional, Sequence, Tuple
 
-from scoring.assign import assign
+from common.assignment import assign
 from scoring.truth import State, TruthObject, load_truth, present_at
 
 NOT_HOSTILE_CLASSES = ("friendly", "peaceful")
