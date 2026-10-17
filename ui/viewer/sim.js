@@ -19,6 +19,7 @@
   const Drones = typeof window !== 'undefined' ? window.Drones : require('./drones.js');
   const Messages = typeof window !== 'undefined' ? window.Messages : require('./messages.js');
   const Weather = typeof window !== 'undefined' ? window.Weather : require('./weather.js');
+  const Jamming = typeof window !== 'undefined' ? window.Jamming : require('./jamming.js');
   const CAT = typeof CATALOG !== 'undefined' ? CATALOG : require('./catalog.js'); // eslint-disable-line no-undef
   const DT = 0.1;
   const T_END = 120;
@@ -297,6 +298,7 @@
       loss: real ? P.loss / 100 : 0, delay: real ? P.delayMs / 1000 : 0, drift: real ? P.driftMs / 1000 : 0,
       T_END: world.duration, NF: Math.round(world.duration / DT), EVAL: world.eval,
       wx: wx.provider, wxStatic: wx.isStatic,
+      zones: real ? ((world.deg.network && world.deg.network.jamming_zones) || []) : [], // jamming is a comms degradation: only in Realistic mode
       sensors: buildSensors(assign, Weather.activeEffects(wx.base), world.sensorKinds),
       nodes: world.ground.map((g) => g.id).concat(world.friendlies.map((f) => f.id)),
       pathById: {}, dropT: {}, driftScale: {}, linkQ: {}, queue: [],
@@ -444,6 +446,14 @@
   }
   // the sensor as the weather on this line of sight leaves it; a weather that never changes was applied once, in buildSensors
   function sensorAt(c, s, t, sp, tg) {
+    return jammedRf(c, weatherSensor(c, s, t, sp, tg), t, sp);
+  }
+  // RF receivers inside an active jamming zone are noisier
+  function jammedRf(c, s, t, sp) {
+    const m = s.kind === 'RF' && c.zones.length ? Jamming.rfNoiseMult(c.zones, sp, t) : 1;
+    return m > 1 ? Object.assign({}, s, { nm: s.nm * m }) : s;
+  }
+  function weatherSensor(c, s, t, sp, tg) {
     if (c.wxStatic) return s;
     const effects = Weather.activeEffects(Weather.conditionsBetween(c.wx, [sp.x, sp.y], [tg.x, tg.y], t));
     const q = Weather.sensorQuality(s.mod, effects);
@@ -467,9 +477,13 @@
   function noteLink(c, node, ok) { // smoothed share of messages that got through
     c.linkQ[node] = 0.97 * c.linkQ[node] + 0.03 * (ok ? 1 : 0);
   }
+  // base loss, raised to the loss of any active jamming zone the node is inside
+  function lossFor(c, node, t) {
+    return c.zones.length ? Jamming.lossAt(c.zones, c.loss, nodePos(c, node, t), t) : c.loss;
+  }
   function sendMessage(c, node, payload, t, latency) {
     if (c.tap) c.tap(payload);
-    const ok = c.rnet() >= c.loss;
+    const ok = c.rnet() >= lossFor(c, node, t);
     noteLink(c, node, ok);
     if (!ok) return;
     const dly = c.delay > 0 ? Math.max(0, c.delay * (1 + 0.3 * gauss(c.rnet))) : 0;

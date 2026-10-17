@@ -336,6 +336,7 @@
     $('terrain').innerHTML = S.layers.terrain ? TERRAIN : '';
     $('terrain').style.display = '';
     $('cover').innerHTML = S.layers.cover ? coverageSvg(f) : '';
+    $('jam').innerHTML = S.layers.net ? jammingSvg(f) : '';
     const links = [];
     if (S.layers.net) drawLinks(f, links);
     $('links').innerHTML = links.join('');
@@ -386,6 +387,13 @@
   function clutterSvg(o) {
     return '<circle cx="' + o.x + '" cy="' + Y(o.y) + '" r="4" fill="none" stroke="#8B96A5" stroke-width="1.2" stroke-dasharray="2 2"/>' +
       '<text class="t" x="' + (o.x + 7) + '" y="' + (Y(o.y) + 3) + '" style="fill:#8B96A5">' + o.id + '</text>';
+  }
+  // jamming zones in force at this moment (a comms degradation, so only in Realistic mode)
+  function jammingSvg(f) {
+    const zones = S.applied.mode === 'realistic' ? ((S.res.scen.deg.network || {}).jamming_zones || []) : [];
+    return Jamming.activeZones(zones, f.t).map((z) =>
+      '<circle cx="' + z.x + '" cy="' + Y(z.y) + '" r="' + z.radius_m + '" fill="#FF5A5F" fill-opacity="0.07" stroke="#FF5A5F" stroke-width="1.4" stroke-dasharray="3 4"/>' +
+      '<text class="t" x="' + z.x + '" y="' + (Y(z.y) - z.radius_m - 6) + '" text-anchor="middle" style="fill:#FF5A5F">JAMMING ' + Math.round(z.loss * 100) + ' % loss</text>').join('');
   }
   function crossSvg(cross) {
     return '<circle class="pulse" cx="' + cross.x + '" cy="' + Y(cross.y) + '" r="48" fill="#F5B13D" fill-opacity="0.07" stroke="#F5B13D" stroke-width="1.6" stroke-dasharray="6 4"/><text class="t" x="' + cross.x + '" y="' + (Y(cross.y) + 66) + '" text-anchor="middle" style="fill:#F5B13D">PRED. CROSSING T−' + cross.tca.toFixed(1) + ' s</text>';

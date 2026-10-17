@@ -2,7 +2,7 @@
 
 Back to [README](../README.md) · See also [Concept](concept.md), [System design](system-design.md), [seeder module](../seeder/seeder.md)
 
-> Status: **implemented** in [seeder/scenario.py](../seeder/scenario.py) (`python seeder/generate.py`). Presets live in [scenarios/](../scenarios/). Clutter objects (birds, vehicles) are generated and simulated by the mock. Not yet generated: moving ground units; jamming zones and bandwidth limits are accepted in the config but not simulated yet.
+> Status: **implemented** in [seeder/scenario.py](../seeder/scenario.py) (`python seeder/generate.py`). Presets live in [scenarios/](../scenarios/). Clutter objects (birds, vehicles) are generated and simulated by the mock. Not yet generated: moving ground units; bandwidth limits are accepted in the config but not simulated yet. Jamming zones are checked by the generator and applied by the mock.
 
 Every scenario is fully defined by **one JSON config plus a seed**, so any run can be reproduced. The seeder turns the config into a scenario (nodes, targets, environment, degradations) and a separate ground-truth file.
 
@@ -69,7 +69,7 @@ Every scenario is fully defined by **one JSON config plus a seed**, so any run c
 | `sensor_set` | Which sensor kinds are switched on. Lets us run "camera + acoustic only" against "camera + radar" on the same seed |
 | `environment` | Weather and time of day (change each module differently, see the catalog `weather_effects`). `weather` can combine anomalies (`fog+wind`, with a strength such as `rain:0.6`); `weather_events[]` are anomalies that come and go, over a zone of the map; `sky` makes night follow the date, hour and place (it replaces `time_of_day`). Formats and rules: [data-formats.md](data-formats.md#weather-combinations-and-weather-events). The generator does not use any of this, it only checks and passes it on; the viewer applies it. Also clutter, terrain line-of-sight shadowing (not yet). `clutter.false_alarms_per_min` is random radar false alarms; `clutter.birds` and `clutter.vehicles` are how many real non-threat objects cross the area (0 to 10 each, default 0) |
 | `degradations` | Each has its own on/off and strength: clock offset and drift, node position and heading error, packet loss (random or bursty), latency, out-of-order delivery, node dropout |
-| `network` | Topology (mesh or neighbours only), bandwidth limits, jamming zones where links degrade |
+| `network` | Topology (mesh or neighbours only), bandwidth limits, jamming zones where links degrade: `jamming_zones[]` = `{x, y, radius_m, loss, t_start?, t_end?, rf_noise_mult?}`, see [data-formats.md](data-formats.md#jamming-zones) |
 
 Clutter objects (`CLUTTER_KINDS` in [seeder/scenario.py](../seeder/scenario.py), all numbers **assumed**) fly waypoint paths like hostiles and come from their own random stream, so adding them never moves the hostiles or friendlies:
 
