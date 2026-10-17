@@ -37,6 +37,11 @@ def load_modules() -> Dict[str, dict]:
     return {m["id"]: m for m in seeder_catalog.load_catalog()["modules"]}
 
 
+def load_platforms() -> List[dict]:
+    """Catalog platform models, each with `modules[]` = `{module_id, mount, count}`."""
+    return seeder_catalog.load_catalog()["platforms"]
+
+
 def detection_modules(modules: Iterable[dict]) -> List[dict]:
     return [m for m in modules if m["kind"] in DETECTION_KINDS]
 
@@ -59,14 +64,30 @@ class SensorQuality:
     pd_scale: float      # multiplier on its detection probability
 
 
+def _at_strength(multiplier: float, strength: float) -> float:
+    """Move a catalog multiplier towards 1 (no effect) for a weaker anomaly."""
+    return 1.0 + strength * (multiplier - 1.0)
+
+
 def sensor_quality(module: dict, conditions: Conditions) -> SensorQuality:
+    """Combined effect of every active anomaly. They multiply: independent effects, worst case
+    for range (extinctions would add, which is milder), so a combination is never better than
+    its worst member."""
     rng = noise = pd = 1.0
-    for effect in conditions.active_effects():
+    for effect, strength in conditions.active_effects().items():
         e = module["weather_effects"][effect]
-        rng *= e["range_mult"]
-        noise *= e["noise_mult"]
-        pd *= e["pd_mult"]
+        rng *= _at_strength(e["range_mult"], strength)
+        noise *= _at_strength(e["noise_mult"], strength)
+        pd *= _at_strength(e["pd_mult"], strength)
     return SensorQuality(rng, noise, pd)
+
+
+def modules_that_still_work(modules: Iterable[dict], conditions: Conditions) -> List[str]:
+    """Detection modules that keep most of their range and detections, by the catalog's own test."""
+    def works(m):
+        q = sensor_quality(m, conditions)
+        return q.range_scale >= seeder_catalog.ROBUST_RANGE and q.pd_scale >= seeder_catalog.ROBUST_PD
+    return [m["id"] for m in detection_modules(modules) if works(m)]
 
 
 def sensor_hierarchy(modules: Iterable[dict], conditions: Conditions) -> List[str]:
