@@ -177,7 +177,7 @@ def scored_frames(scenario: dict, seed: int = 0, tracker_config: Optional[Tracke
     drones' patrol loops to watch more of the area and covers a busy drone's sector with a neighbour
     (`pipeline/sectors.py`); `ground_first` also leaves a track that a ground sensor can identify to the ground sensor."""
     if sectors:
-        scenario = plan_sectors(scenario, **(sectors if isinstance(sectors, dict) else {}))
+        scenario = plan_sectors(scenario)
     estimator = estimator or FriendFoeEstimator(for_scenario(scenario))
     pipeline = Pipeline(scenario, seed, tracker_config, investigate, distributed, cue, trust, oosm, sectors, ground_first)
     if trust:        # a missing beacon of a node whose link is down is not evidence against the drone
