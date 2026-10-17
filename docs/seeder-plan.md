@@ -15,6 +15,7 @@ Done so far: catalog and PostgreSQL storage, scenario generator with seven prese
 | 7 | Terrain and line of sight | Only if the mentor confirms terrain matters; the largest piece | blocked by mentor |
 | 8 | Catalog verification | Replace assumed numbers with datasheet values | needs people |
 | 9 | Weather combinations, weather events, seasonal sky | Kris's `sensors/` already reads them; the seeder validator rejects them and the viewer has exclusive weather buttons | done |
+| 10 | Data loss: faults, acks, store-and-forward, link health and trust | Sensors that lose data or stop sending must degrade gracefully, and silence must not be mistaken for an empty sky | phase 1 in progress |
 
 ## 1. Shared header on `meas` and `beacon`
 
@@ -96,6 +97,27 @@ Requested by Kris (branch Krischo, commit 4336605). Format: "Weather combination
 **Order:** merge Krischo, then 1, 3, 4 (small), then 2 (largest), then docs.
 
 **Done:** Kris agreed to the plan and the four recommendations (JS port with shared cases and tolerance 1e-9, merge first, report-only catalog check). Validator: `_check_weather` in `seeder/scenario.py` calls `sensors.weather.weather_from_scenario` (repo root put on `sys.path`), so the generator only passes `weather`, `weather_events` and `sky` through. Viewer: `ui/viewer/weather.js` is the port (parse, strengths, product of effects, events, sun, `conditions_between`); `weather-ui.js` has the toggles with strengths and the sky controls; `sim.js` builds the sensors for the weather that never changes and looks the rest up per detection (`sensorAt`), including radar false alarms. Catalog: `seed_catalog.py --check` prints the combined-weather table (information only, from `sensors/report.py`); `sim.ident_range_m` added to every detection module (assumed: Kris's placeholder fractions of `range_m`: EO 0.6, thermal 0.5, RF 0.3, microphone 0.2, radar 0.2) and validated. Verified: 38 seeder tests; `test-weather.js` (all of `weather_cases.json`, plus simulation checks: an event over everything equals that weather all run, an event that starts at 60 s leaves the first minute as in clear weather, a far event changes nothing, a sky at midday equals clear and at midnight equals a fixed night); 8 baseline and 6 command run hashes identical; the 5 viewer views identical except the new controls; `scenarios.js` unchanged. Not done: the DB catalog and `db-dump.json.gz` were not refreshed for `ident_range_m` (needs the database: `python seeder/seed_catalog.py`, then `python seeder/dump.py export`); the Sensor limits table and coverage show the base weather only.
+
+## 10. Data loss: faults, acks, store-and-forward, link health and trust
+
+**Why:** when a sensor stops sending, C2 cannot tell "nothing there" from "link lost" from "node dead". A drone that is cut off but alive should keep what it sees and send it when the link returns.
+
+**Phase 1 (seeder + mock, Orlin): done.** As built:
+- `degradations.sensor_faults[]` = `{node, kind, t_start, t_end?}`, kinds `dropout` (node dead), `link_outage` (alive, nothing gets through), `delay_burst` (`extra_ms`). Fault times go into `truth.json` `events` (`fault_start`, `fault_end`).
+- C2 broadcasts one `c2_ack` per second with, per node, the contiguous `seq` reached, the highest received and up to 32 missing ranges. A node that misses 3 acks counts itself offline.
+- Store-and-forward: every node keeps its unacknowledged messages (60 s at most, oldest dropped first). After an ack it resends what was lost, oldest first, using at most half of the bandwidth cap (or a fixed rate without a cap). Resent messages keep their original header. Messages the bandwidth cap drops are still in the store, so they are resent like lost ones. Resends wait 1 s (the original may still be on its way); C2 drops duplicates by `seq` and keeps messages older than 3 s out of the live picture.
+- Beacons carry an optional `status` = `{offline, buffered_s, oldest_seq}`; ground sensors send a 1 Hz `node_status`. `oldest_seq` tells C2 to stop asking for expired messages.
+- C2 keeps a health state per node from `seq` gaps and message age: `ok`, `degraded`, `offline`, `presumed_dead`. The viewer shows it per node with the buffered seconds and a fault timeline.
+- All of it is off unless the scenario turns it on (`degradations.store_forward.enabled`), so existing presets stay byte-identical.
+- Measured (run result `storeForward`): stored, resent, expired, late arrivals, duplicates, and per fault the catch-up time. `challenge` with F2 cut 30-60 s, 10 % loss: nothing expired, catch-up 8 s without a cap and 28 s with 16 kbit/s; a clean run has no link alerts. New preset `outage`. Tests: `node ui/viewer/test-storefwd.js`, seeder validation tests.
+
+**Phase 2 (health module, then Kris):** Python reference + JS port with shared cases. Bayesian layer: a 2-state (good / bursty) link model filtered from `seq` gaps. Frequentist layer: binomial interval on the loss rate and a CUSUM change test with a stated false-alarm rate. Trust = health x age discount (half-life 10 s); the tracker scales a reading's weight by it, late readings update history only. Kris: per-sender silence instead of the global delivery rate. Gate: tracking during outages, count error, flagged friendlies with and without trust; calibration; ablation (Bayesian only, frequentist only, both).
+
+**Phase 3 (only if phase 2 pays off):** bounded move to restore the link (spec for emkata, off by default); integrity faults (stuck, bias, spike, replay) with chi-square and CUSUM tests; learned trust calibration on tuning seeds, kept only if it beats the rules; optional LLM explanation for the operator, outside the decision loop.
+
+**Assumed numbers:** ack every 1 s, offline after 3 missed acks, buffer 60 s, resend share 50 %; C2 calls a node offline after 4 s of silence, presumed dead after 15 s, degraded at 30 % recent loss (ok again below 20 %); age half-life 10 s (phase 2).
+
+**Risks:** new optional fields in formats other modules read (documented in `data-formats.md` first); the tracker does not handle out-of-order readings yet; a jammed link and a dead node look the same from C2 (hence "presumed").
 
 ## Order and checkpoints
 

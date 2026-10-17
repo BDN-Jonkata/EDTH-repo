@@ -504,6 +504,16 @@
     }).join('');
     if (html !== S.limitsHtml) $('limits').innerHTML = S.limitsHtml = html; // rows change only when the weather does
   }
+  const HEALTH_COL = { ok: '#C9D1DB', degraded: '#F5B13D', offline: '#FF5A5F', presumed_dead: '#FF5A5F' };
+  // store-and-forward runs only: each node's link as C2 sees it, and what the node itself still holds
+  function buildHealth(f) {
+    $('healthSec').style.display = f.health ? '' : 'none';
+    if (!f.health) return;
+    $('health').innerHTML = Object.keys(f.health).map((n) => {
+      const h = f.health[n];
+      return '<tr><td>' + n + '</td><td style="color:' + HEALTH_COL[h.state] + '">' + h.state.replace('_', ' ') + '</td><td>' + Math.round(h.loss * 100) + '%</td><td>' + h.silent_s.toFixed(1) + '</td><td' + (h.offline ? ' style="color:#FF5A5F">yes' : '>no') + '</td><td>' + h.buffered_s.toFixed(1) + '</td></tr>';
+    }).join('');
+  }
   function renderDetail(f) {
     const box = $('detail');
     const t = f.tracks.find((q) => q.id === S.sel);
@@ -636,6 +646,7 @@
     renderMap(f);
     renderFooter(f);
     buildLimits(f);
+    buildHealth(f);
     applyView();
   }
 

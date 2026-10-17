@@ -338,6 +338,33 @@ class Validation(unittest.TestCase):
         self.check(zones({"x": 1}), "is required")
         self.check(lambda c: c.setdefault("degradations", {}).update(network={"jamming_zones": "all"}), "must be a list")
 
+    def test_faults_and_store_forward_pass_on_and_become_truth_events(self):
+        cfg = load("challenge")
+        faults = [{"node": "F2", "kind": "link_outage", "t_start": 30, "t_end": 60}, {"node": "GS1", "kind": "dropout", "t_start": 90}]
+        cfg["degradations"] = {"sensor_faults": faults, "store_forward": {"enabled": True, "buffer_s": 30}}
+        scenario, truth = sc.generate(cfg)
+        self.assertEqual(scenario["degradations"]["sensor_faults"], faults)
+        self.assertEqual(scenario["degradations"]["store_forward"], {"enabled": True, "buffer_s": 30})
+        events = [(e["type"], e["node"], e["t"]) for e in truth["events"] if e["type"].startswith("fault_")]
+        self.assertEqual(events, [("fault_start", "F2", 30), ("fault_end", "F2", 60), ("fault_start", "GS1", 90)])
+        self.assertEqual(sc.generate(load("challenge"))[0]["targets"], scenario["targets"])
+
+    def test_rejects_bad_faults_and_store_forward(self):
+        def faults(*f):
+            return lambda c: c.setdefault("degradations", {}).update(sensor_faults=list(f))
+        self.check(faults({"node": "F9", "kind": "dropout", "t_start": 1}), ".node must be one of")
+        self.check(faults({"node": "F1", "kind": "stuck", "t_start": 1}), ".kind must be one of")
+        self.check(faults({"node": "F1", "kind": "link_outage", "t_start": -1}), "t_start is required")
+        self.check(faults({"node": "F1", "kind": "link_outage", "t_start": 9, "t_end": 5}), "t_end must be a number after")
+        self.check(faults({"node": "F1", "kind": "dropout", "t_start": 9, "t_end": 20}), "has no t_end")
+        self.check(faults({"node": "F1", "kind": "delay_burst", "t_start": 9, "t_end": 20}), "extra_ms is required")
+        self.check(lambda c: c.setdefault("degradations", {}).update(sensor_faults="F1"), "must be a list")
+        def store_forward(sf):
+            return lambda c: c.setdefault("degradations", {}).update(store_forward=sf)
+        self.check(store_forward({"enabled": "yes"}), "enabled true or false")
+        self.check(store_forward({"enabled": True, "buffer_s": 0}), "buffer_s")
+        self.check(store_forward({"enabled": True, "resend_share": 1.5}), "resend_share")
+
     def test_bandwidth_cap_is_null_or_positive(self):
         for kbps in (None, 8, 0.5):
             cfg = load("challenge")

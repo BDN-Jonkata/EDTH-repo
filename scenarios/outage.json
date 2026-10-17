@@ -1,0 +1,29 @@
+{
+  "name": "outage",
+  "preset": "outage",
+  "seed": 7,
+  "seed_set": "tuning",
+  "description": "Three hostiles while nodes lose their link. F2's link is cut from 30 to 60 s, GS2's messages are delayed by 4 s from 70 to 85 s, and F4 goes down for good at 100 s. Store-and-forward is on: nodes keep what C2 has not acknowledged and resend it once the link is back. Faults apply in Realistic mode only.",
+  "targets": {
+    "count": 3,
+    "motion": "mixed",
+    "speed_mps": [7, 14],
+    "crossing": {"enabled": true, "t": 60}
+  },
+  "environment": {
+    "weather": "clear"
+  },
+  "degradations": {
+    "network": {
+      "enabled": true,
+      "loss": 0.1,
+      "latency_ms": [50, 200]
+    },
+    "sensor_faults": [
+      {"node": "F2", "kind": "link_outage", "t_start": 30, "t_end": 60},
+      {"node": "GS2", "kind": "delay_burst", "t_start": 70, "t_end": 85, "extra_ms": 4000},
+      {"node": "F4", "kind": "dropout", "t_start": 100}
+    ],
+    "store_forward": {"enabled": true}
+  }
+}

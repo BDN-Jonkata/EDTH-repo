@@ -39,6 +39,7 @@ CLUTTER_KINDS = {
 MAX_CLUTTER_PER_KIND = 10  # keep runs fast
 JAM_REQUIRED = ("x", "y", "radius_m", "loss")
 JAM_OPTIONAL = ("t_start", "t_end", "rf_noise_mult")
+FAULT_KINDS = ("dropout", "link_outage", "delay_burst")  # data loss; integrity faults (stuck, bias) come later
 
 DEFAULT_CONFIG = {
     "name": "scenario",
@@ -250,7 +251,8 @@ def _check_environment(cfg):
     errors += _check_weather(cfg["environment"])
     if not 0 <= cfg["degradations"]["network"]["loss"] <= 1:
         errors.append("degradations.network.loss must be between 0 and 1")
-    return errors + _check_bandwidth(cfg["degradations"]["network"]) + _check_jamming(cfg["degradations"]["network"].get("jamming_zones", []))
+    return (errors + _check_bandwidth(cfg["degradations"]["network"]) + _check_jamming(cfg["degradations"]["network"].get("jamming_zones", []))
+            + _check_faults(cfg) + _check_store_forward(cfg["degradations"].get("store_forward")))
 
 
 def _is_number(v):
@@ -293,6 +295,54 @@ def _check_jamming_values(where, z):
     start = z.get("t_start", 0)
     if ok("t_end") and _is_number(start) and z["t_end"] <= start:
         errors.append(where + ".t_end must be after t_start")
+    return errors
+
+
+def _node_ids(cfg):
+    return ["F%d" % (i + 1) for i in range(len(cfg["friendlies"]["platforms"]))] + [g["id"] for g in cfg["ground"]]
+
+
+def _check_faults(cfg):
+    """sensor_faults[]: {node, kind, t_start, t_end?, extra_ms?}; a node that stops sending, or whose messages stop arriving."""
+    faults = cfg["degradations"].get("sensor_faults", [])
+    if not isinstance(faults, list):
+        return ["degradations.sensor_faults must be a list"]
+    nodes, errors = _node_ids(cfg), []
+    for i, f in enumerate(faults):
+        where = "sensor_faults[%d]" % i
+        errors += _check_fault(where, f, nodes) if isinstance(f, dict) else [where + " must be an object"]
+    return errors
+
+
+def _check_fault(where, f, nodes):
+    errors = []
+    if f.get("node") not in nodes:
+        errors.append(where + ".node must be one of " + ", ".join(nodes))
+    if f.get("kind") not in FAULT_KINDS:
+        errors.append(where + ".kind must be one of " + ", ".join(FAULT_KINDS))
+    start = f.get("t_start")
+    if not (_is_number(start) and start >= 0):
+        errors.append(where + ".t_start is required and must be a number from 0")
+    elif "t_end" in f and not (_is_number(f["t_end"]) and f["t_end"] > start):
+        errors.append(where + ".t_end must be a number after t_start")
+    if f.get("kind") == "dropout" and "t_end" in f:
+        errors.append(where + ": a dropout is permanent and has no t_end")
+    if f.get("kind") == "delay_burst" and not (_is_number(f.get("extra_ms")) and f["extra_ms"] > 0):
+        errors.append(where + ".extra_ms is required for delay_burst and must be above 0")
+    return errors
+
+
+def _check_store_forward(sf):
+    """store_forward: {enabled, buffer_s?, resend_share?}; nodes keep what C2 has not acknowledged and resend it."""
+    if sf is None:
+        return []
+    if not isinstance(sf, dict) or not isinstance(sf.get("enabled"), bool):
+        return ["degradations.store_forward must be an object with enabled true or false"]
+    errors = []
+    if "buffer_s" in sf and not (_is_number(sf["buffer_s"]) and sf["buffer_s"] > 0):
+        errors.append("degradations.store_forward.buffer_s must be a number above 0")
+    if "resend_share" in sf and not (_is_number(sf["resend_share"]) and 0 < sf["resend_share"] <= 1):
+        errors.append("degradations.store_forward.resend_share must be above 0 and at most 1")
     return errors
 
 
@@ -688,7 +738,8 @@ def build_truth(scenario, dt=0.1):
         objects.append({"id": cl["id"], "kind": "clutter", "type": cl["type"], "motion": cl["motion"],
                         "altitude_m": cl["altitude_m"], "samples": _sample_rows(target_state, cl, n, dt)})
     ids = list(hostile_rows)
-    events = _enter_exit_events(list(target_rows), target_rows) + _crossing_events(ids, hostile_rows)
+    events = (_enter_exit_events(list(target_rows), target_rows) + _crossing_events(ids, hostile_rows)
+              + _fault_events(scenario["degradations"].get("sensor_faults", [])))
     events.sort(key=lambda e: e["t"])
     return {"schema": "edth.truth/2", "scenario_id": scenario["id"], "seed": scenario["seed"], "duration_s": scenario["duration_s"],
             "dt_s": dt, "columns": ["t", "x", "y", "vx", "vy"], "objects": objects, "events": events}
@@ -703,6 +754,16 @@ def _sample_rows(state_fn, obj, n, dt):
         if s:
             rows.append([round(t, 3), round(s["x"], 1), round(s["y"], 1), round(s["vx"], 2), round(s["vy"], 2)])
     return rows
+
+
+def _fault_events(faults):
+    """When each injected fault starts and ends, so scoring can measure how fast the system notices."""
+    events = []
+    for f in faults:
+        events.append({"type": "fault_start", "node": f["node"], "kind": f["kind"], "t": f["t_start"]})
+        if "t_end" in f:
+            events.append({"type": "fault_end", "node": f["node"], "kind": f["kind"], "t": f["t_end"]})
+    return events
 
 
 def _enter_exit_events(ids, hostile_rows):

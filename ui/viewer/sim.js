@@ -22,6 +22,7 @@
   const Weather = typeof window !== 'undefined' ? window.Weather : require('./weather.js');
   const Jamming = typeof window !== 'undefined' ? window.Jamming : require('./jamming.js');
   const LinkCap = typeof window !== 'undefined' ? window.LinkCap : require('./linkcap.js');
+  const StoreFwd = typeof window !== 'undefined' ? window.StoreFwd : require('./storefwd.js');
   const Behavior = typeof window !== 'undefined' ? window.Behavior : require('./behavior.js');
   const Traffic = typeof window !== 'undefined' ? window.Traffic : require('./traffic.js');
   const FriendFoe = typeof window !== 'undefined' ? window.FriendFoe : require('./friend-foe.js');
@@ -301,6 +302,7 @@
       T_END: world.duration, NF: Math.round(world.duration / DT), EVAL: world.eval,
       wx: wx.provider, wxStatic: wx.isStatic,
       link: linkFor(P, world, real),
+      faults: real ? (world.deg.sensor_faults || []) : [], // injected data loss: like dropout, only in Realistic mode
       zones: real ? ((world.deg.network && world.deg.network.jamming_zones) || []) : [], // jamming is a comms degradation: only in Realistic mode
       sensors: buildSensors(assign, Weather.activeEffects(wx.base), world.sensorKinds),
       nodes: world.ground.map((g) => g.id).concat(world.friendlies.map((f) => f.id)),
@@ -312,8 +314,20 @@
       n: { hostile: 0, unk: 0, swaps: 0, ffa: 0, cfa: 0, bfa: 0, evalSq: 0, evalN: 0, evalCnt: 0, evalCntN: 0 },
     };
     world.targets.concat(world.clutter).forEach((h) => { c.pathById[h.id] = h; });
-    if (real) (world.deg.dropout || []).forEach((d) => { c.dropT[d.node] = d.t; }); // nodes that die mid-run
+    setDropTimes(c, world, real);
+    c.sf = storeForwardFor(world, real, c.nodes);
     c.nodes.forEach((n) => { c.driftScale[n] = c.rn() * 2 - 1; c.linkQ[n] = 1; });
+    addControllers(c, world, assign);
+    shareFalseAlarmsAcrossRadars(c);
+    return c;
+  }
+  // nodes that die mid-run: the scenario's dropout list and dropout faults
+  function setDropTimes(c, world, real) {
+    if (real) (world.deg.dropout || []).forEach((d) => { c.dropT[d.node] = d.t; });
+    c.faults.filter((f) => f.kind === 'dropout').forEach((f) => { c.dropT[f.node] = Math.min(c.dropT[f.node] ?? Infinity, f.t_start); });
+  }
+  // investigations, missions and the friend/foe estimator, for the fleet within its platforms' flight limits
+  function addControllers(c, world, assign) {
     const fleet = world.friendlies.map((f) => {
       const flight = PLATFORMS[assign[f.id]].spec.flight;
       return { ...f, v: Math.min(f.v, flight.max_speed_mps), flight };
@@ -324,12 +338,10 @@
     c.missions = new Mission.Controller(fleet, c.sensors, DT, (t, text) => {
       c.alerts.push({ t, text, sev: 'info' }); c.timeline.push({ t, label: text, color: 'amber' });
     }, { requireInvestigation: true, geometry: (tr, d, t) => c.investigations.geometry(tr, d, t) });
-    const policy = P.behavior || (P.scenario?.config?.drone_behavior) || {};
-    c.traffic = new Traffic(P.traffic || P.scenario?.config?.traffic_behaviors, world.targets, world.friendlies, DT);
+    const policy = c.P.behavior || (c.P.scenario?.config?.drone_behavior) || {};
+    c.traffic = new Traffic(c.P.traffic || c.P.scenario?.config?.traffic_behaviors, world.targets, world.friendlies, DT);
     c.classifier = new FriendFoe.AutomaticEstimator(Behavior.configFor([world.c2.x, world.c2.y], policy),
       { beacon_rate_hz: world.beacon.rate_hz || 2 }, fleet.map((f) => f.id));
-    shareFalseAlarmsAcrossRadars(c);
-    return c;
   }
   // commands to send, in time order: from the run parameters if given, otherwise from the scenario
   function scriptedCommands(P, world) {
@@ -362,7 +374,9 @@
     const truth = truthAt(c, t);
     sendAll(c, k, t, sense(c, k, t, truth));
     drainLinks(c, t);
-    const frameMeas = trackFrame(c, t, handleControl(c, t, deliver(c, t)));
+    sendAcks(c, k, t);
+    const frameMeas = trackFrame(c, t, handleControl(c, t, noteArrivals(c, t, deliver(c, t))));
+    noteHealth(c, t);
     updateLifecycle(c, t);
     pruneTracks(c, t);
     classifyFrame(c, t);
@@ -385,7 +399,9 @@
     // entry markers from scenario script
     c.world.targets.forEach((h) => c.timeline.push({ t: h.wps[0][0], label: h.id + ' in', color: h.role === 'benign' ? 'amber' : 'red' }));
     const commands = Object.keys(c.cmd.records).map((id) => c.cmd.records[id]);
-    return Object.assign(commands.length ? { commands } : {}, c.link ? { bandwidth: LinkCap.summary(c.link) } : {}, {
+    faultTimeline(c);
+    return Object.assign(commands.length ? { commands } : {}, c.link ? { bandwidth: LinkCap.summary(c.link) } : {},
+      c.sf ? { storeForward: storeForwardSummary(c) } : {}, {
       frames: c.frames, alerts: c.alerts, timeline: c.timeline, summary, scen: c.world,
       params: Object.assign({}, c.P, { assign: c.assign, scenario: undefined, scenario_id: c.world.id }),
       T_END: c.T_END, DT, NF: c.NF, EVAL: c.EVAL, sensors: c.sensors.map(sensorInfo),
@@ -410,6 +426,7 @@
       missions: c.missions.snapshot(), coverage: c.missions.cells.map((cell) => cell.last),
       meas: f.frameMeas.map((z) => ({ k: z.k, node: z.node, module: z.module, t: z.t, m: z.m, sx: z.sx, sy: z.sy, b: z.b, r: z.r, rmax: z.rmax, fields: z.fields, merged: !!z.merged, clutter: !!z.clutter })),
       links: Object.assign({}, c.linkQ), cross: f.cross,
+      ...(c.sf ? { health: JSON.parse(JSON.stringify(c.sf.health)) } : {}),
       m: { est: f.hostileTracks.length, tru: score.trueHost.length, countErr: score.countErr, rmse10: score.rmse10, swaps: c.n.swaps, ffa: c.n.ffa },
     };
   }
@@ -515,15 +532,22 @@
   }
   // base loss, raised to the loss of any active jamming zone the node is inside
   function lossFor(c, node, t) {
+    if (c.faults.length && activeFault(c, node, 'link_outage', t)) return 1;
     return c.zones.length ? Jamming.lossAt(c.zones, c.loss, nodePos(c, node, t), t) : c.loss;
+  }
+  const activeFault = (c, node, kind, t) => c.faults.find((f) => f.node === node && f.kind === kind && t >= f.t_start && (f.t_end === undefined || t < f.t_end));
+  function extraDelay(c, node, t) {
+    const f = c.faults.length && activeFault(c, node, 'delay_burst', t);
+    return f ? f.extra_ms / 1000 : 0;
   }
   // each node's link to C2 has a cap when the scenario (or the run) sets one; like jamming, only in Realistic mode
   function linkFor(P, world, real) {
     const kbps = P.bandwidthKbps !== undefined ? P.bandwidthKbps : (world.deg.network || {}).bandwidth_kbps;
     return real && kbps ? LinkCap.create(kbps) : null;
   }
-  function sendMessage(c, node, payload, t, latency) {
+  function sendMessage(c, node, payload, t, latency, resend) {
     if (c.tap) c.tap(payload);
+    if (c.sf && !resend && payload.header.source_id !== 'C2') StoreFwd.remember(c.sf.nodes[node], payload, t);
     if (c.link) LinkCap.enqueue(c.link, node, payload, t, latency);
     else putOnChannel(c, node, payload, t, latency);
   }
@@ -537,7 +561,7 @@
     noteLink(c, node, ok);
     if (!ok) return;
     const dly = c.delay > 0 ? Math.max(0, c.delay * (1 + 0.3 * gauss(c.rnet))) : 0;
-    payload.arr = t + dly + (latency || 0);
+    payload.arr = t + dly + (latency || 0) + (c.faults.length ? extraDelay(c, node, t) : 0);
     c.queue.push(payload);
   }
   function sendAll(c, k, t, raw) {
@@ -562,6 +586,7 @@
     }
     c.world.ground.forEach((g) => {
       if (alive(c, g.id, t)) noteLink(c, g.id, c.rnet() >= c.loss);
+      if (c.sf && alive(c, g.id, t) && Math.round(t / DT) % 10 === 0) sendNodeStatus(c, g.id, t);
     });
   }
   // the friendly reports where its own (drifted) clock says it is, with GNSS-like noise
@@ -569,6 +594,7 @@
     const st = friendlyState(c, f, Math.max(0, localTime(c, f.id, t))), s = c.beaconSigma;
     const position = [st.x + gauss(c.rn) * s, st.y + gauss(c.rn) * s, f.alt];
     const body = { friend_id: f.id, position, velocity: [st.vx, st.vy, 0], covariance: diagonal([s, s, s]) };
+    if (c.sf) body.status = StoreFwd.status(c.sf.nodes[f.id], t);
     sendMessage(c, f.id, stamped(c, f.id, 'friendly_beacon', body, t), t);
   }
   // every message: top-level type, the shared header stamped with the sender's clock, then the body
@@ -581,6 +607,87 @@
     c.queue = c.queue.filter((m) => m.arr > t + 1e-9);
     const beaconFirst = (m) => (m.type === 'friendly_beacon' ? 0 : 1);
     return arrived.sort((a, b) => (a.arr - b.arr) || (beaconFirst(a) - beaconFirst(b)));
+  }
+
+  // ------------------------------------------------- store-and-forward (StoreFwd)
+  // on when the scenario asks for it, and only in Realistic mode: nodes keep unacknowledged messages and resend them
+  function storeForwardFor(world, real, nodes) {
+    const cfg = world.deg.store_forward;
+    if (!real || !cfg || !cfg.enabled) return null;
+    const sf = { share: cfg.resend_share || StoreFwd.RESEND_SHARE, nodes: {}, rx: {}, health: {}, done: {}, late: {}, dups: 0, outages: [] };
+    nodes.forEach((n) => { sf.nodes[n] = StoreFwd.createNode(cfg); sf.rx[n] = StoreFwd.createReceiver(); sf.late[n] = 0; });
+    return sf;
+  }
+  function sendNodeStatus(c, node, t) {
+    sendMessage(c, node, stamped(c, node, 'node_status', { node_id: node, status: StoreFwd.status(c.sf.nodes[node], t) }, t), t);
+  }
+  // C2 broadcasts one ack a second; each node hears it, or not, over its own link
+  function sendAcks(c, k, t) {
+    if (!c.sf || k === 0 || k % Math.round(StoreFwd.ACK_EVERY_S / DT)) return;
+    const acks = {};
+    c.nodes.forEach((n) => { acks[n] = StoreFwd.ackEntry(c.sf.rx[n]); });
+    const msg = stamped(c, 'C2', 'c2_ack', { acks }, t);
+    if (c.tap) c.tap(msg);
+    c.nodes.forEach((n) => { if (alive(c, n, t)) putOnChannel(c, n, Object.assign({}, msg, { to: n }), t, 0); });
+  }
+  // a node hears the ack and resends what C2 is missing, within its share of the link
+  function onAck(c, m, t) {
+    if (!alive(c, m.to, t)) return;
+    const budget = c.link ? c.sf.share * c.link.bytesPerS * StoreFwd.ACK_EVERY_S : Infinity;
+    StoreFwd.onAck(c.sf.nodes[m.to], m.acks[m.to], t, budget, LinkCap.sizeOf).forEach((p) => sendMessage(c, m.to, p, t, 0, true));
+  }
+  // C2: count what arrived, drop duplicates, keep late (resent) messages out of the live picture
+  function noteArrivals(c, t, arrived) {
+    if (!c.sf) return arrived;
+    return arrived.filter((m) => {
+      const src = m.header.source_id, rx = c.sf.rx[src];
+      if (m.type === 'c2_ack' || !rx) return true;
+      if (!StoreFwd.receive(rx, m.header.seq, t)) { c.sf.dups++; return false; }
+      if (m.status) StoreFwd.skipBelow(rx, m.status.oldest_seq);
+      if (m.type === 'node_status') return false;
+      const late = t - m.header.t_sent > StoreFwd.LATE_S;
+      if (late) c.sf.late[src]++;
+      return !late || m.type === 'drone_state';
+    });
+  }
+  // C2's view of each node, plus what the node itself knows (offline, how much it holds); state changes become alerts
+  function noteHealth(c, t) {
+    if (!c.sf) return;
+    c.nodes.forEach((n) => {
+      const before = c.sf.health[n], h = StoreFwd.health(c.sf.rx[n], t, before && before.state), node = c.sf.nodes[n];
+      c.sf.health[n] = Object.assign(h, { offline: StoreFwd.isOffline(node, t), buffered_s: Math.round(StoreFwd.bufferedS(node, t) * 10) / 10 });
+      if (before && before.state !== h.state) noteHealthChange(c, n, before.state, h.state, t);
+    });
+    noteCatchUp(c, t);
+  }
+  const isDown = (state) => state === 'offline' || state === 'presumed_dead';
+  function noteHealthChange(c, n, from, to, t) {
+    c.alerts.push({ t, sev: isDown(to) ? 'warn' : 'info', text: n + ' link ' + from.replace('_', ' ') + ' to ' + to.replace('_', ' ') });
+    if (isDown(to) || isDown(from)) c.timeline.push({ t, label: n + ' ' + to.replace('_', ' '), color: isDown(to) ? 'red' : 'amber' });
+  }
+  // after an outage ends: how long until the node holds nothing from before the end (all resent and acknowledged)
+  function noteCatchUp(c, t) {
+    c.faults.forEach((f) => {
+      const key = f.node + '@' + f.t_end;
+      if (f.kind === 'dropout' || f.t_end === undefined || t < f.t_end || c.sf.done[key]) return;
+      if (c.sf.nodes[f.node].store.some((m) => m.t <= f.t_end)) return;
+      c.sf.done[key] = true;
+      c.sf.outages.push({ node: f.node, kind: f.kind, t_start: f.t_start, t_end: f.t_end, catch_up_s: Math.round((t - f.t_end) * 10) / 10 });
+    });
+  }
+  function storeForwardSummary(c) {
+    const nodes = {};
+    c.nodes.forEach((n) => {
+      const s = c.sf.nodes[n].stats;
+      nodes[n] = { stored: s.stored, resent: s.resent, expired: s.expired, late_arrivals: c.sf.late[n], still_held: c.sf.nodes[n].store.length };
+    });
+    return { nodes, duplicates: c.sf.dups, outages: c.sf.outages };
+  }
+  function faultTimeline(c) {
+    c.faults.forEach((f) => {
+      c.timeline.push({ t: f.t_start, label: f.node + ' ' + f.kind.replace('_', ' '), color: 'red' });
+      if (f.t_end !== undefined) c.timeline.push({ t: f.t_end, label: f.node + ' ' + f.kind.replace('_', ' ') + ' ends', color: 'amber' });
+    });
   }
 
   // ------------------------------------------------------------------- tracker
@@ -1019,8 +1126,9 @@
     arrived.forEach((m) => {
       if (m.type === 'drone_command') onCommand(c, m, t);
       else if (m.type === 'drone_state') onState(c, m, t);
+      else if (m.type === 'c2_ack') onAck(c, m, t);
     });
-    return arrived.filter((m) => m.type !== 'drone_command' && m.type !== 'drone_state');
+    return arrived.filter((m) => m.type !== 'drone_command' && m.type !== 'drone_state' && m.type !== 'c2_ack');
   }
 
   // ------------------------------------------------------------ native records

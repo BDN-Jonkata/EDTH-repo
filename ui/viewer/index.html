@@ -161,6 +161,12 @@
       <table class="tbl mono"><thead><tr><th>Node</th><th>Sensor</th><th>Range m</th><th>FOV</th><th>Points</th><th>Hz</th><th>Reports</th></tr></thead><tbody id="limits"></tbody></table>
     </div>
   </div>
+  <div class="sec" style="gap:6px;display:none" id="healthSec">
+    <div style="display:flex;justify-content:space-between;align-items:center"><p class="h">Node health</p><span class="mono" style="font-size:11px;color:#8B96A5">C2's view · what the node holds</span></div>
+    <div style="overflow:auto;max-height:240px;margin:0 -6px">
+      <table class="tbl mono"><thead><tr><th>Node</th><th>Link</th><th>Lost</th><th>Silent s</th><th>Node offline</th><th>Held s</th></tr></thead><tbody id="health"></tbody></table>
+    </div>
+  </div>
   <div class="sec" style="border-bottom:0" id="detail"></div>
 </aside>
 </div>
@@ -215,6 +221,7 @@
 <script src="weather.js"></script>
 <script src="jamming.js"></script>
 <script src="linkcap.js"></script>
+<script src="storefwd.js"></script>
 <script src="drones.js"></script>
 <script src="encounters.js"></script>
 <script src="behavior.js"></script>
