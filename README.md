@@ -55,7 +55,7 @@ Phased, starting from the optimistic case. Status legend: ⬜ not started · �
 | ⬜ | Decide fusion topology (hybrid proposed) and module boundaries |
 | 🟨 | Define shared message schema (observation, track, uncertainty, timestamp, source ID): header, beacon, track, investigation and drone-command messages drafted in `docs/data-formats.md`; observation and final COP track not frozen |
 | 🟨 | Choose stack, simulation framework and message bus: Python, JSON Lines and PostgreSQL chosen; bus and the real simulation framework still open (a JavaScript mock simulation runs in the viewer) |
-| 🟨 | Define scoring metrics and ground-truth format: `truth.json` format and metrics defined; scoring module not started |
+| 🟨 | Define scoring metrics and ground-truth format: `truth.json` format, metrics and the scoring module defined and done |
 | 🟨 | Set up environment, tooling, CI: Python environment, pytest and unittest suites, node tests, `.env` and PostgreSQL done; no CI and no formatter yet |
 
 ### Phase 1 - Optimistic pipeline (clean data)
@@ -69,7 +69,8 @@ Phased, starting from the optimistic case. Status legend: ⬜ not started · �
 | 🟨 | Baseline tracker: only a mock tracker in the viewer simulation (an example of the shape, not a reference tracker); the real tracker is not started |
 | ✅ | Friend/Foe estimator: beacon matching, delivery-rate-weighted silence, `peaceful` class and behaviour hook (`threat_llr`), tested on synthetic data and seeder scenarios through a test adapter (`friend_foe/`) |
 | ⬜ | Feed the friend/foe estimator from the real tracker (the adapter is a stand-in) |
-| 🟨 | Scoring harness implementing the metrics: the viewer shows metrics; the scoring module is not started |
+| ✅ | Scoring of one run (`scoring/`): optimal matching to `truth.json`, count error, position/velocity/heading error, OSPA, ID swaps, friendly and clutter false alarms; tested |
+| ⬜ | Scoring sweeps over message loss for the whole pipeline (needs the real tracker); reader for the viewer's result JSON |
 
 **Exit criteria:** correct hostile count, no ID swaps through the crossing, zero friendlies flagged, on clean data.
 
