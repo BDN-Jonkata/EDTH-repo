@@ -6049,5 +6049,1097 @@
    },
    "bytes": 42
   }
+ ],
+ "receiver": [
+  {
+   "name": "in order",
+   "steps": [
+    [
+     "receive",
+     1
+    ],
+    [
+     "receive",
+     2
+    ],
+    [
+     "receive",
+     3
+    ]
+   ],
+   "accepted": [
+    true,
+    true,
+    true
+   ],
+   "ack": {
+    "upto": 3,
+    "max": 3,
+    "missing": []
+   }
+  },
+  {
+   "name": "a gap and a duplicate",
+   "steps": [
+    [
+     "receive",
+     1
+    ],
+    [
+     "receive",
+     2
+    ],
+    [
+     "receive",
+     4
+    ],
+    [
+     "receive",
+     5
+    ],
+    [
+     "receive",
+     8
+    ],
+    [
+     "receive",
+     4
+    ]
+   ],
+   "accepted": [
+    true,
+    true,
+    true,
+    true,
+    true,
+    false
+   ],
+   "ack": {
+    "upto": 2,
+    "max": 8,
+    "missing": [
+     [
+      3,
+      3
+     ],
+     [
+      6,
+      7
+     ]
+    ]
+   }
+  },
+  {
+   "name": "the node gave up on its oldest",
+   "steps": [
+    [
+     "receive",
+     1
+    ],
+    [
+     "receive",
+     5
+    ],
+    [
+     "receive",
+     6
+    ],
+    [
+     "skip",
+     4
+    ],
+    [
+     "receive",
+     3
+    ]
+   ],
+   "accepted": [
+    true,
+    true,
+    true,
+    false
+   ],
+   "ack": {
+    "upto": 3,
+    "max": 6,
+    "missing": [
+     [
+      4,
+      4
+     ]
+    ]
+   }
+  },
+  {
+   "name": "a skip past everything seen",
+   "steps": [
+    [
+     "receive",
+     2
+    ],
+    [
+     "receive",
+     9
+    ],
+    [
+     "skip",
+     20
+    ]
+   ],
+   "accepted": [
+    true,
+    true
+   ],
+   "ack": {
+    "upto": 19,
+    "max": 9,
+    "missing": []
+   }
+  },
+  {
+   "name": "more gaps than one ack lists",
+   "steps": [
+    [
+     "receive",
+     2
+    ],
+    [
+     "receive",
+     4
+    ],
+    [
+     "receive",
+     6
+    ],
+    [
+     "receive",
+     8
+    ],
+    [
+     "receive",
+     10
+    ],
+    [
+     "receive",
+     12
+    ],
+    [
+     "receive",
+     14
+    ],
+    [
+     "receive",
+     16
+    ],
+    [
+     "receive",
+     18
+    ],
+    [
+     "receive",
+     20
+    ],
+    [
+     "receive",
+     22
+    ],
+    [
+     "receive",
+     24
+    ],
+    [
+     "receive",
+     26
+    ],
+    [
+     "receive",
+     28
+    ],
+    [
+     "receive",
+     30
+    ],
+    [
+     "receive",
+     32
+    ],
+    [
+     "receive",
+     34
+    ],
+    [
+     "receive",
+     36
+    ],
+    [
+     "receive",
+     38
+    ],
+    [
+     "receive",
+     40
+    ],
+    [
+     "receive",
+     42
+    ],
+    [
+     "receive",
+     44
+    ],
+    [
+     "receive",
+     46
+    ],
+    [
+     "receive",
+     48
+    ],
+    [
+     "receive",
+     50
+    ],
+    [
+     "receive",
+     52
+    ],
+    [
+     "receive",
+     54
+    ],
+    [
+     "receive",
+     56
+    ],
+    [
+     "receive",
+     58
+    ],
+    [
+     "receive",
+     60
+    ],
+    [
+     "receive",
+     62
+    ],
+    [
+     "receive",
+     64
+    ],
+    [
+     "receive",
+     66
+    ],
+    [
+     "receive",
+     68
+    ],
+    [
+     "receive",
+     70
+    ],
+    [
+     "receive",
+     72
+    ],
+    [
+     "receive",
+     74
+    ],
+    [
+     "receive",
+     76
+    ],
+    [
+     "receive",
+     78
+    ],
+    [
+     "receive",
+     80
+    ],
+    [
+     "receive",
+     82
+    ],
+    [
+     "receive",
+     84
+    ],
+    [
+     "receive",
+     86
+    ],
+    [
+     "receive",
+     88
+    ],
+    [
+     "receive",
+     90
+    ],
+    [
+     "receive",
+     92
+    ],
+    [
+     "receive",
+     94
+    ],
+    [
+     "receive",
+     96
+    ],
+    [
+     "receive",
+     98
+    ],
+    [
+     "receive",
+     100
+    ],
+    [
+     "receive",
+     102
+    ],
+    [
+     "receive",
+     104
+    ],
+    [
+     "receive",
+     106
+    ],
+    [
+     "receive",
+     108
+    ],
+    [
+     "receive",
+     110
+    ],
+    [
+     "receive",
+     112
+    ],
+    [
+     "receive",
+     114
+    ],
+    [
+     "receive",
+     116
+    ],
+    [
+     "receive",
+     118
+    ],
+    [
+     "receive",
+     120
+    ],
+    [
+     "receive",
+     122
+    ],
+    [
+     "receive",
+     124
+    ],
+    [
+     "receive",
+     126
+    ],
+    [
+     "receive",
+     128
+    ],
+    [
+     "receive",
+     130
+    ],
+    [
+     "receive",
+     132
+    ],
+    [
+     "receive",
+     134
+    ],
+    [
+     "receive",
+     136
+    ],
+    [
+     "receive",
+     138
+    ],
+    [
+     "receive",
+     140
+    ],
+    [
+     "receive",
+     142
+    ],
+    [
+     "receive",
+     144
+    ],
+    [
+     "receive",
+     146
+    ],
+    [
+     "receive",
+     148
+    ],
+    [
+     "receive",
+     150
+    ],
+    [
+     "receive",
+     152
+    ],
+    [
+     "receive",
+     154
+    ],
+    [
+     "receive",
+     156
+    ],
+    [
+     "receive",
+     158
+    ],
+    [
+     "receive",
+     160
+    ],
+    [
+     "receive",
+     162
+    ],
+    [
+     "receive",
+     164
+    ],
+    [
+     "receive",
+     166
+    ],
+    [
+     "receive",
+     168
+    ],
+    [
+     "receive",
+     170
+    ],
+    [
+     "receive",
+     172
+    ],
+    [
+     "receive",
+     174
+    ],
+    [
+     "receive",
+     176
+    ],
+    [
+     "receive",
+     178
+    ],
+    [
+     "receive",
+     180
+    ],
+    [
+     "receive",
+     182
+    ],
+    [
+     "receive",
+     184
+    ],
+    [
+     "receive",
+     186
+    ],
+    [
+     "receive",
+     188
+    ],
+    [
+     "receive",
+     190
+    ],
+    [
+     "receive",
+     192
+    ],
+    [
+     "receive",
+     194
+    ],
+    [
+     "receive",
+     196
+    ],
+    [
+     "receive",
+     198
+    ]
+   ],
+   "accepted": [
+    true,
+    true,
+    true,
+    true,
+    true,
+    true,
+    true,
+    true,
+    true,
+    true,
+    true,
+    true,
+    true,
+    true,
+    true,
+    true,
+    true,
+    true,
+    true,
+    true,
+    true,
+    true,
+    true,
+    true,
+    true,
+    true,
+    true,
+    true,
+    true,
+    true,
+    true,
+    true,
+    true,
+    true,
+    true,
+    true,
+    true,
+    true,
+    true,
+    true,
+    true,
+    true,
+    true,
+    true,
+    true,
+    true,
+    true,
+    true,
+    true,
+    true,
+    true,
+    true,
+    true,
+    true,
+    true,
+    true,
+    true,
+    true,
+    true,
+    true,
+    true,
+    true,
+    true,
+    true,
+    true,
+    true,
+    true,
+    true,
+    true,
+    true,
+    true,
+    true,
+    true,
+    true,
+    true,
+    true,
+    true,
+    true,
+    true,
+    true,
+    true,
+    true,
+    true,
+    true,
+    true,
+    true,
+    true,
+    true,
+    true,
+    true,
+    true,
+    true,
+    true,
+    true,
+    true,
+    true,
+    true,
+    true,
+    true
+   ],
+   "ack": {
+    "upto": 0,
+    "max": 198,
+    "missing": [
+     [
+      1,
+      1
+     ],
+     [
+      3,
+      3
+     ],
+     [
+      5,
+      5
+     ],
+     [
+      7,
+      7
+     ],
+     [
+      9,
+      9
+     ],
+     [
+      11,
+      11
+     ],
+     [
+      13,
+      13
+     ],
+     [
+      15,
+      15
+     ],
+     [
+      17,
+      17
+     ],
+     [
+      19,
+      19
+     ],
+     [
+      21,
+      21
+     ],
+     [
+      23,
+      23
+     ],
+     [
+      25,
+      25
+     ],
+     [
+      27,
+      27
+     ],
+     [
+      29,
+      29
+     ],
+     [
+      31,
+      31
+     ],
+     [
+      33,
+      33
+     ],
+     [
+      35,
+      35
+     ],
+     [
+      37,
+      37
+     ],
+     [
+      39,
+      39
+     ],
+     [
+      41,
+      41
+     ],
+     [
+      43,
+      43
+     ],
+     [
+      45,
+      45
+     ],
+     [
+      47,
+      47
+     ],
+     [
+      49,
+      49
+     ],
+     [
+      51,
+      51
+     ],
+     [
+      53,
+      53
+     ],
+     [
+      55,
+      55
+     ],
+     [
+      57,
+      57
+     ],
+     [
+      59,
+      59
+     ],
+     [
+      61,
+      61
+     ],
+     [
+      63,
+      63
+     ]
+    ]
+   }
+  }
+ ],
+ "node": [
+  {
+   "name": "unbounded buffer",
+   "buffer_s": 60.0,
+   "sends": [
+    {
+     "seq": 1,
+     "t": 0.0,
+     "pad": 100
+    },
+    {
+     "seq": 2,
+     "t": 0.5,
+     "pad": 120
+    },
+    {
+     "seq": 3,
+     "t": 1.0,
+     "pad": 140
+    },
+    {
+     "seq": 4,
+     "t": 1.5,
+     "pad": 100
+    },
+    {
+     "seq": 5,
+     "t": 2.0,
+     "pad": 120
+    },
+    {
+     "seq": 6,
+     "t": 2.5,
+     "pad": 140
+    },
+    {
+     "seq": 7,
+     "t": 3.0,
+     "pad": 100
+    },
+    {
+     "seq": 8,
+     "t": 3.5,
+     "pad": 120
+    },
+    {
+     "seq": 9,
+     "t": 4.0,
+     "pad": 140
+    },
+    {
+     "seq": 10,
+     "t": 4.5,
+     "pad": 100
+    },
+    {
+     "seq": 11,
+     "t": 5.0,
+     "pad": 120
+    },
+    {
+     "seq": 12,
+     "t": 5.5,
+     "pad": 140
+    }
+   ],
+   "acks": [
+    {
+     "t": 6.0,
+     "entry": {
+      "upto": 3,
+      "max": 9,
+      "missing": [
+       [
+        4,
+        5
+       ],
+       [
+        8,
+        8
+       ]
+      ]
+     },
+     "budget": null
+    },
+    {
+     "t": 6.5,
+     "entry": {
+      "upto": 3,
+      "max": 9,
+      "missing": [
+       [
+        4,
+        5
+       ],
+       [
+        8,
+        8
+       ]
+      ]
+     },
+     "budget": null
+    },
+    {
+     "t": 8.5,
+     "entry": {
+      "upto": 3,
+      "max": 9,
+      "missing": [
+       [
+        4,
+        5
+       ],
+       [
+        8,
+        8
+       ]
+      ]
+     },
+     "budget": 330
+    },
+    {
+     "t": 9.0,
+     "entry": {
+      "upto": 12,
+      "max": 12,
+      "missing": []
+     },
+     "budget": null
+    }
+   ],
+   "resent": [
+    [
+     4,
+     5,
+     8
+    ],
+    [],
+    [
+     4,
+     5
+    ],
+    []
+   ],
+   "left": [],
+   "stats": {
+    "stored": 12,
+    "expired": 0,
+    "resent": 5
+   },
+   "status_at_10": {
+    "offline": false,
+    "buffered_s": 0.0,
+    "oldest_seq": null
+   }
+  },
+  {
+   "name": "a short buffer expires the oldest",
+   "buffer_s": 3.0,
+   "sends": [
+    {
+     "seq": 1,
+     "t": 0.0,
+     "pad": 100
+    },
+    {
+     "seq": 2,
+     "t": 0.5,
+     "pad": 120
+    },
+    {
+     "seq": 3,
+     "t": 1.0,
+     "pad": 140
+    },
+    {
+     "seq": 4,
+     "t": 1.5,
+     "pad": 100
+    },
+    {
+     "seq": 5,
+     "t": 2.0,
+     "pad": 120
+    },
+    {
+     "seq": 6,
+     "t": 2.5,
+     "pad": 140
+    },
+    {
+     "seq": 7,
+     "t": 3.0,
+     "pad": 100
+    },
+    {
+     "seq": 8,
+     "t": 3.5,
+     "pad": 120
+    },
+    {
+     "seq": 9,
+     "t": 4.0,
+     "pad": 140
+    },
+    {
+     "seq": 10,
+     "t": 4.5,
+     "pad": 100
+    },
+    {
+     "seq": 11,
+     "t": 5.0,
+     "pad": 120
+    },
+    {
+     "seq": 12,
+     "t": 5.5,
+     "pad": 140
+    }
+   ],
+   "acks": [
+    {
+     "t": 6.0,
+     "entry": {
+      "upto": 3,
+      "max": 9,
+      "missing": [
+       [
+        4,
+        5
+       ],
+       [
+        8,
+        8
+       ]
+      ]
+     },
+     "budget": null
+    },
+    {
+     "t": 6.5,
+     "entry": {
+      "upto": 3,
+      "max": 9,
+      "missing": [
+       [
+        4,
+        5
+       ],
+       [
+        8,
+        8
+       ]
+      ]
+     },
+     "budget": null
+    },
+    {
+     "t": 8.5,
+     "entry": {
+      "upto": 3,
+      "max": 9,
+      "missing": [
+       [
+        4,
+        5
+       ],
+       [
+        8,
+        8
+       ]
+      ]
+     },
+     "budget": 330
+    },
+    {
+     "t": 9.0,
+     "entry": {
+      "upto": 12,
+      "max": 12,
+      "missing": []
+     },
+     "budget": null
+    }
+   ],
+   "resent": [
+    [
+     8
+    ],
+    [],
+    [
+     8
+    ],
+    []
+   ],
+   "left": [],
+   "stats": {
+    "stored": 12,
+    "expired": 5,
+    "resent": 2
+   },
+   "status_at_10": {
+    "offline": false,
+    "buffered_s": 0.0,
+    "oldest_seq": null
+   }
+  }
  ]
 }

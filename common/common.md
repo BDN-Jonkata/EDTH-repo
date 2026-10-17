@@ -11,6 +11,7 @@ Status: codec started; schemas, time/frame helpers and bus not started. See [sys
 | [codec.py](codec.py) | `encode(msg, precision=None) -> bytes`, `decode(bytes) -> msg` (JSON for now), `make_header`, `Sequencer`, `CodecError`, `MessageSizeLog` (messages and bytes per type) |
 | [channel.py](channel.py) | `Channel(scenario, seed, position_of)`: `send` and `deliver` with loss (independent or bursty, one chain per sender) and delay from `degradations.network`; also, when the scenario has them, jamming zones (needs `position_of(node, t)`), a link cap and node dropout, as in the viewer's mock simulation; `Loss`, `Clock` (a node's offset and drift) |
 | [jamming.py](jamming.py), [linkcap.py](linkcap.py) | Python ports of `ui/viewer/jamming.js` and `linkcap.js` (the mock is the reference): `loss_at`, `rf_noise_mult`, `LinkCap` (enqueue, drain, summary) |
+| [storefwd.py](storefwd.py) | Python port of the node and C2 sides of `ui/viewer/storefwd.js` (`remember`, `on_ack`, `status`, `receive`, `skip_below`, `ack_entry`); link health is not ported |
 | [golden.py](golden.py) | `python -m common.golden` writes `testdata/channel_cases.json`, the cases both implementations must answer the same; `ui/viewer/test-channel-port.js` checks the JavaScript against it |
 | [assignment.py](assignment.py) | `assign(cost, gate)`: optimal one-to-one assignment (Hungarian), pure Python; used by the tracker and by scoring |
 | [seeder_import.py](seeder_import.py) | `ensure_seeder_on_path()`: lets other packages import the seeder's flat `catalog` and `scenario` modules |

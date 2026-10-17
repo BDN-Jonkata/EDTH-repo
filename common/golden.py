@@ -1,7 +1,7 @@
-"""Shared test cases for the jamming zones and link caps, so the viewer's JavaScript copy can be checked.
+"""Shared test cases for the jamming zones, link caps and store-and-forward, so the viewer's JavaScript copy can be checked.
 
-The reference for the rules is `ui/viewer/jamming.js` and `ui/viewer/linkcap.js` (the mock simulation); the Python
-ports in `jamming.py` and `linkcap.py` and the JavaScript both have to give the answers in
+The reference for the rules is `ui/viewer/jamming.js`, `ui/viewer/linkcap.js` and `ui/viewer/storefwd.js` (the mock simulation); the Python
+ports in `jamming.py`, `linkcap.py` and `storefwd.py` and the JavaScript both have to give the answers in
 `testdata/channel_cases.json`. The file is generated from the Python ports, so the test that compares it with the
 JavaScript is what proves the two agree. Do not edit it by hand:
 
@@ -17,6 +17,7 @@ from typing import List
 
 from common.jamming import loss_at, rf_noise_mult
 from common.linkcap import LinkCap, size_of
+from common.storefwd import Node, Receiver, ack_entry, on_ack, receive, remember, skip_below, status
 
 PATH = Path(__file__).parent / "testdata" / "channel_cases.json"
 
@@ -65,10 +66,53 @@ def linkcap_cases() -> List[dict]:
     return cases
 
 
+RECEIVER_RUNS = (
+    ("in order", [("receive", 1), ("receive", 2), ("receive", 3)]),
+    ("a gap and a duplicate", [("receive", 1), ("receive", 2), ("receive", 4), ("receive", 5), ("receive", 8), ("receive", 4)]),
+    ("the node gave up on its oldest", [("receive", 1), ("receive", 5), ("receive", 6), ("skip", 4), ("receive", 3)]),
+    ("a skip past everything seen", [("receive", 2), ("receive", 9), ("skip", 20)]),
+    ("more gaps than one ack lists", [("receive", s) for s in range(2, 200, 2)]),
+)
+
+
+def receiver_cases() -> List[dict]:
+    cases = []
+    for name, steps in RECEIVER_RUNS:
+        r, accepted = Receiver(), []
+        for op, value in steps:
+            if op == "receive":
+                accepted.append(receive(r, value))
+            else:
+                skip_below(r, value)
+        cases.append({"name": name, "steps": [list(x) for x in steps], "accepted": accepted, "ack": ack_entry(r)})
+    return cases
+
+
+def node_cases() -> List[dict]:
+    sends = [{"seq": i + 1, "t": 0.5 * i, "pad": 100 + 20 * (i % 3)} for i in range(12)]
+    acks = [{"t": 6.0, "entry": {"upto": 3, "max": 9, "missing": [[4, 5], [8, 8]]}, "budget": None},
+            {"t": 6.5, "entry": {"upto": 3, "max": 9, "missing": [[4, 5], [8, 8]]}, "budget": None},
+            {"t": 8.5, "entry": {"upto": 3, "max": 9, "missing": [[4, 5], [8, 8]]}, "budget": 330},
+            {"t": 9.0, "entry": {"upto": 12, "max": 12, "missing": []}, "budget": None}]
+    cases = []
+    for name, buffer_s in (("unbounded buffer", 60.0), ("a short buffer expires the oldest", 3.0)):
+        node = Node(buffer_s=buffer_s)
+        for m in sends:
+            remember(node, {"type": "observation", "header": {"seq": m["seq"]}, "pad": "x" * m["pad"], "arr": 1}, m["t"])
+        results = []
+        for a in acks:
+            out = on_ack(node, a["entry"], a["t"], float("inf") if a["budget"] is None else a["budget"], size_of)
+            results.append([m["header"]["seq"] for m in out])
+        cases.append({"name": name, "buffer_s": buffer_s, "sends": sends, "acks": acks, "resent": results,
+                      "left": [h.seq for h in node.store], "stats": node.stats, "status_at_10": status(node, 10.0)})
+    return cases
+
+
 def build() -> dict:
     sizes = [message("observation", 1, n) for n in (0, 10, 250)] + [{"type": "x", "header": {"seq": 1}, "name": "ž"}]
     return {"jamming": jamming_cases(), "linkcap": linkcap_cases(),
-            "sizes": [{"payload": m, "bytes": size_of(m)} for m in sizes]}
+            "sizes": [{"payload": m, "bytes": size_of(m)} for m in sizes],
+            "receiver": receiver_cases(), "node": node_cases()}
 
 
 def main() -> None:
