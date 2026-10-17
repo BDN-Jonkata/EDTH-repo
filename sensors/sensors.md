@@ -11,8 +11,9 @@ Status: weather conditions (single, combined and changing over time and place), 
 | [weather.py](weather.py) | `Conditions` (`weather` text such as `fog+wind` or `rain:0.6+wind`, plus `time_of_day`), presets (clear, fog, rain, wind, night, fog_night, storm, fog_rain, fog_wind, storm_night, worst), `UniformWeather`, `WeatherEvent` and `EventWeather` (anomalies that start, end and cover a zone), `SkyWeather` (adds the darkness from the sky), `weather_from_scenario` |
 | [daylight.py](daylight.py) | `Sky` (date, clock time, latitude, longitude, time scale), `sun_elevation_deg`, `night_strength`, `daylight_hours`: how dark it is, following the season and the place |
 | [quality.py](quality.py) | `load_modules`, `load_platforms`, `sensor_quality`, `modules_that_still_work`, `sensor_hierarchy`, `required_standoff`, `standoff_by_module`, `best_standoff`, `modules_in_scenario` |
+| [golden.py](golden.py), [testdata/weather_cases.json](testdata/weather_cases.json) | Shared test cases (parsing, sensor quality, sun and night strength, events, per-detection weather) generated from this Python code, so a second implementation (the viewer's JavaScript) can be checked against it: `python -m sensors.golden` rewrites the file, `test_golden.py` fails if it is out of date. It depends on the catalog's `weather_effects`, so regenerate it when those change |
 | [report.py](report.py) | `python -m sensors.report`: which modules and platforms survive each weather combination, and the best identification distance per platform |
-| `test_quality.py`, `test_weather.py`, `test_daylight.py` | Tests |
+| `test_quality.py`, `test_weather.py`, `test_daylight.py`, `test_golden.py` | Tests |
 
 ## How weather works
 
