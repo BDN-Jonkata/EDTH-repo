@@ -66,6 +66,13 @@ fieldset.comms legend { padding: 0 6px 0 0; font-size: 11px; color: #8B96A5; }
 .idb.f { color: #8DB8FF; }
 .idb.p { color: #5FD0C0; }
 .idb.n { border: 1px dashed #A9B3BF; color: #A9B3BF; }
+.track-icon { display: block; flex: none; object-fit: contain; }
+.track-icon-small { width: 24px; height: 24px; }
+.track-class { display: inline-flex; align-items: center; gap: 6px; vertical-align: middle; }
+.track-icon-detail { width: 64px; height: 64px; }
+.track-detail-heading { display: flex; align-items: center; gap: 10px; }
+.track-detail-title { display: flex; flex: 1 1 auto; min-width: 0; align-items: flex-start; flex-direction: column; gap: 5px; }
+.track-detail-title strong { font-size: 13px; line-height: 1.4; font-weight: 600; overflow-wrap: anywhere; }
 .al { display: flex; gap: 10px; align-items: flex-start; padding: 8px 0; border-bottom: 1px solid #1B222C; font-size: 12px; color: #D5DBE3; }
 .al:last-child { border-bottom: 0; }
 .sev { flex: none; width: 52px; font-family: 'IBM Plex Mono', monospace; font-size: 10px; font-weight: 600; letter-spacing: .04em; padding-top: 1px; }
