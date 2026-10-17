@@ -36,7 +36,6 @@ class Drone:
     mode: str = PATROL
     target: Optional[Tuple[float, float]] = None
     face: Optional[Tuple[float, float]] = None
-    active_plan: Optional[dict] = None   # the loop being flown: `plan`, or a backfill loop between two sectors
 
 
 class Fleet:
@@ -46,7 +45,6 @@ class Fleet:
         for f in scenario["friendlies"]:
             flight = limits.get(f["platform"], {"max_speed_mps": 15.0, "max_accel_mps2": 4.0})
             d = Drone(f["id"], f, flight["max_speed_mps"], flight["max_accel_mps2"])
-            d.active_plan = f
             self._follow_plan(d, 0.0)
             self.drones[f["id"]] = d
         self.t = 0.0
@@ -61,15 +59,6 @@ class Fleet:
         if d.mode != PATROL:
             d.mode, d.face = RETURN, None
 
-    def cover(self, drone_id: str, plan: dict) -> None:
-        """Fly another loop instead (a neighbour's sector is dark): go to where it is now, then follow it."""
-        d = self.drones[drone_id]
-        d.active_plan, d.mode, d.face = plan, RETURN, None
-
-    def uncover(self, drone_id: str) -> None:
-        d = self.drones[drone_id]
-        d.active_plan, d.mode, d.face = d.plan, RETURN, None
-
     def is_free(self, drone_id: str) -> bool:
         return self.drones[drone_id].mode == PATROL
 
@@ -81,7 +70,7 @@ class Fleet:
                 self._follow_plan(d, t)
                 continue
             if d.mode == RETURN:
-                planned = seeder_scenario.friendly_state(d.active_plan, t)
+                planned = seeder_scenario.friendly_state(d.plan, t)
                 d.target = (planned["x"], planned["y"])
                 if math.hypot(d.x - d.target[0], d.y - d.target[1]) < REJOIN_DISTANCE_M:
                     d.mode = PATROL
@@ -90,7 +79,7 @@ class Fleet:
             self._fly_towards(d, dt)
 
     def _follow_plan(self, d: Drone, t: float) -> None:
-        s = seeder_scenario.friendly_state(d.active_plan, t)
+        s = seeder_scenario.friendly_state(d.plan, t)
         d.x, d.y, d.vx, d.vy = s["x"], s["y"], s["vx"], s["vy"]
         d.heading = math.atan2(s["vy"], s["vx"])
 
