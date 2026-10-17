@@ -73,9 +73,11 @@ def _check_detection_module(m):
         eff = m["weather_effects"].get(w)
         if not eff or not all(k in eff for k in ("range_mult", "noise_mult", "pd_mult")):
             errors.append("module %s: missing or incomplete weather effect '%s'" % (m["id"], w))
-    for k in ("range_m", "min_range_m", "fov_deg", "pointing", "pd", "pd_far", "rate_hz", "latency_ms", "noise"):
+    for k in ("range_m", "ident_range_m", "min_range_m", "fov_deg", "pointing", "pd", "pd_far", "rate_hz", "latency_ms", "noise"):
         if k not in m["sim"]:
             errors.append("module %s: sim.%s missing" % (m["id"], k))
+    if not 0 < m["sim"].get("ident_range_m", 1) <= m["sim"].get("range_m", 1):
+        errors.append("module %s: sim.ident_range_m must be above 0 and at most sim.range_m" % m["id"])
     if m["sim"].get("pointing") not in ("forward", "omni"):
         errors.append("module %s: sim.pointing must be forward or omni" % m["id"])
     return errors + _check_native(m)

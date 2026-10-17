@@ -38,15 +38,15 @@ Top level: `schema`, `id` (for example `hard-s3`), `name`, `seed`, `preset`, `de
 | `clutter[]` | birds and vehicles: real objects the sensors see that are **not threats**. Same fields as `targets[]` plus `type` (`bird` or `vehicle`) and `role: "clutter"`; `emits` is always false. Empty by default |
 | `beacon` | friendly position beacons: `enabled`, `rate_hz`, `pos_sigma_m` |
 | `sensor_set.enabled_kinds` | which sensor kinds exist in this run |
-| `environment` | `weather` (`clear`, `fog`, `rain`, `wind`), `time_of_day`, `clutter` = `{false_alarms_per_min, birds, vehicles}` (the last two are object counts, 0 to 10) |
+| `environment` | `weather` (`clear`, `fog`, `rain`, `wind`, `night`, or a combination, see [Weather combinations](#weather-combinations-and-weather-events)), `time_of_day`, optional `weather_events[]` and `sky`, `clutter` = `{false_alarms_per_min, birds, vehicles}` (the last two are object counts, 0 to 10) |
 | `degradations` | `clock`, `pose`, `network` (`loss`, `burst`, `latency_ms`, `out_of_order`, `topology`, `jamming_zones`), `dropout[]` = `{node, t}` |
 | `config` | the config that produced it |
 
 A hostile's (or clutter object's) position at time `t`: walk the waypoints linearly, then add a sideways wobble of amplitude `wobble_m` that fades to zero near each waypoint. The exact formula is `target_state` in [seeder/scenario.py](../seeder/scenario.py); do not rewrite it, import it.
 
-### Weather combinations and weather events (proposed)
+### Weather combinations and weather events
 
-**Not yet supported by the seeder generator or the viewer**: today `environment.weather` is one of `clear`, `fog`, `rain`, `wind`, `night`. The weather code in [sensors/weather.py](../sensors/weather.py) already reads the extensions below; a scenario that uses them works with `sensors/` and `friend_foe/`, but the seeder rejects them until it is changed (the sweep sets them after generating). A single weather keeps working unchanged.
+Supported by the seeder validator (it passes `weather`, `weather_events` and `sky` through to `scenario.json` unchanged, and checks them with [sensors/weather.py](../sensors/weather.py)) and by the viewer ([ui/viewer/weather.js](../ui/viewer/weather.js), a port checked against the shared cases below). A single weather (`fog`) keeps working unchanged.
 
 | Where | Form | Meaning |
 |-------|------|---------|
@@ -56,7 +56,7 @@ A hostile's (or clutter object's) position at time `t`: walk the waypoints linea
 | `environment.sky` | `{date, hour, lat, lon, utc_offset_h?, time_scale?}` | how dark it is, from the date, the clock time and the place, so it follows the season: `date` = `YYYY-MM-DD`; `hour` = local clock time at t = 0 (0 to under 24); `lat`, `lon` in degrees, all four required because the place and date decide how long the day is; `utc_offset_h` defaults to the offset that matches `lon`; `time_scale` = clock seconds per simulated second (default 1, so a 120 s run barely moves the sun; use 60 to cross sunset in a run) |
 | `environment.weather_events[]` | `{weather, t_start?, t_end?, zone?: {x, y, radius_m}}` | an anomaly that comes and goes, and may cover only a circle of the map; on top of the base weather, overlapping events all apply with the strongest strength of each effect |
 
-Lookup rule: weather is looked up **per detection** (time and position), not once per run. A detection sees the strongest strength of each effect at the sensor's position and at the target's (`conditions_between` in [sensors/weather.py](../sensors/weather.py)), so a fog bank over either end of the line of sight counts. A second implementation (the viewer) must agree with the shared cases in [sensors/testdata/weather_cases.json](../sensors/testdata/weather_cases.json), which the Python code generates (`python -m sensors.golden`).
+Lookup rule: weather is looked up **per detection** (time and position), not once per run. A detection sees the strongest strength of each effect at the sensor's position and at the target's (`conditions_between` in [sensors/weather.py](../sensors/weather.py)), so a fog bank over either end of the line of sight counts. The viewer agrees with the shared cases in [sensors/testdata/weather_cases.json](../sensors/testdata/weather_cases.json), which the Python code generates (`python -m sensors.golden`).
 
 Why a sky and not a fixed night: the length of the day depends on the season and the latitude (at 45 N about 15.6 h of daylight in June and 8.8 h in December, at 60 N 18.9 h and 5.9 h), so the same 21:00 is night in December and still dusk in June, and near 60 N a June night never gets fully dark. The sun's height above the horizon comes from the standard NOAA approximation ([sensors/daylight.py](../sensors/daylight.py)). The night strength is 0 with the sun above the horizon and rises linearly through twilight to 1 at 12 degrees below it; that mapping is a placeholder, since the catalog has one `night` multiplier for full darkness. Moon and cloud cover are ignored.
 
@@ -82,7 +82,7 @@ Positions are rounded to 0.1 m, velocities to 0.01 m/s. A hostile or clutter obj
 `sensor_modules.json` is a list of modules; each has:
 
 - `id`, `kind` (`eo_camera`, `thermal_camera`, `microphone`, `rf_receiver`, `radar`, `gnss`, `imu`), `name`
-- `sim`: `range_m`, `min_range_m`, `fov_deg`, `pointing` (`forward` or `omni`), `pd`, `pd_far`, `rate_hz`, `latency_ms`, `noise` per field
+- `sim`: `range_m`, `ident_range_m` (how close an object must be to be identified, assumed), `min_range_m`, `fov_deg`, `pointing` (`forward` or `omni`), `pd`, `pd_far`, `rate_hz`, `latency_ms`, `noise` per field
 - `native`: what the module really reports, as `type` plus `fields[]` (`name`, `unit`, `desc`)
 - `weather_effects`: `fog`, `rain`, `wind`, `night`, each with `range_mult`, `noise_mult`, `pd_mult`
 - `verified`: true only when the numbers come from an official datasheet. Everything else is an assumption.

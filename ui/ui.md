@@ -26,6 +26,8 @@ Commanded drones: the mock accepts `commands` from the scenario (or `params.comm
 
 Messages: every message the mock sends (`observation`, `friendly_beacon`, `drone_command`, `drone_state`) has the shared header from `messages.js`, with the fields in [docs/data-formats.md](../docs/data-formats.md#messages); test with `node ui/viewer/test-messages.js`.
 
+Weather: the left panel has toggles for fog, rain, wind and a fixed night, each with a strength, and a **sky** (date, hour with sunrise and sunset shown, latitude and longitude, clock seconds per run second) that makes night follow the season; the two combine. A scenario's `environment.weather_events` (fog bank over part of the map from t = 40 s) are applied too. Sensor quality is looked up per detection from the weather at the sensor and at the target, as in [docs/data-formats.md](../docs/data-formats.md#weather-combinations-and-weather-events). The maths is in `weather.js` (a port of `sensors/weather.py`, checked by `node ui/viewer/test-weather.js` against `sensors/testdata/weather_cases.json`); the controls are `weather-ui.js`. The place presets are examples; where the village is has not been decided. The Sensor limits table and coverage show the base weather only, not events or the sky.
+
 Clutter: birds and vehicles from `scenario.json` `clutter[]` move like hostiles and are seen through their signatures, but are not threats. The map shows them as grey dashed rings with their id; a hostile track on one raises a "Clutter ... tracked as hostile" alert and counts as `cfa` in the summary. Test with `node ui/viewer/test-clutter.js`.
 
 What the mock does:

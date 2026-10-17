@@ -11,8 +11,12 @@ import copy
 import math
 import random
 import re
+import sys
+from pathlib import Path
 
-import catalog as cat
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))  # repo root, so `sensors` can be imported
+import catalog as cat  # noqa: E402
+from sensors.weather import weather_from_scenario  # noqa: E402  (the one place weather text is parsed)
 
 SCHEMA = "edth.scenario/1"
 AREA = 1000.0
@@ -230,11 +234,21 @@ def _check_environment(cfg):
     bad = [k for k in cfg["sensor_set"]["enabled_kinds"] if k not in SENSOR_KINDS]
     if bad:
         errors.append("unknown sensor kinds: %s" % bad)
-    if cfg["environment"]["weather"] not in cat.WEATHERS + ("clear",):
-        errors.append("environment.weather must be clear, fog, rain, wind or night")
+    errors += _check_weather(cfg["environment"])
     if not 0 <= cfg["degradations"]["network"]["loss"] <= 1:
         errors.append("degradations.network.loss must be between 0 and 1")
     return errors
+
+
+def _check_weather(env):
+    """weather ('fog+wind', 'rain:0.6+wind'), time_of_day, weather_events[] and sky, as sensors/weather.py reads them."""
+    try:
+        weather_from_scenario({"environment": env})
+    except KeyError as e:
+        return ["environment weather_events/sky is missing %s" % e]
+    except (ValueError, TypeError, AttributeError) as e:
+        return ["environment weather, weather_events or sky is invalid: %s" % e]
+    return []
 
 
 def _check_clutter(cfg):

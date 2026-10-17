@@ -14,7 +14,7 @@
     const d = sc.degradations, net = d.network, lat = net.latency_ms || [0, 0];
     const anyDeg = net.enabled || d.clock.enabled || d.pose.enabled || (d.dropout || []).length > 0;
     return {
-      preset: sc.preset || 'challenge', seed: sc.seed, name: sc.name, mode: anyDeg ? 'realistic' : 'optimistic', weather: sc.environment.weather,
+      preset: sc.preset || 'challenge', seed: sc.seed, name: sc.name, mode: anyDeg ? 'realistic' : 'optimistic', weather: sc.environment.weather, sky: sc.environment.sky || null,
       loss: net.enabled ? Math.round(net.loss * 100) : 0, delayMs: net.enabled ? Math.round((lat[0] + lat[1]) / 2) : 0,
       driftMs: d.clock.enabled ? d.clock.offset_ms[1] : 0, assign: Sim.prepare(sc).assign,
     };
@@ -30,13 +30,6 @@
     ['cover', 'Sensor coverage', true, '<path d="M2 12L7 2l5 10z" fill="none" stroke="#9AA4B2" stroke-width="1.2" stroke-dasharray="2 1.5"/>'],
     ['net', 'Network links', true, '<circle cx="2.5" cy="11.5" r="1.8" fill="#9AA4B2"/><circle cx="11.5" cy="2.5" r="1.8" fill="#9AA4B2"/><path d="M3.5 10.5l7-7" stroke="#9AA4B2" stroke-width="1.2"/>'],
   ];
-  const WX_NOTE = {
-    clear: 'Clear: all sensors nominal.',
-    fog: 'Fog: EO range cut to 35 %, noisier, fewer detections.',
-    rain: 'Rain: radar clutter and noisier radar.',
-    wind: 'Wind: microphones much noisier, fewer detections.',
-    night: 'Night: visible cameras nearly blind; thermal, radar, RF and mics unaffected.',
-  };
 
   const S = {
     applied: null, staged: null, scenario: null, world: null, res: null,
@@ -88,7 +81,7 @@
   // ------------------------------------------------------------- run / apply
   function runSim(p) {
     S.applied = clone(p);
-    S.res = Sim.run({ seed: p.seed, mode: p.mode, weather: p.weather, loss: p.loss, delayMs: p.delayMs, driftMs: p.driftMs, assign: p.assign, scenario: S.scenario });
+    S.res = Sim.run({ seed: p.seed, mode: p.mode, weather: p.weather, sky: p.sky, loss: p.loss, delayMs: p.delayMs, driftMs: p.driftMs, assign: p.assign, scenario: S.scenario });
     S.deg = null; S.idx = 0; S.acc = 0; S.playing = true; S.sel = null; S.userSel = false;
     $('runTitle').textContent = scen().id + ' · ' + p.name + ' · seed ' + p.seed;
     $('tTotal').textContent = fmtT(S.res.T_END);
@@ -103,7 +96,7 @@
     if (S.deg) return S.deg;
     const p = S.applied, out = [];
     for (let l = 0; l <= 90; l += 10) {
-      const r = Sim.run({ seed: p.seed, mode: 'realistic', weather: p.weather, loss: l, delayMs: p.delayMs, driftMs: p.driftMs, assign: p.assign, scenario: S.scenario }, { lite: true });
+      const r = Sim.run({ seed: p.seed, mode: 'realistic', weather: p.weather, sky: p.sky, loss: l, delayMs: p.delayMs, driftMs: p.driftMs, assign: p.assign, scenario: S.scenario }, { lite: true });
       out.push({ loss: l, rmse: r.summary.rmse, count: r.summary.countErr, swaps: r.summary.swaps, ffa: r.summary.ffa });
     }
     S.deg = out;
@@ -127,19 +120,24 @@
     renderLoadout();
   }
   function renderLoadout() {
-    const wx = S.staged.weather;
+    const wx = S.staged.weather, effects = Weather.activeEffects(Weather.providerFor({}, wx, S.staged.sky).provider.at([0, 0], 0));
     nodeIds().forEach((id) => {
       const sel = document.querySelector('select[data-node="' + id + '"]');
       if (sel) sel.value = S.staged.assign[id];
       const plat = Sim.PLATFORMS[S.staged.assign[id]];
       $('mods-' + id).innerHTML = plat.modules.filter((l) => KINDS[Sim.MODULES[l.module_id].kind]).map((l) => {
-        const m = Sim.MODULES[l.module_id], eff = (m.weather_effects && m.weather_effects[wx]) || { range_mult: 1, pd_mult: 1 };
-        const bad = eff.range_mult < 0.7 || eff.pd_mult < 0.8;
+        const m = Sim.MODULES[l.module_id], q = Weather.sensorQuality(m, effects);
+        const bad = q.range < 0.7 || q.pd < 0.8;
         return '<span class="mod' + (bad ? ' warn' : '') + '" title="' + m.name + (bad ? ' (degraded in ' + wx + ')' : '') + '">' + KINDS[m.kind] + (bad ? ' ▼' : '') + '</span>';
       }).join('');
     });
   }
 
+  // ?weather=fog+wind (a '+' in a URL reads as a space)
+  function setWeatherFromUrl(text) {
+    if (!text) return;
+    try { Weather.parseWeather(text.replace(/ /g, '+')); S.staged.weather = text.replace(/ /g, '+'); } catch (e) { /* not a weather: keep the preset's */ }
+  }
   function buildLeft() {
     const box = $('layers');
     LAYERS.forEach((l) => {
@@ -157,7 +155,7 @@
     $('preset').addEventListener('change', (e) => choosePreset(e.target.value));
     buildLoadout();
     seg('modeSeg', (v) => { S.staged.mode = v; syncStaged(); });
-    seg('wxSeg', (v) => { S.staged.weather = v; syncStaged(); renderLoadout(); });
+    WeatherUI.init((weather, sky) => { S.staged.weather = weather; S.staged.sky = sky; syncStaged(); renderLoadout(); });
     seg('speedSeg', (v) => { S.speed = parseFloat(v); });
     $('seed').addEventListener('input', (e) => { S.staged.seed = Math.max(1, parseInt(e.target.value, 10) || 1); });
     $('name').addEventListener('input', (e) => { S.staged.name = e.target.value; });
@@ -214,7 +212,7 @@
   function fillInputs() {
     const s = S.staged;
     $('preset').value = s.preset; $('seed').value = s.seed; $('name').value = s.name; $('loss').value = s.loss; $('delay').value = s.delayMs; $('drift').value = s.driftMs;
-    setSeg('modeSeg', s.mode); setSeg('wxSeg', s.weather);
+    setSeg('modeSeg', s.mode); WeatherUI.show(s.weather, s.sky);
   }
   function syncStaged() {
     const s = S.staged, opt = s.mode === 'optimistic';
@@ -224,7 +222,7 @@
       ? 'Ideal comms: no loss, no delay, synced clocks. Sensor noise still on.'
       : 'Lossy, delayed links and drifting node clocks. Press Apply & restart to run.';
     $('lossVal').textContent = s.loss + '%';
-    $('wxNote').textContent = WX_NOTE[s.weather];
+    $('wxNote').textContent = WeatherUI.describe(s.weather);
   }
 
   // --------------------------------------------------------------- map layers
@@ -651,7 +649,7 @@
   wireMap();
   wirePlayback();
   const q = new URLSearchParams(location.search); // ?weather=night&seed=7&t=49.5&tab=deg
-  if (Sim.WEATHERS.indexOf(q.get('weather')) >= 0) S.staged.weather = q.get('weather');
+  setWeatherFromUrl(q.get('weather'));
   if (q.get('seed')) S.staged.seed = parseInt(q.get('seed'), 10) || S.staged.seed;
   fillInputs(); syncStaged(); renderLoadout();
   $('presetNote').textContent = S.scenario.description;

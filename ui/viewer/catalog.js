@@ -13,6 +13,7 @@
      },
      "sim": {
       "range_m": 150,
+      "ident_range_m": 90,
       "min_range_m": 3,
       "fov_deg": 82,
       "pointing": "forward",
@@ -84,6 +85,7 @@
      },
      "sim": {
       "range_m": 150,
+      "ident_range_m": 90,
       "min_range_m": 3,
       "fov_deg": 70,
       "pointing": "forward",
@@ -158,6 +160,7 @@
      },
      "sim": {
       "range_m": 250,
+      "ident_range_m": 150,
       "min_range_m": 3,
       "fov_deg": 93,
       "pointing": "forward",
@@ -229,6 +232,7 @@
      },
      "sim": {
       "range_m": 150,
+      "ident_range_m": 90,
       "min_range_m": 3,
       "fov_deg": 62,
       "pointing": "forward",
@@ -302,6 +306,7 @@
      },
      "sim": {
       "range_m": 120,
+      "ident_range_m": 60,
       "min_range_m": 3,
       "fov_deg": 57,
       "pointing": "forward",
@@ -376,6 +381,7 @@
      },
      "sim": {
       "range_m": 300,
+      "ident_range_m": 150,
       "min_range_m": 3,
       "fov_deg": 41,
       "pointing": "forward",
@@ -447,6 +453,7 @@
      },
      "sim": {
       "range_m": 60,
+      "ident_range_m": 12,
       "min_range_m": 0,
       "fov_deg": 360,
       "pointing": "omni",
@@ -513,6 +520,7 @@
      },
      "sim": {
       "range_m": 150,
+      "ident_range_m": 30,
       "min_range_m": 0,
       "fov_deg": 360,
       "pointing": "omni",
@@ -584,6 +592,7 @@
      },
      "sim": {
       "range_m": 300,
+      "ident_range_m": 90,
       "min_range_m": 0,
       "fov_deg": 360,
       "pointing": "omni",
@@ -655,6 +664,7 @@
      },
      "sim": {
       "range_m": 400,
+      "ident_range_m": 80,
       "min_range_m": 10,
       "fov_deg": 90,
       "pointing": "forward",
