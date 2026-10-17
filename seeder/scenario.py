@@ -51,6 +51,8 @@ DEFAULT_CONFIG = {
     "commands": [],  # tasking sent from C2 to friendly drones during the run (goto, hold, return_to_patrol)
     "targets": {
         "count": 2,
+        "benign_count": 0,
+        "behavior_demo": False,
         "speed_mps": [8, 16],
         "altitude_m": [20, 120],
         "motion": "straight",
@@ -153,6 +155,12 @@ def _check_target_rules(cfg, t):
     errors = []
     if not 0 <= t["count"] <= 8:
         errors.append("targets.count must be 0..8")
+    benign = t.get("benign_count", 0)
+    valid_benign = isinstance(benign, int) and not isinstance(benign, bool) and 0 <= benign <= t["count"]
+    if not valid_benign:
+        errors.append("targets.benign_count must be a whole number from 0 to targets.count")
+    if not isinstance(t.get("behavior_demo", False), bool):
+        errors.append("targets.behavior_demo must be true or false")
     for key in ("speed_mps", "altitude_m", "enter_t"):
         if len(t[key]) != 2 or t[key][0] > t[key][1]:
             errors.append("targets.%s must be [low, high]" % key)
@@ -162,7 +170,7 @@ def _check_target_rules(cfg, t):
         if not 0 <= t[key] <= 1:
             errors.append("targets.%s must be between 0 and 1" % key)
     cr = t["crossing"]
-    if cr["enabled"] and t["count"] >= 2:
+    if cr["enabled"] and valid_benign and t["count"] - benign >= 2:
         if not 15 <= cr["t"] <= cfg["duration_s"] - 15:
             errors.append("targets.crossing.t must leave 15 s before and after the crossing")
         if cr["min_sep_m"] > cr["max_sep_m"]:
@@ -171,8 +179,11 @@ def _check_target_rules(cfg, t):
 
 
 def _check_target_paths(targets):
-    return ["targets[%d] needs at least 2 waypoints [t, x, y]" % i
-            for i, tg in enumerate(targets) if not tg.get("waypoints") or len(tg["waypoints"]) < 2]
+    errors = ["targets[%d] needs at least 2 waypoints [t, x, y]" % i
+              for i, tg in enumerate(targets) if not tg.get("waypoints") or len(tg["waypoints"]) < 2]
+    errors += ["targets[%d].role must be hostile or benign" % i for i, tg in enumerate(targets)
+               if tg.get("role", "hostile") not in ("hostile", "benign")]
+    return errors
 
 
 COMMANDS = ("goto", "hold", "return_to_patrol")
@@ -334,7 +345,7 @@ def _target_pos(tg, t):
 
 
 def target_state(tg, t):
-    """Position and velocity of a hostile at time t, or None before it enters, after it exits or outside the area."""
+    """Position/velocity of a target or clutter object, or None when absent."""
     wps = tg["waypoints"]
     if t < wps[0][0] or t > wps[-1][0]:
         return None
@@ -348,7 +359,7 @@ def target_state(tg, t):
 
 # ------------------------------------------------------------------ generation
 def _streams(seed):
-    return {name: random.Random(seed * 1000003 + i) for i, name in enumerate(("friendly", "target", "ground", "clutter"))}
+    return {name: random.Random(seed * 1000003 + i) for i, name in enumerate(("friendly", "target", "ground", "clutter", "benign"))}
 
 
 def _slug(text):
@@ -513,7 +524,7 @@ def _exit_point(rng, last):
     return (last[0] + ux * reach, last[1] + uy * reach, 0)
 
 
-def _make_targets(cfg, rng):
+def _make_targets(cfg, rng, benign_rng):
     spec = cfg["targets"]
     duration = cfg["duration_s"]
     if isinstance(spec, list):  # explicit list: use as given, fill in the gaps
@@ -529,11 +540,68 @@ def _make_targets(cfg, rng):
         return out
     out = []
     planned = []
-    if spec["crossing"]["enabled"] and spec["count"] >= 2:
+    hostile_count = spec["count"] - spec.get("benign_count", 0)
+    if spec["crossing"]["enabled"] and hostile_count >= 2:
         planned.extend(_crossing_paths(spec, rng, duration))
-    while len(planned) < spec["count"]:
-        planned.append(_free_path(spec, rng, spec["motion"], duration))
-    return [_path_object("H%d" % (i + 1), "hostile", path, spec, rng) for i, path in enumerate(planned)]
+    crossing_count = len(planned)
+    while len(planned) < hostile_count:
+        path = (_demonstration_threat(cfg, rng, len(planned) - crossing_count) if spec.get("behavior_demo")
+                else _free_path(spec, rng, spec["motion"], duration))
+        planned.append(path)
+    out = [_path_object("H%d" % (i + 1), "hostile", path, spec, rng) for i, path in enumerate(planned)]
+    for i in range(spec.get("benign_count", 0)):
+        path = _benign_path(cfg, benign_rng, i)
+        out.append(_path_object("N%d" % (i + 1), "benign", path, spec, benign_rng))
+    return out
+
+
+def _demonstration_threat(cfg, rng, index):
+    """Observable protected-area loiter/hover, rather than assigning an inferred flag."""
+    spec, (cx, cy) = cfg["targets"], cfg["c2"]
+    v = rng.uniform(*spec["speed_mps"])
+    t0 = 3 + max(0, index) * 8
+    x, y = _clamp(cx - 10 - 30 * (index % 2), 90), _clamp(cy + 45, 90)
+    if index % 2:
+        pts = [(5, y, 0), (x, y, max(25, 0.4 * cfg["duration_s"])), (995, y, 0)]
+        motion = "hover"
+    else:
+        pts = [(995, y + 30, 0), (x, y + 30, 0)]
+        pts += [(x + 30 * math.cos(math.pi / 2 + k * math.pi / 8),
+                 y + 30 * math.sin(math.pi / 2 + k * math.pi / 8), 0) for k in range(1, 33)]
+        pts.append((5, y, 0))
+        motion = "loiter"
+    return _finish(pts, v, t0), v, motion
+
+
+def _benign_path(cfg, rng, index):
+    """Non-allied transits, offsite survey orbit and an ambiguous offsite hover.
+
+    Ground-truth role is for evaluation only; the estimator sees their sensor
+    tracks, and may still leave an ambiguous benign object unknown.
+    """
+    spec, (cx, cy) = cfg["targets"], cfg["c2"]
+    v, north = rng.uniform(*spec["speed_mps"]), cy <= AREA / 2
+    side = 1 if north else -1
+    if index % 4 < 2:
+        y = (720 if index % 4 == 0 else 600) if north else (280 if index % 4 == 0 else 400)
+        t0 = rng.uniform(0, 5) + 10 * (index % 4)
+        pts = [(20, y, 0), (980, y, 0)] if index % 4 == 0 else [(980, y, 0), (20, y, 0)]
+        motion = "straight"
+    elif index % 4 == 2:
+        x, y, radius = _clamp(cx - 40, 100), _clamp(cy + side * 300, 100), 55
+        t0 = rng.uniform(2, 7)
+        pts = [(x, 995 if north else 5, 0), (x, y + side * radius, 0)]
+        start = side * math.pi / 2
+        pts += [(x + radius * math.cos(start + k * math.pi / 8),
+                 y + radius * math.sin(start + k * math.pi / 8), 0) for k in range(1, 33)]
+        pts.append((x, 995 if north else 5, 0))
+        motion = "loiter"
+    else:
+        x, y = _clamp(cx - 220, 100), _clamp(cy + side * 260, 100)
+        t0 = rng.uniform(15, 20)
+        pts = [(5, y, 0), (x, y, max(25, 0.4 * cfg["duration_s"])), (5, y, 0)]
+        motion = "hover"
+    return _finish(pts, v, t0), v, motion
 
 
 def _path_object(oid, role, path, spec, rng, signature=None, emits=True):
@@ -579,7 +647,7 @@ def generate(config, catalog=None, truth_dt=0.1):
 
     friendlies = _make_friendlies(cfg, rng["friendly"])
     ground = _make_ground(cfg)
-    targets = _make_targets(cfg, rng["target"])
+    targets = _make_targets(cfg, rng["target"], rng["benign"])
     clutter = _make_clutter(cfg, rng["clutter"])
     for node in friendlies + ground:
         node["sensors"] = _sensors_of(platforms[node["platform"]], modules_by_id, enabled)
@@ -608,16 +676,19 @@ def build_truth(scenario, dt=0.1):
     for f in scenario["friendlies"]:
         objects.append({"id": f["id"], "kind": "friendly", "platform": f["platform"], "altitude_m": f["altitude_m"],
                         "samples": _sample_rows(friendly_state, f, n, dt)})
-    hostile_rows = {}
+    target_rows, hostile_rows = {}, {}
     for tg in scenario["targets"]:
         rows = _sample_rows(target_state, tg, n, dt)
-        hostile_rows[tg["id"]] = {row[0]: row for row in rows}
-        objects.append({"id": tg["id"], "kind": "hostile", "motion": tg["motion"], "altitude_m": tg["altitude_m"], "samples": rows})
+        target_rows[tg["id"]] = {row[0]: row for row in rows}
+        role = tg.get("role", "hostile")
+        if role == "hostile":
+            hostile_rows[tg["id"]] = target_rows[tg["id"]]
+        objects.append({"id": tg["id"], "kind": role, "motion": tg["motion"], "altitude_m": tg["altitude_m"], "samples": rows})
     for cl in scenario.get("clutter", []):  # not a threat: a hostile track on one of these is a false alarm
         objects.append({"id": cl["id"], "kind": "clutter", "type": cl["type"], "motion": cl["motion"],
                         "altitude_m": cl["altitude_m"], "samples": _sample_rows(target_state, cl, n, dt)})
-    ids =[tg["id"] for tg in scenario["targets"]]
-    events = _enter_exit_events(ids, hostile_rows) + _crossing_events(ids, hostile_rows)
+    ids = list(hostile_rows)
+    events = _enter_exit_events(list(target_rows), target_rows) + _crossing_events(ids, hostile_rows)
     events.sort(key=lambda e: e["t"])
     return {"schema": "edth.truth/2", "scenario_id": scenario["id"], "seed": scenario["seed"], "duration_s": scenario["duration_s"],
             "dt_s": dt, "columns": ["t", "x", "y", "vx", "vy"], "objects": objects, "events": events}

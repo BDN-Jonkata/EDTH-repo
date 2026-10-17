@@ -18,7 +18,7 @@ Status: scoring of one run is done and tested (hand-made cases and one seeder ru
 
 ## How a step is scored
 
-1. Estimated tracks are matched to the true objects present (hostile, friendly **and** clutter) by optimal assignment inside a gate (`gate_m`, default 50 m). Matching all kinds means a track on a friendly or on a bird is never taken for a hostile.
+1. Estimated tracks are matched to the true objects present (hostile, friendly, non-allied benign **and** clutter) by optimal assignment inside a gate (`gate_m`, default 50 m). Matching all kinds means a track on a friendly, benign drone or bird is never taken for a true hostile.
 2. A track **counts as hostile** unless its class is `friendly` or `peaceful`. A track with no class, or `unknown`, counts: a hostile presumption (change `NOT_HOSTILE_CLASSES` in [metrics.py](metrics.py) to treat `unknown` differently).
 3. Metrics are averaged over the steps scored (`warmup_s` skips the start).
 
@@ -31,6 +31,7 @@ Status: scoring of one run is done and tested (hand-made cases and one seeder ru
 | `hostile_detected_frac` | share of hostile object-steps matched to a counted track |
 | `friendlies_flagged`, `friendly_flag_frac` | friendlies matched to a counted track at least once, and the share of friendly object-steps |
 | `clutter_flagged_frac` | share of clutter object-steps matched to a counted track: a bird or vehicle called hostile is a false alarm, not a missed hostile |
+| `benign_flag_frac` | share of non-allied benign drone object-steps matched to a counted track; separate from friendly identity and clutter |
 | `false_tracks_mean` | counted tracks matching no object, per step |
 
 ## Results (friend/foe test adapter, `medium` preset, 20 test seeds, clear weather, 10 s warmup)

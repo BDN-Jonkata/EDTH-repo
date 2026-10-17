@@ -6,6 +6,13 @@
   const scen = () => (S.res && S.res.scen) || S.world; // the scenario of the current run
   const COL = { h: '#FF5A5F', f: '#5B9BFF', u: '#F5B13D', line: '#C9D1DB', cyan: '#3FC1D9' };
   const CLASS_NAME = { friendly: 'Friendly', hostile: 'Hostile', suspicious: 'Suspicious', peaceful: 'Peaceful', unknown: 'Unknown' };
+  const PATTERN_NAME = { hover: 'Hovering', transit: 'Transit', orbit: 'Orbit / survey', maneuvering: 'Maneuvering', insufficient_history: 'Collecting history' };
+  const REASON_NAME = { insufficient_history: 'Collecting enough observed history', ambiguous_motion: 'No clear risk pattern',
+    sustained_safe_transit: 'Sustained steady transit', protected_area_clearance: 'Keeps clear of protected areas',
+    non_converging_course: 'Course stays clear of protected areas', consistent_safe_orbit: 'Consistent survey orbit away from protected areas',
+    developing_transit_pattern: 'Transit pattern still developing', sustained_protected_entry: 'Entry into a protected area',
+    protected_loiter: 'Loitering near a protected asset', persistent_protected_loiter: 'Persistent loiter deep inside a protected area',
+    repeated_protected_intrusions: 'Repeated entries into a protected area', approaching_protected_area: 'Approaching a protected area' };
   const classColor = (cls) => ({ friendly: COL.f, hostile: COL.h, suspicious: COL.u, peaceful: '#5FD0C0', unknown: '#A9B3BF' }[cls] || COL.u);
   const Y = (n) => 1000 - n; // world North -> svg y
 
@@ -317,16 +324,17 @@
     return out;
   }
   function headingSvg(t, sp, col) {
-    const x = t.x, y = Y(t.y), mk = t.cls === 'hostile' ? 'm-r' : t.cls === 'friendly' ? 'm-b' : 'm-a';
+    const x = t.x, y = Y(t.y), mk = { hostile: 'm-r', friendly: 'm-b', suspicious: 'm-a', peaceful: 'm-p', unknown: 'm-n' }[t.cls];
     const L = t.cls === 'friendly' ? 30 : 12 + Math.min(30, sp * 2.4), ux = t.vx / sp, uy = t.vy / sp;
     return '<path d="M' + (x + ux * 12) + ' ' + (y - uy * 12) + 'L' + (x + ux * L) + ' ' + (y - uy * L) + '" stroke="' + col + '" stroke-width="2" marker-end="url(#' + mk + ')"/>';
   }
-  // the marker: diamond = hostile, crossed circle = friendly, dashed circle = unknown
+  // Each flag has its own shape/color; uncertainty does not imply suspicion.
   function glyphSvg(t, col) {
     const x = t.x, y = Y(t.y);
     if (t.cls === 'hostile') return '<path d="M' + x + ' ' + (y - 12) + 'L' + (x + 12) + ' ' + y + 'L' + x + ' ' + (y + 12) + 'L' + (x - 12) + ' ' + y + 'Z" fill="#2A1012" stroke="' + col + '" stroke-width="2"/>';
     if (t.cls === 'friendly') return '<circle cx="' + x + '" cy="' + y + '" r="10" fill="#0E1A2E" stroke="' + col + '" stroke-width="2"/><path d="M' + (x - 4) + ' ' + (y - 4) + 'L' + (x + 4) + ' ' + (y + 4) + 'M' + (x + 4) + ' ' + (y - 4) + 'L' + (x - 4) + ' ' + (y + 4) + '" stroke="' + col + '" stroke-width="1.6"/>';
-    return '<circle cx="' + x + '" cy="' + y + '" r="7" fill="#241A08" stroke="' + col + '" stroke-width="2.2" stroke-dasharray="3 2"/>';
+    if (t.cls === 'suspicious') return '<path d="M' + x + ' ' + (y - 9) + 'L' + (x + 9) + ' ' + (y + 7) + 'L' + (x - 9) + ' ' + (y + 7) + 'Z" fill="#241A08" stroke="' + col + '" stroke-width="2"/>';
+    return '<circle cx="' + x + '" cy="' + y + '" r="7" fill="' + (t.cls === 'peaceful' ? '#0B2724' : '#1B222C') + '" stroke="' + col + '" stroke-width="2.2"' + (t.cls === 'unknown' ? ' stroke-dasharray="3 2"' : '') + '/>';
   }
   function labelSvg(t, col, sp, sel) {
     const x = t.x, y = Y(t.y);
@@ -447,10 +455,13 @@
     // keep the user's pick; otherwise follow the first hostile once there is one
     if (!cur || (!S.userSel && firstHostile && cur.cls !== 'hostile')) S.sel = (list.find((t) => t.cls === 'hostile') || list[0] || {}).id || null;
     $('trkCount').textContent = list.length + ' active';
+    $('assessmentCounts').innerHTML = ['friendly', 'peaceful', 'unknown', 'suspicious', 'hostile'].map((cls) =>
+      '<span data-class="' + cls + '" style="padding:3px 5px;border:1px solid #2C3644;border-radius:3px;color:' + classColor(cls) + '">' +
+      CLASS_NAME[cls] + ' ' + list.filter((t) => t.cls === cls).length + '</span>').join('');
     $('trkBody').innerHTML = list.map((t) => {
       const cls = { hostile: '◆ HOS', friendly: '● FRD', peaceful: '○ PCF', suspicious: '▲ SUS', unknown: '✣ UNK' }[t.cls];
       const ccol = classColor(t.cls);
-      const b = t.cls === 'hostile' ? 'h' : ['unknown', 'suspicious'].includes(t.cls) ? 'u' : 'f';
+      const b = { hostile: 'h', suspicious: 'u', unknown: 'n', peaceful: 'p', friendly: 'f' }[t.cls];
       return '<tr data-id="' + t.id + '"' + (t.id === S.sel ? ' class="sel"' : '') + '><td><button class="idb ' + b + '" aria-label="Select ' + t.id + '">' + t.id + '</button></td><td style="color:' + ccol + '">' + cls + '</td><td>' + pad4(t.x) + ' ' + pad4(t.y) + '</td><td>' + spd(t.vx, t.vy).toFixed(1) + '</td><td>' + String(Math.round(hdg(t.vx, t.vy))).padStart(3, '0') + '</td><td>' + Math.min(1, t.conf).toFixed(2) + '</td><td>' + t.age.toFixed(1) + 's</td><td>' + (t.cls === 'friendly' ? 'self' : t.nodes.map((n) => n.split(' ')[0]).filter((v, i, a) => a.indexOf(v) === i).join(' ')) + '</td></tr>';
     }).join('');
 
@@ -498,7 +509,7 @@
     const e = eig(t.pxx, t.pyy, t.pxy);
     const rho = t.pxy / Math.sqrt(t.pxx * t.pyy);
     const label = CLASS_NAME[t.cls] + ' · ' + (t.cls === 'friendly' ? ((Sim.PLATFORMS[S.applied.assign[t.id]] || {}).name || 'verified identity') : t.st);
-    const b = t.cls === 'hostile' ? 'background:#FF5A5F;color:#14080A' : t.cls === 'friendly' ? 'background:#5B9BFF;color:#06101F' : 'border:1px dashed #F5B13D;color:#F5B13D';
+    const b = t.cls === 'hostile' ? 'background:#FF5A5F;color:#14080A' : t.cls === 'friendly' ? 'background:#5B9BFF;color:#06101F' : 'border:1px dashed ' + classColor(t.cls) + ';color:' + classColor(t.cls);
     // position error sparkline over last 30 s
     const pts = [];
     for (let j = 0; j <= 30; j++) {
@@ -520,7 +531,9 @@
       [['Verified identity', t.pF, '#5B9BFF'], ['Hostile behavior', t.pH, '#FF5A5F']].map(([name, value, color]) =>
         '<div style="display:flex;justify-content:space-between;font-size:11px"><span>' + name + '</span><span class="mono">' + (value * 100).toFixed(1) + '%</span></div>' +
         '<div style="height:7px;background:#1B222C"><div style="height:100%;width:' + value * 100 + '%;background:' + color + '"></div></div>').join('') +
-      '<span style="font-size:11px;color:#8B96A5">' + ((t.behavior.reasons || ['insufficient_history']).map((v) => v.replace(/_/g, ' ')).join(' · ')) + '</span>' +
+      '<span style="font-size:11px;color:#C9D1DB">Observed pattern: ' + (PATTERN_NAME[t.behavior.pattern] || 'Collecting history') +
+      ' · ' + (t.behavior.observed_s || 0).toFixed(1) + ' s usable history</span>' +
+      '<span style="font-size:11px;color:#8B96A5">' + ((t.behavior.reasons || ['insufficient_history']).map((v) => REASON_NAME[v] || v.replace(/_/g, ' ')).join(' · ')) + '</span>' +
       '<span style="font-size:10px;color:#8B96A5">Simulation policy scores; 50% behavior means no directional evidence. Peaceful does not verify identity.</span></div>' +
       '<div style="display:flex;flex-direction:column;gap:4px"><div style="display:flex;justify-content:space-between;font-size:11px;color:#8B96A5"><span>Position error vs truth, last 30 s</span><span class="mono" style="color:#C9D1DB">' + (now === null ? 'no truth match' : 'now ' + now.toFixed(1) + ' m') + '</span></div>' +
       '<svg viewBox="0 0 340 56" width="100%" role="img" aria-label="Position error sparkline"><path d="M0 46H340M0 6H340" stroke="#222A35"/>' + (path ? '<path d="' + path + '" fill="none" stroke="#3FC1D9" stroke-width="1.6"/>' : '') + '<text x="0" y="55" class="mono" style="font-size:9px;fill:#8B96A5">0 m</text><text x="0" y="14" class="mono" style="font-size:9px;fill:#8B96A5">20 m</text></svg></div>';

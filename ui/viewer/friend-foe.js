@@ -7,11 +7,12 @@
     min_existence: 0.3, min_updates: 5, match_step: 1, no_beacon_per_s: 0.2, no_beacon_floor: -1.5,
     beacon_rate_hz: 2, delivery_prior: 0.8, delivery_prior_n: 10, delivery_tau_s: 30, delivery_min: 0.05,
     max_dt_s: 2, llr_limit: 4, friendly_enter: 0.9, friendly_exit: 0.7, suspicious_enter: 0.3, suspicious_exit: 0.4,
+    suspicious_requires_behavior: false, suspicious_threat_enter: 0.65, suspicious_threat_exit: 0.55,
     hostile_enter: 0.9, hostile_exit: 0.7, peaceful_enter: 0.1, peaceful_exit: 0.3, threat_tau_s: 20, memory_ttl_s: 30 };
   const sigmoid = (x) => 1 / (1 + Math.exp(-x));
   class AutomaticEstimator {
     constructor(behaviorConfig, config, verifiedIds = []) {
-      this.config = Object.assign({}, DEFAULTS, config || {});
+      this.config = Object.assign({}, DEFAULTS, config || {}, { suspicious_requires_behavior: true });
       const c = this.config;
       this.behavior = new B.Model(Object.assign({}, behaviorConfig || {}, { memory_ttl_s: c.memory_ttl_s }), c.threat_tau_s, c.max_dt_s, c.llr_limit);
       this.memory = new Map(); this.seenBeacons = new Map(); this.lastT = null;
@@ -35,12 +36,13 @@
         m.threat = Math.max(-c.llr_limit, Math.min(c.llr_limit, m.threat * Math.exp(-elapsed / c.threat_tau_s) + this.behavior.evidence(tr)));
         m.n++; m.lastT = t;
         const p = sigmoid(m.llr), q = sigmoid(m.threat), prev = m.cls;
+        const riskSupported = !c.suspicious_requires_behavior || q >= (prev === 'suspicious' ? c.suspicious_threat_exit : c.suspicious_threat_enter);
         m.cls = m.n < c.min_updates ? 'unknown' :
           p >= (prev === 'friendly' ? c.friendly_exit : c.friendly_enter) ? 'friendly' :
             q >= (prev === 'hostile' ? c.hostile_exit : c.hostile_enter) ? 'hostile' :
               q <= (prev === 'peaceful' ? c.peaceful_exit : c.peaceful_enter) ? 'peaceful' :
-                p <= (prev === 'suspicious' ? c.suspicious_exit : c.suspicious_enter) ? 'suspicious' : 'unknown';
-        const prob = m.cls === 'friendly' ? p : m.cls === 'hostile' ? q : m.cls === 'peaceful' ? 1 - q : m.cls === 'suspicious' ? 1 - p : Math.max(p, 1 - p);
+                riskSupported && p <= (prev === 'suspicious' ? c.suspicious_exit : c.suspicious_enter) ? 'suspicious' : 'unknown';
+        const prob = m.cls === 'friendly' ? p : m.cls === 'hostile' ? q : m.cls === 'peaceful' ? 1 - q : m.cls === 'suspicious' ? (c.suspicious_requires_behavior ? q : 1 - p) : Math.max(p, 1 - p);
         return { track_id: tr.track_id, t, cls: m.cls, class_prob: prob, p_friendly: p, matched_beacon: match?.id ?? null, p_hostile: q };
       });
       const forget = Math.exp(-dt / c.delivery_tau_s), friendly = out.filter((v) => v.cls === 'friendly');

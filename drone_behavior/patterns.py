@@ -48,19 +48,35 @@ def _mean(values):
 
 
 def _features(h):
-    speeds = [math.hypot(s["vx"], s["vy"]) for s in h]
+    motion = [(h[0]["vx"], h[0]["vy"])]
+    for a, b in zip(h, h[1:]):
+        # Tracker velocity is a noisy derivative. A short time-based filter keeps
+        # its frame-to-frame jitter from masquerading as an erratic flight path.
+        gain = 1 - math.exp(-(b["t"] - a["t"]) / 1.5)
+        px, py = motion[-1]
+        motion.append((px + gain * (b["vx"] - px), py + gain * (b["vy"] - py)))
+    speeds = [math.hypot(vx, vy) for vx, vy in motion]
     pairs = list(zip(h, h[1:]))
-    path = sum(math.hypot(b["x"] - a["x"], b["y"] - a["y"]) for a, b in pairs)
-    turns = [abs(math.atan2(a["vx"] * b["vy"] - a["vy"] * b["vx"],
-                            a["vx"] * b["vx"] + a["vy"] * b["vy"])) / (b["t"] - a["t"])
-             for a, b in pairs if min(math.hypot(a["vx"], a["vy"]), math.hypot(b["vx"], b["vy"])) >= 2]
+    path = sum((speeds[i] + speeds[i + 1]) * (b["t"] - a["t"]) / 2 for i, (a, b) in enumerate(pairs))
+    angles = [math.atan2(a[0] * b[1] - a[1] * b[0], a[0] * b[0] + a[1] * b[1])
+              for a, b in zip(motion, motion[1:]) if min(math.hypot(*a), math.hypot(*b)) >= 2]
+    total_turn = sum(abs(a) for a in angles)
+    span = h[-1]["t"] - h[0]["t"]
+    dx, dy = h[-1]["x"] - h[0]["x"], h[-1]["y"] - h[0]["y"]
+    integrated = [sum((motion[i][k] + motion[i + 1][k]) * (b["t"] - a["t"]) / 2
+                      for i, (a, b) in enumerate(pairs)) for k in (0, 1)]
     speed = _mean(speeds)
     return {
         "mean_speed_mps": speed,
+        "course_vx_mps": motion[-1][0], "course_vy_mps": motion[-1][1],
         "speed_cv": math.sqrt(_mean([(v - speed) ** 2 for v in speeds])) / max(speed, 1),
-        "mean_turn_rad_s": _mean(turns) if turns else 0.0,
+        "mean_turn_rad_s": total_turn / max(span, 0.5),
+        "signed_turn_rad_s": sum(angles) / max(span, 0.5),
+        "total_turn_rad": total_turn,
+        "turn_coherence": abs(sum(angles)) / max(total_turn, 1e-9),
+        "velocity_consistency": max(0.0, 1 - math.hypot(dx - integrated[0], dy - integrated[1]) / max(path, 20)),
         "path_m": path,
-        "displacement_m": math.hypot(h[-1]["x"] - h[0]["x"], h[-1]["y"] - h[0]["y"]),
+        "displacement_m": math.hypot(dx, dy),
     }
 
 
@@ -74,7 +90,7 @@ class BehaviorModel:
     extrapolation; otherwise TrackState.t must be the last observed state time.
     """
 
-    version = "motion-policy-v1"
+    version = "motion-policy-v2"
 
     def __init__(self, config: Optional[BehaviorConfig] = None, threat_tau_s=20.0, max_dt_s=2.0, evidence_limit=4.0):
         self.config = config or BehaviorConfig()
@@ -116,6 +132,12 @@ class BehaviorModel:
             h = m["history"]
             if h and (t - h[-1]["t"] > cfg.max_gap_s or obs - m["obs"] > cfg.max_gap_s):
                 h.clear()
+            if h:
+                prev, elapsed = h[-1], t - h[-1]["t"]
+                residual = math.hypot(tr.position[0] - prev["x"] - prev["vx"] * elapsed,
+                                      tr.position[1] - prev["y"] - prev["vy"] * elapsed)
+                if residual > max(30, 4 * math.hypot(prev["sigma"], tr.pos_sigma) + 5 * elapsed ** 2):
+                    h.clear()  # an association jump starts a new observed history
             m["obs"], m["eval"] = obs, t
             h.append({"t": t, "x": tr.position[0], "y": tr.position[1], "vx": tr.velocity[0],
                       "vy": tr.velocity[1], "sigma": tr.pos_sigma, "existence": tr.existence_prob})
@@ -126,7 +148,8 @@ class BehaviorModel:
             increment = target - m["llr"]
             m["llr"] = target
             m["result"] = {"quality": quality, "observed_s": h[-1]["t"] - h[0]["t"],
-                           "reasons": reasons, "features": features, "last_observed_t": t}
+                           "reasons": reasons, "features": features, "last_observed_t": t,
+                           "pattern": self._pattern(features) if len(h) >= 2 else "insufficient_history"}
         m["result"] = dict(m["result"], llr=m["llr"], increment=increment, model_version=self.version)
         return increment
 
@@ -140,13 +163,13 @@ class BehaviorModel:
         if span < cfg.min_history_s - 1e-8:
             return 0.0, ["insufficient_history"], f
         risk, reasons = 0.0, []
-        outside_all = True
+        outside_all, safe_course = True, True
         for zone in cfg.protected_zones:
             radius = zone["radius_m"]
             ds = [math.hypot(s["x"] - zone["x"], s["y"] - zone["y"]) for s in h]
             inside = [d + 2 * s["sigma"] < radius for d, s in zip(ds, h)]
             outside = [d - 2 * s["sigma"] > radius for d, s in zip(ds, h)]
-            outside_all = outside_all and all(outside)
+            outside_all = outside_all and all(d - 2 * s["sigma"] > radius + 40 for d, s in zip(ds, h))
             last = h[-1]
             dwell_start = len(h) - 1
             while dwell_start > 0 and inside[dwell_start - 1]:
@@ -154,34 +177,78 @@ class BehaviorModel:
             dwell = last["t"] - h[dwell_start]["t"] if inside[-1] else 0
             entered = inside[-1] and any(outside[:dwell_start])
             if entered and dwell >= 2 - 1e-8:
-                risk = max(risk, 3.2)
+                risk = max(risk, 1.5)
                 reasons.append("sustained_protected_entry")
-            if inside[-1] and span >= 12 and sum(inside) / len(h) >= 0.8 and (f["mean_speed_mps"] < 2 or
-                    (f["path_m"] >= 30 and f["displacement_m"] / max(1, f["path_m"]) < 0.4)):
-                risk = max(risk, 3.0)
+            loiter = f["mean_speed_mps"] < 2 or (f["path_m"] >= 30 and
+                     f["displacement_m"] / max(1, f["path_m"]) < 0.6 and f["turn_coherence"] > 0.65)
+            if inside[-1] and span >= 8 and sum(inside) / len(h) >= 0.6 and loiter:
+                risk = max(risk, 1.8)
                 reasons.append("protected_loiter")
+                if span >= 18 and sum(inside) / len(h) >= 0.85 and ds[-1] + 2 * last["sigma"] < 0.7 * radius:
+                    risk = max(risk, 3.4)
+                    reasons.append("persistent_protected_loiter")
+            entries, last_side = [], None
+            for i, sample in enumerate(h):
+                if outside[i]:
+                    last_side = "outside"
+                elif inside[i] and last_side == "outside":
+                    if not entries or sample["t"] - entries[-1] >= 4:
+                        entries.append(sample["t"])
+                    last_side = "inside"
+            if len(entries) >= 2:
+                risk = max(risk, 3.4)
+                reasons.append("repeated_protected_intrusions")
             dx, dy = last["x"] - zone["x"], last["y"] - zone["y"]
-            speed2 = last["vx"] ** 2 + last["vy"] ** 2
-            ahead = max(0, min(8, -(dx * last["vx"] + dy * last["vy"]) / max(speed2, 1)))
-            miss = math.hypot(dx + last["vx"] * ahead, dy + last["vy"] * ahead)
-            closing = -(dx * last["vx"] + dy * last["vy"]) / max(ds[-1], 1)
+            vx, vy = f["course_vx_mps"], f["course_vy_mps"]
+            speed2 = vx ** 2 + vy ** 2
+            ahead = max(0, min(8, -(dx * vx + dy * vy) / max(speed2, 1)))
+            miss = math.hypot(dx + vx * ahead, dy + vy * ahead)
+            closing = -(dx * vx + dy * vy) / max(ds[-1], 1)
+            closest_t = max(0, -(dx * vx + dy * vy) / max(speed2, 1))
+            future_miss = math.hypot(dx + vx * closest_t, dy + vy * closest_t)
+            omega = f["signed_turn_rad_s"]
+            orbit_safe = False
+            if f["total_turn_rad"] >= math.pi / 2 and f["turn_coherence"] > 0.75 and abs(omega) >= 0.04:
+                cx, cy = last["x"] - vy / omega, last["y"] + vx / omega
+                orbit_safe = math.hypot(cx - zone["x"], cy - zone["y"]) - math.sqrt(speed2) / abs(omega) - 2 * last["sigma"] > radius + 40
+            if not orbit_safe and closest_t <= 60 and future_miss - 2 * last["sigma"] <= radius + 40:
+                safe_course = False
             if (closing > 2 and ds[0] - ds[-1] > max(20, 4 * last["sigma"]) and
                     ds[-1] < radius + 150 and miss + 2 * last["sigma"] < radius):
                 risk = max(risk, 1.2)
                 reasons.append("approaching_protected_area")
         if risk:
             return risk, sorted(set(reasons)), f  # correlated approach/entry cues are not added together
-        if outside_all and span >= 10:
+        if outside_all and safe_course and span >= 10:
             if any(self._in_corridor(h, c) for c in cfg.corridors):
                 return -3.2, ["authorized_corridor_transit"], f
-            if f["speed_cv"] < 0.15 and f["mean_speed_mps"] > 2 and f["displacement_m"] > 0.9 * f["path_m"]:
-                return -0.7, ["consistent_transit_only"], f  # weak: smooth motion cannot establish peaceful intent
+            if (span >= 15 and f["speed_cv"] < 0.35 and f["mean_speed_mps"] > 2 and
+                    f["displacement_m"] > max(60, 0.85 * f["path_m"]) and f["velocity_consistency"] > 0.75 and
+                    f["mean_turn_rad_s"] < 0.15):
+                strength = 3.4 * min(1, (span - 10) / 8)
+                return -strength, ["sustained_safe_transit", "protected_area_clearance", "non_converging_course"], f
+            if (span >= 18 and f["path_m"] >= 100 and f["speed_cv"] < 0.3 and
+                    f["total_turn_rad"] >= math.pi / 2 and f["turn_coherence"] > 0.75 and
+                    0.04 <= f["mean_turn_rad_s"] <= 0.4 and f["velocity_consistency"] > 0.75):
+                return -3.3, ["consistent_safe_orbit", "protected_area_clearance"], f
+            if f["speed_cv"] < 0.35 and f["mean_speed_mps"] > 2 and f["displacement_m"] > 0.85 * f["path_m"]:
+                return -0.7, ["developing_transit_pattern"], f
             for friend_id in sorted(self._profiles.keys() - {track_id}):
                 pf = self._profiles[friend_id]
                 if (abs(pf["mean_speed_mps"] - f["mean_speed_mps"]) < 2 and
                         abs(pf["mean_turn_rad_s"] - f["mean_turn_rad_s"]) < 0.05):
                     return -0.5, ["resembles_verified_patrol_only"], f
         return 0.0, ["ambiguous_motion"], f
+
+    @staticmethod
+    def _pattern(f):
+        if f["mean_speed_mps"] < 2:
+            return "hover"
+        if f["total_turn_rad"] >= math.pi / 2 and f["turn_coherence"] > 0.65:
+            return "orbit"
+        if f["displacement_m"] > 0.85 * f["path_m"] and f["speed_cv"] < 0.35:
+            return "transit"
+        return "maneuvering"
 
     @staticmethod
     def _in_corridor(h, c):

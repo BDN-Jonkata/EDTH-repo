@@ -63,7 +63,7 @@ Phased, starting from the optimistic case. Status legend: ⬜ not started · �
 
 | Status | Task |
 |--------|------|
-| 🟨 | Seeder: sensor and platform catalog, PostgreSQL storage, scenario generator (friendly patrols, ground sensors, hostile paths, planned close crossing, four presets, tuning and test seeds) done; also clutter objects (birds, vehicles), weather combinations, weather events and a seasonal sky, and jamming zones in the config; terrain, moving ground units and bandwidth limits are not in the generator |
+| 🟨 | Seeder: sensor and platform catalog, PostgreSQL storage, scenario generator (friendly patrols, ground sensors, hostile and non-allied benign paths, planned close crossing, five presets, tuning and test seeds) done; also clutter objects (birds, vehicles), weather combinations, weather events and a seasonal sky, and jamming zones in the config; terrain, moving ground units and bandwidth limits are not in the generator |
 | 🟨 | Simulation: the viewer runs a JavaScript mock simulation (2D map with terrain/height display, crossing, commanded drone motion, clutter objects, per-detection weather with a sky control, jamming zones); the real simulation module is not started |
 | ✅ | Network channel (`common/channel.py`): loss (independent or bursty, per sender), delay and node clocks from the scenario's `degradations`; jamming zones, node dropout and topology not modelled in Python (the viewer's mock simulation has a channel with jamming zones) |
 | ✅ | Sensor observation models (`sensors/observe.py`, `native.py`, `beacons.py`): range window, field of view, detection probability, signatures, weather per detection, native fields with honest noise; the viewer's mock simulation has its own JavaScript version |
@@ -82,7 +82,7 @@ Phased, starting from the optimistic case. Status legend: ⬜ not started · �
 |--------|------|
 | ⬜ | Per-node local trackers sharing compact tracks |
 | ⬜ | Track merge with covariance intersection |
-| ✅ | Drone Behaviour module (`drone_behavior/`, Emkata): automatic observed-motion evidence for the estimator's `threat_llr` hook, policy configuration, parity with the viewer's JavaScript. On the pipeline's tracks it calls some hostiles but **no clutter peaceful** (birds and vehicles stay suspicious), so it does not yet save the wasted dispatches: [pipeline.md](pipeline/pipeline.md) |
+| ✅ | Drone Behaviour module (`drone_behavior/`, Emkata): automatic five-class assessment from observed history, separate verified identity, uncertainty gates, safe transit/orbit and protected-area intrusion/loiter; Python/JS parity and mixed-traffic tests. Also runs on the Python pipeline's tracks; see [pipeline.md](pipeline/pipeline.md) for integration and tracker limitations |
 | ✅ | Weather model (`sensors/`): several anomalies at once, anomalies that start, end and cover a zone, seasonal sun for day and night, per-module quality and sensor hierarchy from the catalog's `weather_effects`, shared golden cases for the JS port; tested |
 | ✅ | Weather applied to simulated observations: the Python observation models and the viewer's mock simulation both look up sensor quality per detection from the weather at the sensor and at the target (combinations, events and sky are accepted by the seeder and the viewer); standoff uses the catalog's `sim.ident_range_m` |
 | ✅ | Suspicious class, investigation trigger and weather-based standoff per catalog module; reads drone acks through `DroneStatusMapper`; tested |

@@ -7,7 +7,7 @@ The JSON that the seeder produces and the other modules read. If you are an agen
 - Area: a 1000 m x 1000 m square. `x` is east, `y` is north, in metres, origin at the south-west corner. `z`/altitude is metres above ground.
 - Time is seconds from the start of the run (`t = 0`). Velocities are m/s.
 - Angles: `bearing_deg`, `azimuth_deg` and `heading_deg` are compass degrees, 0 = north, clockwise. A friendly's `loop.th0` is a maths angle in radians (0 = east, counter-clockwise) because it is used in `cos`/`sin`.
-- IDs: friendlies `F1..F5`, ground sensors `GS1..GS2`, hostiles `H1..Hn`, the fusion node `C2`.
+- IDs: friendlies `F1..F5`, ground sensors `GS1..GS2`, hostiles `H1..Hn`, non-allied benign drones `N1..Nn`, the fusion node `C2`. These prefixes are seeder conventions, never estimator features.
 - A scenario is fully determined by its config and `seed`. Same input, same output.
 
 ## Where the data comes from
@@ -34,7 +34,7 @@ Top level: `schema`, `id` (for example `hard-s3`), `name`, `seed`, `preset`, `de
 | `friendlies[]` | `id`, `platform` (catalog id), `altitude_m`, `loop` = circular patrol `{cx, cy, R, v, dir (+1/-1), th0}`, `sensors[]` = `{module, kind}` resolved from the catalog |
 | `ground[]` | `id`, `platform`, `position` `[x, y]`, `heading_deg`, `sensors[]` |
 | `commands[]` | tasking sent from C2 to friendly drones during the run, sorted by `t`: `{t, drone_id, command, target?, speed_mps?, heading_deg?, face_target?, track_id?}`. Empty by default. See "Drone commands" below |
-| `targets[]` | hostiles: `id`, `motion`, `speed_mps`, `altitude_m`, `waypoints` = `[[t, x, y], ...]` (straight lines between them), `wobble_m`, `phase`, `signature` (how well each sensor type sees it: `eo`, `thermal`, `acoustic`, `rf`, `radar`), `emits` (false = silent, invisible to RF) |
+| `targets[]` | non-allied drones: `id`, `role` (`hostile` or `benign`, default `hostile`), `motion`, `speed_mps`, `altitude_m`, `waypoints` = `[[t, x, y], ...]` (straight lines between them), `wobble_m`, `phase`, `signature` (how well each sensor type sees it: `eo`, `thermal`, `acoustic`, `rf`, `radar`), `emits` (false = silent, invisible to RF). Role and future paths are simulation/scoring inputs, excluded from behavioral inference |
 | `clutter[]` | birds and vehicles: real objects the sensors see that are **not threats**. Same fields as `targets[]` plus `type` (`bird` or `vehicle`) and `role: "clutter"`; `emits` is always false. Empty by default |
 | `beacon` | friendly position beacons: `enabled`, `rate_hz`, `pos_sigma_m` |
 | `sensor_set.enabled_kinds` | which sensor kinds exist in this run |
@@ -77,7 +77,7 @@ Why it matters: `seed_catalog.py --check` tests single weathers only. In combina
 ```
 { "scenario_id", "seed", "duration_s", "dt_s": 0.1,
   "columns": ["t", "x", "y", "vx", "vy"],
-  "objects": [ { "id": "H1", "kind": "hostile|friendly|clutter", "altitude_m": 45.0,
+  "objects": [ { "id": "H1", "kind": "hostile|friendly|benign|clutter", "altitude_m": 45.0,
                  "samples": [[t, x, y, vx, vy], ...] } ],   -- a clutter object also has "type": "bird|vehicle"
   "events":  [ {"type": "enter|exit", "id", "t"},
                {"type": "crossing", "a", "b", "t", "sep_m", "x", "y"} ] }

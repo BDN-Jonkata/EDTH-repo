@@ -41,6 +41,9 @@ class RunMetrics:
     requests_on_clutter: int
     infeasible_requests: int                  # weather leaves no module able to identify the object
     mean_standoff_m: Optional[float]
+    benign_flag_frac: float = 0.0
+    benign_peaceful_frac: float = 0.0
+    requests_on_benign: int = 0
 
 
 class _Tally:
@@ -98,12 +101,15 @@ def _metrics(tally: _Tally, requests: List[dict]) -> RunMetrics:
         requests_on_clutter=asked_about.count("clutter"),
         infeasible_requests=sum(not r["feasible"] for r in requests),
         mean_standoff_m=_mean([r["standoff_m"] for r in requests]),
+        benign_flag_frac=tally.share("benign", FLAGGED),
+        benign_peaceful_frac=tally.share("benign", ("peaceful",)),
+        requests_on_benign=asked_about.count("benign"),
     )
 
 
 def roles_of(scenario: dict) -> Dict[str, str]:
     roles = {f["id"]: "friendly" for f in scenario["friendlies"]}
-    roles.update({tg["id"]: "hostile" for tg in scenario["targets"]})
+    roles.update({tg["id"]: tg.get("role", "hostile") for tg in scenario["targets"]})
     roles.update({c["id"]: "clutter" for c in scenario.get("clutter", [])})
     return roles
 

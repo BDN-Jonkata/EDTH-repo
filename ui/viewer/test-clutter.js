@@ -11,7 +11,7 @@ const vehicle = (signature) => ({
   waypoints: [[0, 100, 420], [120, 950, 420]], signature, emits: false,
 });
 const withClutter = (clutter) => Object.assign(JSON.parse(JSON.stringify(SCENARIOS.challenge)), { clutter });
-const run = (scenario) => Sim.run({ seed: 5, mode: 'optimistic', weather: 'clear', loss: 0, delayMs: 0, driftMs: 0, scenario });
+const run = (scenario, assign = {}) => Sim.run({ seed: 5, mode: 'optimistic', weather: 'clear', loss: 0, delayMs: 0, driftMs: 0, scenario, assign });
 // radar detections (range and bearing) within 25 m of the object that no other object or false alarm explains
 function radarHitsOn(res, id) {
   let n = 0;
@@ -42,8 +42,19 @@ test('a signature of 0 is never detected', () => {
   assert.strictEqual(radarHitsOn(run(withClutter([vehicle(UNSEEN)])), 'V1'), 0);
 });
 
-test('a hostile track on clutter is counted as a clutter false alarm', () => {
+test('ordinary vehicle transit does not become hostile just for crossing a protected area', () => {
   const res = run(withClutter([vehicle(LOUD)]));
+  assert.strictEqual(res.summary.cfa, 0);
+  assert.ok(!res.alerts.some((a) => /Clutter vehicle V1 tracked as hostile/.test(a.text)));
+});
+
+test('a prolonged protected-area loiter by clutter is still counted as a false alarm', () => {
+  const hovering = vehicle(LOUD);
+  const [cx, cy] = SCENARIOS.challenge.c2;
+  hovering.waypoints = [[0, cx, cy], [120, cx, cy]];
+  // GS1's radar faces this location, giving a continuous observed history. The
+  // default GS2 radar's field of view does not cover C2 itself.
+  const res = run(withClutter([hovering]), { GS1: 'gs_radar_rf' });
   assert.ok(res.summary.cfa >= 1, 'cfa ' + res.summary.cfa);
   assert.ok(res.alerts.some((a) => /Clutter vehicle V1 tracked as hostile/.test(a.text)));
 });

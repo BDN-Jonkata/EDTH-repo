@@ -1,6 +1,6 @@
 """Score a run: the estimated tracks against `truth.json`, with the metrics in docs/concept.md.
 
-Per time step, estimated tracks are matched to the true objects present (hostile, friendly and clutter)
+Per time step, estimated tracks are matched to the true objects present (hostile, friendly, benign and clutter)
 by optimal assignment inside a distance gate, so a track on a friendly or on a bird is never taken for
 a hostile. A track *counts as hostile* unless its class is friendly or peaceful (a hostile presumption:
 a track with no class counts). Every function here reads `truth.json` only through `truth.py`.
@@ -56,6 +56,7 @@ class RunScore:
     friendly_flag_frac: float               # friendly object-steps matched to a counted track
     clutter_flagged_frac: float             # clutter object-steps matched to a counted track
     false_tracks_mean: float                # counted tracks matching no object, per step
+    benign_flag_frac: float = 0.0           # non-allied benign drone object-steps matched to a counted track
 
 
 def _dist(est: Estimate, state: State) -> float:
@@ -170,6 +171,7 @@ def _summary(acc: _Accum) -> RunScore:
         friendly_flag_frac=acc.share("friendly"),
         clutter_flagged_frac=acc.share("clutter"),
         false_tracks_mean=_mean(acc.false_tracks),
+        benign_flag_frac=acc.share("benign"),
     )
 
 

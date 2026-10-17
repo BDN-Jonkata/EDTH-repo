@@ -51,6 +51,35 @@ def build_cases():
                            "expected": [asdict(c) for c in result],
                            "evidence": {tr.track_id: est.explain(tr.track_id) for tr in tracks}})
         cases.append({"name": name, "policy": asdict(policy), "verified_ids": ["track-a"] if name == "verified" else [], "frames": frames})
+    # Exercise the default policy with no authorized corridor, including noisy
+    # derivative estimates and circles whose tangent sometimes points at C2.
+    for name in ("default_transit", "neutral_silence", "noisy_transit", "safe_orbit", "noisy_orbit", "protected_orbit", "repeated_entry", "association_jump"):
+        default_policy = BehaviorConfig.for_area([500, 500])
+        est, frames = AutomaticEstimator(default_policy), []
+        for k in range(101):
+            t = k / 2
+            x, y, vx, vy = 100 + 10 * t, 100, 10, 0
+            if name == "neutral_silence":
+                x, vx = 100, 0
+            elif name == "noisy_transit":
+                x += math.sin(7 * t)
+                y += math.cos(5 * t)
+                vx += 3 * math.sin(11 * t)
+                vy += 3 * math.cos(9 * t)
+            elif name in ("safe_orbit", "noisy_orbit", "protected_orbit"):
+                cy = 500 if name == "protected_orbit" else 850
+                a, noise = t / 6, int(name == "noisy_orbit")
+                x, y = 500 + 50 * math.cos(a), cy + 50 * math.sin(a)
+                vx, vy = -50 / 6 * math.sin(a) + noise * 2 * math.sin(11 * t), 50 / 6 * math.cos(a) + noise * 2 * math.cos(9 * t)
+            elif name == "repeated_entry":
+                x, y, vx = 650 + 35 * math.cos(t / 2), 500, -17.5 * math.sin(t / 2)
+            elif name == "association_jump" and t >= 25.5:
+                x, y, vx = 500, 500, 0
+            tracks = [TrackState("opaque", t, (x, y, 60), (vx, vy, 0), 2)]
+            result = est.update(t, tracks, [])
+            frames.append({"t": t, "tracks": [asdict(tr) for tr in tracks], "beacons": [],
+                           "expected": [asdict(c) for c in result], "evidence": {"opaque": est.explain("opaque")}})
+        cases.append({"name": name, "policy": asdict(default_policy), "verified_ids": [], "frames": frames})
     return {"estimator_config": asdict(EstimatorConfig()), "cases": cases}
 
 
