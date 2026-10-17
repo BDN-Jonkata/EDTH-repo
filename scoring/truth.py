@@ -26,6 +26,16 @@ class TruthObject:
         return tuple(a + w * (b - a) for a, b in zip(s0, s1))
 
 
+def with_recorded_samples(truth: dict, recorded: Dict[str, List[List[float]]]) -> dict:
+    """A copy of `truth` where the listed objects take the positions recorded during the run.
+
+    `truth.json` holds the scripted baseline; when drones are commanded off their patrol it is wrong for
+    them, and scoring must use what the run recorded (docs/data-formats.md). `recorded` maps an object id to
+    `[t, x, y, vx, vy]` rows."""
+    objects = [dict(o, samples=recorded[o["id"]]) if o["id"] in recorded else o for o in truth["objects"]]
+    return dict(truth, objects=objects)
+
+
 def load_truth(truth: dict) -> Dict[str, TruthObject]:
     objects = {}
     for o in truth["objects"]:
