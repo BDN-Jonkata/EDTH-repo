@@ -21,6 +21,7 @@
   const Messages = typeof window !== 'undefined' ? window.Messages : require('./messages.js');
   const Mission = typeof window !== 'undefined' ? window.Missions : require('./missions.js');
   const Weather = typeof window !== 'undefined' ? window.Weather : require('./weather.js');
+  const Navigation = typeof window !== 'undefined' ? window.Navigation : require('./navigation.js');
   const Jamming = typeof window !== 'undefined' ? window.Jamming : require('./jamming.js');
   const LinkCap = typeof window !== 'undefined' ? window.LinkCap : require('./linkcap.js');
   const StoreFwd = typeof window !== 'undefined' ? window.StoreFwd : require('./storefwd.js');
@@ -331,6 +332,7 @@ const Intent = typeof window !== 'undefined' ? window.Intent : require('./intent
       rn: rng(P.seed * 7919 + 13),   // sensor noise
       rnet: rng(P.seed * 104729 + 7), // network
       rcl: rng(P.seed * 15485863 + 3), // clutter
+      rpose: rng(P.seed * 32452843 + 5), // node pose errors, apart from the others so presets without pose error do not move
       loss: real ? P.loss / 100 : 0, delay: real ? P.delayMs / 1000 : 0, drift: real ? P.driftMs / 1000 : 0,
       T_END: world.duration, NF: Math.round(world.duration / DT), EVAL: world.eval,
       wx: wx.provider, wxStatic: wx.isStatic,
@@ -339,7 +341,7 @@ const Intent = typeof window !== 'undefined' ? window.Intent : require('./intent
       zones: real ? ((world.deg.network && world.deg.network.jamming_zones) || []) : [], // jamming is a comms degradation: only in Realistic mode
       sensors: buildSensors(assign, Weather.activeEffects(wx.base), world.sensorKinds),
       nodes: world.ground.map((g) => g.id).concat(world.friendlies.map((f) => f.id)),
-      pathById: {}, dropT: {}, driftScale: {}, linkQ: {}, queue: [],
+      pathById: {}, dropT: {}, driftScale: {}, poseErr: {}, linkQ: {}, queue: [],
       drones: {}, seqs: {}, cmd: { script: scriptedCommands(P, world), open: {}, records: {}, seen: {}, count: 0 },
       beaconEvery: Math.max(1, Math.round(10 / (world.beacon.rate_hz || 2))), beaconSigma: world.beacon.pos_sigma_m || 3,
       tracks: [], pending: [], rfRecent: [], friends: {}, alerts: [], frames: [], timeline: [], lastMatch: {}, sqHist: [], crossAlerted: {},
@@ -353,9 +355,26 @@ const Intent = typeof window !== 'undefined' ? window.Intent : require('./intent
     c.sf = storeForwardFor(world, real, c.nodes);
     c.late = c.sf ? LateData.createLog() : null; // what each node took, and when C2 got it
     c.nodes.forEach((n) => { c.driftScale[n] = c.rn() * 2 - 1; c.linkQ[n] = 1; });
+    setPoseErrors(c, world, real);
+    c.nav = Object.keys(c.poseErr).length && P.navigation !== false ? Navigation.create(c.nodes) : null;
     addControllers(c, world, assign);
     shareFalseAlarmsAcrossRadars(c);
     return c;
+  }
+  // GNSS-denied nodes: each node believes it is somewhere near where it is, a fixed offset and heading error for the run
+  // (assumed model: the scenario's position_err_m and heading_err_deg are the largest offset and the 1-sigma heading error)
+  function setPoseErrors(c, world, real) {
+    const cfg = world.deg.pose;
+    if (!real || !cfg || !cfg.enabled) return;
+    c.nodes.forEach((n) => {
+      const a = c.rpose() * 2 * Math.PI, m = Math.sqrt(c.rpose()) * cfg.position_err_m;
+      c.poseErr[n] = { dx: m * Math.cos(a), dy: m * Math.sin(a), dh: gauss(c.rpose) * cfg.heading_err_deg * D2R };
+    });
+  }
+  // the record carries the node's believed position and bearing, while the measurement itself was made from the true pose
+  function applyPoseError(c, rec) {
+    const e = c.poseErr[rec.node];
+    if (e) Navigation.shiftRecord(rec, e.dx, e.dy, e.dh, compass);
   }
   // nodes that die mid-run: the scenario's dropout list and dropout faults
   function setDropTimes(c, world, real) {
@@ -559,6 +578,7 @@ const Intent = typeof window !== 'undefined' ? window.Intent : require('./intent
     if (s.cell && seen.length > 1) seen = mergeCells(seen, s.cell); // radar resolution cell
     seen.forEach((d) => raw.push(makeRecord(d.sq || s, d, sp, t, isGround, c.rn))); // each detection becomes the native record
     addClutter(c, s, { sp, heading, t, isGround }, raw);
+    raw.forEach((rec) => { if (rec.node === s.node && !rec.poseApplied) { applyPoseError(c, rec); rec.poseApplied = true; } });
   }
   // who is inside the sensor's limits: range window, field of view, detection probability
   function detect(c, s, view) {
@@ -804,12 +824,21 @@ const Intent = typeof window !== 'undefined' ? window.Intent : require('./intent
     const frameMeas = [];
     arrived.forEach((m) => {
       if (m.type === 'friendly_beacon') { applyBeacon(c, m, t); return; }
+      correctPose(c, m.z, t);
       frameMeas.push(m.z);
       associate(c, m.z, t);
     });
     c.pending = c.pending.filter((p) => t - p.t <= 1.0);
     noteEmitters(c, t, frameMeas);
     return frameMeas;
+  }
+  // navigation estimator: learn each node's pose error from friendlies whose beacons are fresh, then correct the reading
+  function correctPose(c, z, t) {
+    if (!c.nav) return;
+    const landmarks = Object.values(c.friends).filter((f) => t - (f.beaconT ?? -Infinity) <= 1.5)
+      .map((f) => ({ id: f.id, x: f.s[0], y: f.s[1], sd: c.beaconSigma + 5 }));
+    Navigation.observe(c.nav, z, landmarks);
+    Navigation.correct(c.nav, z, compass);
   }
   // An RF receiver only hears a transmitter, and the birds and vehicles do not transmit. One receiver gives a bearing and
   // any track on that line could take it, so the bearings of two receivers are crossed into a fix and the fix goes to the
