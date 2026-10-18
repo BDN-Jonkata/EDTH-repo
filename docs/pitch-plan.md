@@ -105,9 +105,9 @@ The GNSS number is from the viewer's simulation, on 6 tuning seeds, with an assu
 
 ### Beat 6 — What is next / Какво следва
 
-**EN:** Agree acceptance thresholds (a proposal is in heldout-evaluation.md); label hostiles from evidence rather than "not friendly"; send drones toward the threat; show the Python pipeline live in the viewer (today a saved run can be replayed on cop.html).
+**EN:** Agree acceptance thresholds (a proposal is in heldout-evaluation.md); label hostiles from evidence rather than "not friendly"; send drones toward the threat; show the Python pipeline in the viewer (today the viewer runs only its own JavaScript simulation).
 
-**BG:** Да договорим праговете за приемане (предложение има в heldout-evaluation.md); да определяме враговете по доказателства, а не по „не е приятел“; да пращаме дронове към заплахата; да покажем Python конвейера на живо във viewer-а (днес записан пробег се възпроизвежда на cop.html).
+**BG:** Да договорим праговете за приемане (предложение има в heldout-evaluation.md); да определяме враговете по доказателства, а не по „не е приятел“; да пращаме дронове към заплахата; да покажем Python конвейера във viewer-а (днес viewer-ът върти само собствена JavaScript симулация).
 
 ---
 
@@ -130,7 +130,7 @@ The GNSS number is from the viewer's simulation, on 6 tuning seeds, with an assu
 
 - "Solved", "proven", "guaranteed". / „Решено“, „доказано“, „гарантирано“.
 - A held-out number without saying it is held-out and lower than the tuning numbers (see heldout-evaluation.md). / Число от тестовите seeds, без да кажеш, че е от тестовите и че е по-ниско от tuning числата.
-- That the main viewer shows the Python tracker live: it does not, it runs its own simulation; the COP replay page (cop.html) can replay a saved Python run. / Че основният viewer показва Python тракера на живо: не го показва, има собствена симулация; страницата cop.html може да възпроизведе записан Python пробег.
+- That the main viewer shows the Python tracker live: it does not, it runs its own simulation. / Че основният viewer показва Python тракера на живо: не го показва, има собствена симулация.
 - That hostiles are detected "from evidence": today every track that is not a confirmed friendly counts as hostile. / Че враговете се определят „по доказателства“: днес всеки трак, който не е потвърден приятел, се брои за враг.
 
 ## 5. Phrases for variety / Фрази за разнообразие

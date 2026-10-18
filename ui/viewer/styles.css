@@ -145,3 +145,6 @@ footer.bar { background: #0F141A; border-top: 1px solid #222A35; padding: 12px 1
 .late-note { color: #8B96A5; font-size: 11px; }
 .late-btn { margin-left: auto; background: #1B222C; color: #D5DBE3; border: 1px solid #2C3644; border-radius: 3px; padding: 2px 8px; font: inherit; font-size: 11px; cursor: pointer; }
 .late-btn:hover, .late-btn[aria-pressed="true"] { border-color: #9B7BFF; color: #fff; }
+
+#busy { position: fixed; inset: 0; z-index: 50; display: flex; align-items: center; justify-content: center; background: rgba(11,15,20,.72); color: #E6EAF0; font-size: 14px; letter-spacing: .04em; }
+#busy[hidden] { display: none; }
