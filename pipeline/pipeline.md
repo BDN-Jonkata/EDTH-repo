@@ -7,6 +7,7 @@ Status: done and tested for the central baseline. See [tracker](../tracker/track
 | File | Contents |
 |------|----------|
 | [run.py](run.py) | `Pipeline(scenario, seed).step(t)`, `run(scenario, seed)` (frames of confirmed tracks), `scored_frames(scenario, seed)` (the tracks with the estimator's classes, ready for `scoring.metrics.score`) |
+| [export_run.py](export_run.py) | `python -m pipeline.export_run --preset challenge --index 0 --loss 0.3 --out out/py-run.json`: one run in the saved-run shape (tracks, truth and counts per 0.1 s) for the COP replay page `ui/viewer/cop.html`; `scoring.viewer_run` reads it too |
 | [sweep.py](sweep.py) | `python -m pipeline.sweep --set test --seeds 20 [--weather fog+wind] [--birds 2 --vehicles 2] [--csv file]`: the metrics over message loss |
 | [storefwd.py](storefwd.py) | `StoreForward`: nodes keep and resend what C2 has not acknowledged, C2 acks, drops duplicates and files late messages as history (`--storefwd`) |
 | [nodes.py](nodes.py) | `NodeTrackers`: the distributed mode, a tracker per node on its own readings that shares `local_track` messages; the merger is in [fusion/](../fusion/fusion.md). Switch it on with `--distributed` |
