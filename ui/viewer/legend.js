@@ -14,6 +14,7 @@
     unknown: 'Neutral question-mark contact. Not enough evidence to assess the object.',
     suspicious: 'Amber drone with a caution badge. Behaviour of concern; may send another drone to look.',
     hostile: 'Red drone with a threat badge. High assessed behaviour risk; counted in the hostile estimate.',
+    object: 'Grey bird shape. Not a drone: the radar reads it much smaller or bigger than any drone (a bird or a vehicle). Not counted as a hostile.',
   };
   const STATE_TEXT = {
     tentative: ['Tentative', 'Dotted ring around the image: the track still needs sensor support.'],

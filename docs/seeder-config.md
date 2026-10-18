@@ -81,6 +81,10 @@ Clutter objects (`CLUTTER_KINDS` in [seeder/scenario.py](../seeder/scenario.py),
 
 Neither emits RF, so RF never sees them. A hostile assessment on one is counted as `cfa` in the mock summary. Ordinary transit and hover alone do not justify hostility.
 
+`zone` (`{x, y, radius_m}`, default a circle of 250 m around C2) is the defended zone. It appears as `zone` in the scenario. The 250 m is an assumption.
+
+`targets.cleared_count` (default 0, integer from 0 to `benign_count`) gives the first that many benign drones a flight plan the base knows: it appears as `cleared_routes[]` in the scenario, without the id of the drone that flies it. The estimator treats a track that keeps to one as expected traffic. A benign drone with no plan is indistinguishable from a threat by design.
+
 Generated drone traffic uses `targets.count` for the total and `targets.benign_count`
 (default 0, integer from 0 to count) for non-allied benign drones. The remainder
 have a hostile scoring role. Benign traffic uses an independent random stream,

@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="48" height="48" viewBox="0 0 48 48" fill="none">
+  <title>Object that is not a drone: a bird or a vehicle</title>
+  <circle cx="24" cy="24" r="22" fill="#151D28" stroke="#7E8A99" stroke-width="1.5"/>
+  <path d="M8 27c5-9 11-9 16-1 5-8 11-8 16 1-6-3-11-2-16 3-5-5-10-6-16-3Z" fill="#243140" stroke="#98A4B3" stroke-width="1.6" stroke-linejoin="round"/>
+  <path d="M10 34h28" stroke="#566779" stroke-width="1.4" stroke-linecap="round" stroke-dasharray="3 3"/>
+</svg>

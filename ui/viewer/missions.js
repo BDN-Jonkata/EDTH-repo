@@ -154,7 +154,7 @@
       this.drones.forEach((d) => {
         if (!d.target) return;
         const tr = d.target;
-        if (tr.kind === 'frd' || ['friendly', 'peaceful', 'hostile'].includes(tr.cls) ||
+        if (tr.kind === 'frd' || ['friendly', 'peaceful', 'hostile', 'object'].includes(tr.cls) ||
             (this.options.requireInvestigation && !tr.investigation)) {
           this.transition(d, 'patrol', null, t); return;
         }
@@ -175,7 +175,7 @@
         }
       });
       // Search assignments may be handed off to a drone with fresh observations.
-      tracks.filter((tr) => tr.kind !== 'frd' && !['friendly', 'peaceful', 'hostile'].includes(tr.cls) && tr.status === 'confirmed' &&
+      tracks.filter((tr) => tr.kind !== 'frd' && !['friendly', 'peaceful', 'hostile', 'object'].includes(tr.cls) && tr.status === 'confirmed' &&
           (!this.options.requireInvestigation || tr.investigation))
         .forEach((tr) => {
           const owner = this.drones.find((d) => d.target === tr);

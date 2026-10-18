@@ -39,6 +39,8 @@ Top level: `schema`, `id` (for example `hard-s3`), `name`, `seed`, `preset`, `de
 | `clutter[]` | birds and vehicles: real objects the sensors see that are **not threats**. Same fields as `targets[]` plus `type` (`bird` or `vehicle`) and `role: "clutter"`; `emits` is always false. Empty by default |
 | `beacon` | friendly position beacons: `enabled`, `rate_hz`, `pos_sigma_m` |
 | `sensor_set.enabled_kinds` | which sensor kinds exist in this run |
+| `zone` | the defended zone, a circle `{x, y, radius_m}`, by default around C2 with radius 250 m (`DEFAULT_ZONE_RADIUS_M` in the seeder, an assumption until the organisers give the real one; set it with `zone` in the config). The estimator calls a track hostile when it is not on a known plan and reaches the zone soon |
+| `cleared_routes[]` | optional: the flight plans the base knows, `{id, waypoints: [[t, x, y], ...]}` with no id of whoever flies them. A track that keeps within 50 m of the planned position for 4 s is expected traffic (`ui/viewer/intent.js`). Present only when `targets.cleared_count` > 0 |
 | `environment` | `weather` (`clear`, `fog`, `rain`, `wind`, `night`, or a combination, see [Weather combinations](#weather-combinations-and-weather-events)), `time_of_day`, optional `weather_events[]` and `sky`, `clutter` = `{false_alarms_per_min, birds, vehicles}` (the last two are object counts, 0 to 10) |
 | `degradations` | `clock`, `pose`, `network` (`loss`, `burst`, `latency_ms`, `out_of_order`, `topology`, `bandwidth_kbps`, see [Bandwidth limits](#bandwidth-limits), `jamming_zones[]`, see [Jamming zones](#jamming-zones)), `dropout[]` = `{node, t}`, `sensor_faults[]` and `store_forward`, see [Sensor faults and store-and-forward](#sensor-faults-and-store-and-forward) |
 | `config` | the config that produced it |
@@ -144,7 +146,7 @@ A run is scored from its `truth.json` and the track messages the system produced
 | `level` | `level_db`, `presence` | single microphone |
 | `bearing_level` | `bearing_deg`, `level_db`, `presence` | microphone array |
 | `bearing_rssi` | `bearing_deg`, `rssi_dbm`, `center_freq_mhz` | RF receiver |
-| `range_azimuth_doppler` | `range_m`, `azimuth_deg`, `radial_mps`, `snr_db` | radar |
+| `range_azimuth_doppler` | `range_m`, `azimuth_deg`, `radial_mps`, `snr_db` | radar. In the mock, `snr_db` falls with range and rises with the object's radar signature (an assumed number), so the return tells size: the viewer reads a bird as small and a vehicle as large (`ui/viewer/sim.js` `noteSize`) |
 
 A camera never gives range, a single microphone never gives a bearing. The tracker must work from these native fields, not from positions.
 
@@ -262,7 +264,7 @@ Every message has the top-level `type` and the `header` described in [Messages](
 | `investigation_request` | `friend_foe/` | `track_id`, `position`, `covariance` (3x3), `class_prob`, `priority`, `t_requested`, `standoff_m`, `standoff_by_module`, `weather_confidence`, `feasible` |
 | `investigation_status` | drone behaviour | `track_id`, `drone_id`, `state` = `assigned`, `en_route`, `on_station`, `done` or `aborted` |
 
-Track classes: `friendly`, `hostile`, `suspicious`, `peaceful`, `unknown`. A class always comes with a probability and is a presumption, never a deletion.
+Track classes: `friendly`, `hostile`, `suspicious`, `peaceful`, `unknown`, and in the viewer `object` (a bird or a vehicle: something with nothing to do with drones or the military, read by the radar as much smaller or bigger than any drone; never counted as hostile). A class always comes with a probability and is a presumption, never a deletion.
 
 | Class | Meaning |
 |-------|---------|
