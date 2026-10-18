@@ -14,6 +14,12 @@ from typing import Callable, Dict, Tuple
 OBSERVATION_KIND = {"bearing_elevation": "bearing", "bearing_level": "bearing", "bearing_rssi": "bearing",
                     "level": "detection", "range_azimuth_doppler": "range_bearing"}
 RF_CENTER_MHZ = {"friendly": 5745, "other": 2437}   # a friendly link and a hostile's control link
+BAND_TOLERANCE_MHZ = 150                              # same as the viewer's `inFriendBand` (ui/viewer/sim.js)
+
+
+def in_friend_band(center_freq_mhz: float) -> bool:
+    """A transmission on the friendlies' link. ASSUMED: a hostile never uses it (the scenario's hostile link is 2437 MHz)."""
+    return abs(center_freq_mhz - RF_CENTER_MHZ["friendly"]) <= BAND_TOLERANCE_MHZ
 
 
 def compass_deg(math_rad: float) -> float:

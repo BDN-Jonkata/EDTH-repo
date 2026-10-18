@@ -18,9 +18,10 @@ import math
 from dataclasses import dataclass
 from typing import Dict, List, Optional, Sequence
 
+from sensors.native import in_friend_band
 from tracker.ekf import innovation_variance
 from tracker.measurement import BEARING, Measurement
-from tracker.models import triangulate
+from tracker.models import gate_cost, triangulate
 from tracker.tracker import Track
 
 RF_KIND = "rf_receiver"
@@ -33,6 +34,8 @@ class IdentifyConfig:
     window_s: float = 6.0
     pair_s: float = 0.3         # two receivers' bearings this close in time cross into one fix
     keep_s: float = 1.0         # how long a bearing waits for the other receiver's
+    single_receiver: bool = True    # also credit a bearing that only one track (not a friendly's) can explain
+    min_bearings: int = 10      # such bearings on the track within `window_s` (assumed)
 
 
 class Emitters:
@@ -40,16 +43,33 @@ class Emitters:
         self.config = config or IdentifyConfig()
         self._recent: List[Measurement] = []
         self._heard: Dict[str, List[float]] = {}        # track id -> times of the fixes that landed on it
+        self._lone: Dict[str, List[float]] = {}         # track id -> times of bearings only it could explain
 
     def step(self, t: float, readings: Sequence[Measurement], tracks: Sequence[Track]) -> None:
         rf = [m for m in readings if m.sensor_kind == RF_KIND and m.kind == BEARING]
+        crossed = set()
         for m in rf:
             for other in self._recent:
                 if other.node != m.node and abs(other.t - m.t) <= self.config.pair_s:
                     self._land(t, triangulate(other, m), tracks)
+                    crossed.add(id(m))
+        if self.config.single_receiver:
+            for m in rf:
+                if id(m) not in crossed:
+                    self._land_alone(t, m, tracks)
         self._recent = [m for m in self._recent + rf if t - m.t <= self.config.keep_s]
-        self._heard = {k: [u for u in v if t - u <= self.config.window_s] for k, v in self._heard.items()}
-        self._heard = {k: v for k, v in self._heard.items() if v}
+        self._heard, self._lone = _forget(self._heard, t, self.config.window_s), _forget(self._lone, t, self.config.window_s)
+
+    def _land_alone(self, t: float, m: Measurement, tracks: Sequence[Track]) -> None:
+        """One receiver's bearing goes to a track only if it is the single non-friend track the bearing can be explained by:
+        a second one on that line (a bird behind a hostile) makes it ambiguous and it counts for nothing. A bearing on the
+        friendlies' link is a friendly's radio, so it counts for nothing, and one off that link cannot be a friendly's, so
+        the friendlies' tracks do not make it ambiguous. A receiver that reports no frequency gets no credit."""
+        if m.freq_mhz is None or in_friend_band(m.freq_mhz):
+            return
+        explained = [tr for tr in tracks if tr.friend_id is None and gate_cost(tr.state, tr.cov, m) is not None]
+        if len(explained) == 1:
+            self._lone.setdefault(explained[0].track_id, []).append(t)
 
     def _land(self, t: float, fix, tracks: Sequence[Track]) -> None:
         """Give the fix to the track it agrees with best, unless that is a friendly's."""
@@ -66,8 +86,15 @@ class Emitters:
 
     def label(self, track_id: str, t: float) -> Optional[str]:
         """`hostile` for a track that fixes of RF bearings have recently landed on, else None (no opinion)."""
-        recent = [u for u in self._heard.get(track_id, ()) if t - u <= self.config.window_s]
-        return "hostile" if len(recent) >= self.config.min_fixes else None
+        window = self.config.window_s
+        fixes = sum(t - u <= window for u in self._heard.get(track_id, ()))
+        bearings = sum(t - u <= window for u in self._lone.get(track_id, ()))
+        return "hostile" if fixes >= self.config.min_fixes or bearings >= self.config.min_bearings else None
+
+
+def _forget(heard: Dict[str, List[float]], t: float, window_s: float) -> Dict[str, List[float]]:
+    kept = {k: [u for u in v if t - u <= window_s] for k, v in heard.items()}
+    return {k: v for k, v in kept.items() if v}
 
 
 def _distance2(track: Track, x: float, y: float, cov) -> float:

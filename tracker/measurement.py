@@ -38,6 +38,7 @@ class Measurement:
     radial_mps: Optional[float] = None
     sigma_radial: float = 0.0
     sensor_kind: str = ""                  # the module's kind (eo_camera, rf_receiver, ...): what sort of evidence a reading is
+    freq_mhz: Optional[float] = None       # an RF receiver's centre frequency: which link the transmitter uses
 
     @property
     def scan(self) -> tuple:
@@ -71,7 +72,8 @@ def from_observation(obs: dict, pose: Pose2D, module: dict) -> Optional[Measurem
                 sensor_kind=module.get("kind", ""))
     if kind == "bearing":
         sigma = _with_pose_error(math.radians(_sigma(obs, "bearing_deg")), pose, reach)
-        return Measurement(BEARING, bearing=math_rad(value["bearing_deg"]), sigma_bearing=sigma, **base)
+        return Measurement(BEARING, bearing=math_rad(value["bearing_deg"]), sigma_bearing=sigma,
+                           freq_mhz=value.get("center_freq_mhz"), **base)
     if kind == "range_bearing":
         sigma = _with_pose_error(math.radians(_sigma(obs, "azimuth_deg")), pose, reach)
         return Measurement(RANGE_BEARING, bearing=math_rad(value["azimuth_deg"]), sigma_bearing=sigma,
