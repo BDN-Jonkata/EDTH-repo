@@ -37,12 +37,19 @@ def scalar_model(state: Vec, m: Measurement, which: str) -> Tuple[float, Vec, fl
     return m.radial_mps - dot / r, h, m.sigma_radial ** 2
 
 
+def gate_parts(m: Measurement) -> tuple:
+    """The scalar tests a reading makes: a bearing that also carries a range (an RF reading with a signal-strength range) tests both."""
+    if m.kind == BEARING and m.range_m is not None:
+        return ("range", "bearing")
+    return GATE_PARTS[m.kind]
+
+
 def gate_cost(state: Vec, cov: Mat, m: Measurement) -> Optional[float]:
     """Lower is a better fit; None when the reading is outside the gate. The log term stops a wide
     track from beating a precise one. A radar reading counts its radial speed too: two targets that pass at
     a few metres are told apart by how fast each is moving along the line of sight, which is the one thing
     their ranges and bearings cannot show."""
-    parts = GATE_PARTS[m.kind]
+    parts = gate_parts(m)
     d2 = log_s = 0.0
     for which in parts:
         residual, h, variance = scalar_model(state, m, which)
@@ -53,7 +60,7 @@ def gate_cost(state: Vec, cov: Mat, m: Measurement) -> Optional[float]:
 
 
 def apply_measurement(state: Vec, cov: Mat, m: Measurement):
-    for which in GATE_PARTS[m.kind]:
+    for which in gate_parts(m):
         residual, h, variance = scalar_model(state, m, which)
         state, cov = scalar_update(state, cov, residual, h, variance)
     return state, cov

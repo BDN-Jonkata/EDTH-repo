@@ -1,4 +1,4 @@
-﻿# ui module
+# ui module
 
 Operator view / COP visualisation and simulation viewer.
 
@@ -8,7 +8,7 @@ Status: first working version in [viewer/](viewer/). See [system design](../docs
 
 Implements the Claude Design mockup: map with terrain/height, layer toggles, track table, alerts, track detail, playback and metrics.
 
-It is plain HTML/JS/CSS with no install step. It runs a **built-in JavaScript mock simulation** (`sim.js`), separately from the implemented Python sensors, tracker, fusion and pipeline. It does not display the Python COP. See the [03-Rai audit](../docs/challenge-audit.md) for requirement evidence and differences between engines. The whole 120 s scenario is computed up front (deterministic for a given seed) and then replayed, so playback can be scrubbed and stepped.
+It is plain HTML/JS/CSS with no install step. It runs a **built-in JavaScript mock simulation** (`sim.js`), separately from the implemented Python sensors, tracker, fusion and pipeline. It does not run or display the Python COP live; the separate [COP replay page](#cop-replay-cophtml) shows a saved run of either engine. See the [03-Rai audit](../docs/challenge-audit.md) for requirement evidence and differences between engines. The whole 120 s scenario is computed up front (deterministic for a given seed) and then replayed, so playback can be scrubbed and stepped.
 
 Run it:
 
@@ -113,3 +113,9 @@ Not implemented from the design: the measure-distance tool, true line-of-sight t
 The **Degradation vs message loss** tab runs the same scenario at loss 0 to 90 % (ten full simulations, 20 to 60 s of work). It runs in a worker (`ui/viewer/degworker.js`), so the page keeps responding and the chart fills in level by level with a "computing" note; without a worker (the page opened from `file://`) it runs one level per timer tick. It uses the same options as the run on screen (`simOptions` in `app.js`).
 
 Under the chart, **Message gaps by node** shows one row per node and one cell per second over the whole run, from each frame's `links` (the smoothed share of the node's recent messages that got through): amber = 15 % or more not delivered, red = half or more, with a tooltip per cell. A cut link shows up as a red block (F2 in `outage` and `mixed-faults` from 20 to 65 s); a click jumps the playhead to that time. The strip is drawn in every run, with or without store-and-forward. It shows messages not delivered at all; messages that arrive late (a delay burst) are in the Late data panel and on the timeline.
+
+## COP replay (`cop.html`)
+
+A second page in the same folder that **displays a saved run** instead of simulating one: `http://localhost:8000/cop.html` (with `python serve.py`), then **Open a run file…**, drop a file on the page, or `cop.html?run=URL`. It reads a run from either engine (`{params, scenario, result}`, [data-formats](../docs/data-formats.md#saved-simulation-run-simulations-table-export-runjs-output)) and shows the map with the ground sensors, the confirmed tracks coloured by class with heading vectors, trails (last 8 s), track ids, counts per class (strict hostile tracks, and the older "not friendly, not peaceful" count), a track table, the run's own summary, and playback (play, 1 to 8 times speed, 1 s steps, scrubber; space, left and right arrow keys). The badge says which engine made the run. **Truth (evaluation only)** is off by default; it draws the true objects and adds the true hostile count to the panel.
+
+Make a Python run: `python -m pipeline.export_run --preset challenge --index 0 --loss 0.3 --out out/py-run.json` (options `--cue`, `--investigate`, `--distributed`, `--seed-set test`); a JavaScript run: `node ui/viewer/export-run.js --seed 4127 > run.json`. The Python file has tracks, truth and counts only: no sensors, missions, coverage, node health or alerts, because the pipeline does not produce them. **This is a replay of a finished run, not a live feed**, and the main viewer (`index.html`) still runs only the JavaScript simulation; the two engines are still two implementations. Files: `cop.html`, `cop.js` (reading, counting, trails; `node ui/viewer/test-cop.js`, which also exports a real Python run and loads a real JavaScript run), `cop-ui.js` (drawing; `node ui/viewer/test-cop-ui.js` runs it against a minimal fake DOM, there is no browser test, so look at the page itself).

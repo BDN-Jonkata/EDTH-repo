@@ -76,7 +76,7 @@ Step by step (`pipeline/run.py`, clock step 0.1 s):
 
 ### 4a. Current (tuning seeds, `challenge` preset)
 
-`challenge` preset (the two-hostile crossing), 10 tuning seeds, clear weather, central tracker, 10 s warmup, no behaviour module. These are tuning-seed numbers; the reserved test seeds have not been run yet.
+`challenge` preset (the two-hostile crossing), 10 tuning seeds, clear weather, central tracker, 10 s warmup, no behaviour module. These are tuning-seed numbers; the held-out run on the test seeds is lower and is in [heldout-evaluation.md](heldout-evaluation.md) (a hostile tracked 66 %, count exact 51 % at 0 % loss).
 
 | Message loss | Hostile tracked | Count error (abs.) | Position RMSE | ID swaps/run | False tracks/step | Friendlies flagged (of 5) |
 |--------------|-----------------|--------------------|---------------|--------------|-------------------|---------------------------|
@@ -120,7 +120,7 @@ The later zone-free integration measurement in `pipeline/pipeline.md` reports ra
 
 To do:
 
-- Run the reserved test seeds once, after tuning is frozen, and report them with the degradation curve; finish the demo and write-up.
+- The reserved test seeds were run once (see [heldout-evaluation.md](heldout-evaluation.md); seeds 1000 to 1059 are now used for `challenge`). Agree the acceptance thresholds proposed there, and finish the demo and write-up.
 - Label `hostile` from evidence (a camera's class hint from an investigating drone) instead of counting every track that is not friendly or peaceful; this needs the viewer's JavaScript estimator too (Emkata).
 - Cut the misses the sensors cause: a hostile is outside every sensor's reach about 20 % of the time and seen by one bearing-only camera another 21 %. Sector planning, moving the ground sensors and pulling the drones together were tried and did not help (`pipeline/pipeline.md` history); a second viewpoint through `--cue` helps by about 5 points but raises false tracks.
 - Validate the optional distributed mode under intermittent links (it tracks about 4 to 7 points of hostiles less than the central tracker); peer-link topology, merger failover and distributed late-reading handling remain open.

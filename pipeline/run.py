@@ -34,7 +34,7 @@ from sensors.beacons import BeaconSource
 from sensors.observe import ObservationSource
 from sensors.quality import load_modules
 from sensors.world import World
-from tracker.measurement import from_observation
+from tracker.measurement import RssiRange, from_observation
 from tracker.poses import PoseBook
 from tracker.timesync import TimeSync, clock_floor_s, known_delay_of
 from tracker.tracker import Track, Tracker, TrackerConfig
@@ -56,8 +56,9 @@ class Pipeline:
     def __init__(self, scenario: dict, seed: int = 0, tracker_config: Optional[TrackerConfig] = None,
                  investigate: bool = False, distributed: bool = False, cue: bool = False, trust: bool = False,
                  oosm: bool = False, clocks: bool = False, timesync: bool = False, oosm_age_s: Optional[float] = None,
-                 storefwd: bool = False):
-        """`investigate` lets the drones be commanded (`pipeline/fleet.py`) and adds the investigator that
+                 storefwd: bool = False, rssi: Optional[RssiRange] = None):
+        """`rssi` gives the RF readings a range from their signal strength (`tracker/measurement.RssiRange`; central tracker
+        only). `investigate` lets the drones be commanded (`pipeline/fleet.py`) and adds the investigator that
         commands them (`pipeline/dispatch.py`); without it every drone flies its patrol loop. `trust` weights each
         reading by how healthy its node's link is and leaves out late ones (`health/`; central tracker only). `oosm` applies
         a late reading at the time it was taken instead (`tracker/oosm.py`; central tracker only; with `trust` the late
@@ -86,6 +87,9 @@ class Pipeline:
         if self.use_oosm:
             central = replace(tracker_config or TrackerConfig(), oosm=True,
                               **({} if oosm_age_s is None else {"oosm_min_age_s": oosm_age_s}))
+        central = central or TrackerConfig()
+        if central.area_m is None:
+            central = replace(central, area_m=scenario["area"]["size_m"])      # the defended square is known to every module
         self.poses, self.tracker = PoseBook(scenario), Tracker(central)
         self.investigator = Investigator(scenario, self.fleet, sequencers, cueing=Cueing() if cue else None) if commanded else None
         self.nodes = NodeTrackers(tracker_config, sequencers) if distributed else None
@@ -94,6 +98,7 @@ class Pipeline:
         self.storefwd = StoreForward(scenario, self.channel, sequencers, self.use_oosm)             if storefwd and not distributed and store_forward_on(scenario) else None
         self.health = HealthMonitor()                  # judges every node's link from what the channel delivers
         self.use_trust = trust and not distributed     # the distributed mode's observations skip the channel, so their seq has gaps
+        self.rssi = rssi
 
     def step(self, t: float) -> Frame:
         if self.fleet is not None:
@@ -150,7 +155,7 @@ class Pipeline:
                 continue                                  # too old for the live picture
             module = self.modules[obs["sensor_id"]]
             pose = self.poses.pose(obs["header"]["source_id"], obs["t_obs"])
-            m = from_observation(obs, pose, module)
+            m = from_observation(obs, pose, module, self.rssi)
             if m is not None and self.use_trust:
                 m = weighted(m, self.health.trust(obs["header"]["source_id"], t, t - obs["t_obs"]))
             if m is not None:
@@ -206,7 +211,7 @@ def scored_frames(scenario: dict, seed: int = 0, tracker_config: Optional[Tracke
                   keep_identity: bool = False, distributed: bool = False, cue: bool = False,
                   trust: bool = False, oosm: bool = False, clocks: bool = False, timesync: bool = False,
                   oosm_age_s: Optional[float] = None, storefwd: bool = False,
-                  friend_tracks: bool = True, identify: bool = True) -> Iterator[tuple]:
+                  friend_tracks: bool = True, identify: bool = True, rssi: Optional[RssiRange] = None) -> Iterator[tuple]:
     """(t, [Estimate]) for the scoring module: the tracker's confirmed tracks with the estimator's class.
 
     With `investigate`, suspicious tracks send drones out; when the run ends `stats` (if given) is filled with
@@ -219,7 +224,7 @@ def scored_frames(scenario: dict, seed: int = 0, tracker_config: Optional[Tracke
     and `storefwd`: see `Pipeline`. `friend_tracks` calls a track the tracker started from a friendly's beacon friendly
     for as long as the tracker keeps it, instead of waiting for the estimator to match a fresh beacon to it again."""
     estimator = estimator or FriendFoeEstimator(for_scenario(scenario))
-    pipeline = Pipeline(scenario, seed, tracker_config, investigate, distributed, cue, trust, oosm, clocks, timesync, oosm_age_s, storefwd)
+    pipeline = Pipeline(scenario, seed, tracker_config, investigate, distributed, cue, trust, oosm, clocks, timesync, oosm_age_s, storefwd, rssi)
     if trust:        # a missing beacon of a node whose link is down is not evidence against the drone
         getattr(estimator, "estimator", estimator).silence_explained = pipeline.health.explains_silence
     keeper = IdentityKeeper(IdentityConfig(model=MotionModel.load() if keep_identity == "learned" else None)) if keep_identity else None

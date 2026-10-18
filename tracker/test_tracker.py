@@ -4,7 +4,7 @@ import math
 import unittest
 
 from tracker.ekf import identity_like, predict, scalar_update
-from tracker.measurement import BEARING, RANGE_BEARING, Measurement, Pose2D, from_observation
+from tracker.measurement import BEARING, RANGE_BEARING, Measurement, Pose2D, RssiRange, from_observation
 from tracker.models import apply_measurement, fix_from_range_bearing, gate_cost, triangulate
 from tracker.poses import PoseBook
 from tracker.tracker import Track, Tracker, TrackerConfig
@@ -97,6 +97,30 @@ class TestObservationToMeasurement(unittest.TestCase):
         module = {"sim": {"range_m": 60, "noise": {"source_level_db": 90.0}}}
         self.assertAlmostEqual(from_observation(mic, Pose2D(0, 0), module).range_m, 100.0, places=3)
         self.assertIsNone(from_observation(mic, Pose2D(0, 0), {"sim": {"range_m": 60, "noise": {}}}))
+
+    def rf(self, freq_mhz, rssi_dbm=-40.0 - 40.0):
+        return {"kind": "bearing", "t_obs": 1.0, "header": {"source_id": "GS2"}, "sensor_id": "rf",
+                "value": {"bearing_deg": 0.0, "rssi_dbm": rssi_dbm, "center_freq_mhz": freq_mhz},
+                "cov_fields": ["bearing_deg", "rssi_dbm"], "covariance": [[144.0, 0.0], [0.0, 16.0]]}
+
+    def test_an_rf_reading_on_a_hostile_link_gets_a_range_from_its_signal_strength_only_when_asked(self):
+        module, rssi = {"sim": {"range_m": 300, "noise": {}}, "kind": "rf_receiver"}, RssiRange(-40.0, 6.0)
+        self.assertIsNone(from_observation(self.rf(2437.0), Pose2D(0, 0), module).range_m)
+        m = from_observation(self.rf(2437.0), Pose2D(0, 0), module, rssi)
+        self.assertAlmostEqual(m.range_m, 100.0, places=3)                       # -40 dBm at 1 m, -80 dBm is 40 dB down: 100 m
+        self.assertAlmostEqual(m.sigma_range, 100.0 * math.log(10) / 20 * math.hypot(4.0, 6.0), places=3)
+
+    def test_an_rf_reading_on_the_friendly_link_gets_no_range(self):
+        module = {"sim": {"range_m": 300, "noise": {}}, "kind": "rf_receiver"}
+        self.assertIsNone(from_observation(self.rf(5745.0), Pose2D(0, 0), module, RssiRange(-40.0)).range_m)
+
+    def test_a_bearing_with_a_range_is_gated_on_both_and_a_wrong_range_is_refused(self):
+        module = {"sim": {"range_m": 300, "noise": {}}, "kind": "rf_receiver"}
+        m = from_observation(self.rf(2437.0), Pose2D(0, 0), module, RssiRange(-40.0, 0.0))   # bearing north, 100 m
+        near, far = [0.0, 100.0, 0.0, 0.0], [0.0, 1000.0, 0.0, 0.0]
+        cov = identity_like([100.0, 100.0, 4.0, 4.0])
+        self.assertIsNotNone(gate_cost(near, cov, m))
+        self.assertIsNone(gate_cost(far, cov, m))
 
 
 class TestTracker(unittest.TestCase):
@@ -343,6 +367,53 @@ class TestOutOfSequence(unittest.TestCase):
         tr = self.only_track(self.run_track(TrackerConfig()))
         self.assertIsNone(tr.checkpoint)
         self.assertEqual(tr.log, [])
+
+
+class TestRadarFixBesideAFriendly(unittest.TestCase):
+    """A radar fix 40 m from a friendly's track (more than the 25 m spawn clearance) is the friendly when its radial speed
+    is the friendly's, and a new target when it is not."""
+
+    def friend_and_fix(self, fix_vx, config=None):
+        tracker = Tracker(config)
+        beacon = {"friend_id": "F1", "position": [200.0, 100.0, 60.0], "velocity": [10.0, 0.0, 0.0],
+                  "covariance": [[9.0, 0, 0], [0, 9.0, 0], [0, 0, 9.0]]}
+        tracker.step(0.0, [], [beacon])
+        tracker.step(0.1, [radar(0.1, 240.0, 100.0, fix_vx, 0.0)])
+        return [tr for tr in tracker.tracks if tr.friend_id is None]
+
+    def test_a_fix_with_the_friendlys_radial_speed_starts_no_track(self):
+        self.assertEqual(self.friend_and_fix(10.0), [])
+
+    def test_a_fix_moving_the_other_way_starts_a_track(self):
+        self.assertEqual(len(self.friend_and_fix(-10.0)), 1)
+
+    def test_the_rule_can_be_switched_off(self):
+        self.assertEqual(len(self.friend_and_fix(10.0, TrackerConfig(friend_spawn_clearance_m=0.0))), 1)
+
+    def test_a_fix_farther_than_the_clearance_starts_a_track(self):
+        self.assertEqual(len(self.friend_and_fix(10.0, TrackerConfig(friend_spawn_clearance_m=30.0))), 1)
+
+
+class TestTrackThatLeftTheArea(unittest.TestCase):
+    """A target track beyond the margin outside the defended square is dropped; a friendly's, one inside the margin, and everything with the rule off stay."""
+
+    def survivors(self, x, config, friend=None):
+        tracker = Tracker(config)
+        tracker.tracks = [Track("T1", [x, 500.0, 0.0, 0.0], identity_like([100.0, 100.0, 4.0, 4.0]), 0.0, 0.0, confirmed=True, friend_id=friend)]
+        tracker.step(0.1, [])
+        return [tr.track_id for tr in tracker.tracks]
+
+    def test_a_track_beyond_the_margin_is_dropped(self):
+        self.assertEqual(self.survivors(1030.0, TrackerConfig(area_m=1000.0, outside_area_margin_m=20.0)), [])
+
+    def test_a_track_inside_the_margin_or_the_square_stays(self):
+        config = TrackerConfig(area_m=1000.0, outside_area_margin_m=20.0)
+        self.assertEqual(self.survivors(1010.0, config), ["T1"])
+        self.assertEqual(self.survivors(500.0, config), ["T1"])
+
+    def test_the_rule_is_off_by_default_and_never_applies_to_a_friendly(self):
+        self.assertEqual(self.survivors(1030.0, TrackerConfig(area_m=1000.0)), ["T1"])
+        self.assertEqual(self.survivors(1030.0, TrackerConfig(area_m=1000.0, outside_area_margin_m=20.0), friend="F1"), ["T1"])
 
 
 if __name__ == "__main__":

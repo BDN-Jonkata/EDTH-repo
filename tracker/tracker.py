@@ -29,6 +29,7 @@ from tracker.models import apply_measurement, fix_from_range_bearing, gate_cost,
 NO_MATCH = 1e8
 BIG_GATE = 1e7
 RANGE_KINDS = (RANGE, RANGE_BEARING)
+RF_KIND = "rf_receiver"
 
 
 @dataclass
@@ -40,12 +41,18 @@ class TrackerConfig:
     confirm_max_sigma_m: float = 30.0      # not confirmed while the position is this uncertain
     support_window_s: float = 5.0          # was 3: with the radial speed in the gate a wider window holds real tracks at high loss (10 tuning seeds, 0 to 90 % loss)
     min_nodes: int = 2                     # viewpoints that stand in for a range reading (3 was worse on the tuning seeds)
+    area_m: Optional[float] = None         # side of the defended square, set from the scenario by the pipeline
+    outside_area_margin_m: float = 0.0     # drop a target track this far outside the square (0 = off)
+    rf_is_viewpoint: bool = True           # an RF receiver's bearing (12 degrees of noise) counts as a viewpoint for `min_nodes`
+    rssi_starts_tracks: bool = False       # an RF reading that carries a signal-strength range may start a track (needs `from_observation(..., rssi=)`)
     unsupported_ttl_s: float = 6.0        # a confirmed track without support this long goes back to tentative
     tentative_ttl_s: float = 2.0           # a tentative track unseen this long is dropped
     confirmed_ttl_s: float = 10.0          # longer bridges more gaps (6 s was worse on the tuning seeds)
     pair_window_s: float = 0.6             # two bearings this close in time may be crossed into a fix
     pending_ttl_s: float = 1.0
     spawn_clearance_m: float = 25.0        # no new track this close to a living one
+    friend_spawn_clearance_m: float = 100.0  # no new radar track this close to a friendly's track when its radial speed is the friendly's (0 = off); with cueing the drones crowd the hostiles and radar fixes of them started duplicates (10 tuning seeds: false tracks -0.24 with cueing, -0.10 without, at 0 % loss)
+    friend_radial_slack_mps: float = 2.0   # ASSUMED: allowed radial-speed difference on top of 3 sigma
     beacon_velocity_sigma_mps: float = 1.0
     friend_accel_noise_mps2: float = 3.0   # process noise of a friendly's beacon track
     friend_ttl_s: float = 60.0             # a friendly's beacon track lives this long without a beacon or a reading: a drone does not vanish, and 10 s let sensors start a second, non-friend track on it at high loss
@@ -149,10 +156,15 @@ class Tracker:
                 oosm.record(tr, t, m)
             tr.last_update = t
             tr.update_times.append(t)
-            tr.node_times[m.node] = t
+            self._note_viewpoint(tr, m, t)
             if m.kind in RANGE_KINDS:
                 tr.range_time = t
         return pairs
+
+    def _note_viewpoint(self, tr: Track, m: Measurement, t: float) -> None:
+        """Remember which node last gave this track a reading, unless the reading is too vague to count as a viewpoint."""
+        if self.config.rf_is_viewpoint or m.sensor_kind != RF_KIND:
+            tr.node_times[m.node] = max(tr.node_times.get(m.node, -math.inf), t)
 
     # ------------------------------------------------------- out-of-sequence readings
     def _split_late(self, t: float, measurements: Sequence[Measurement]):
@@ -190,7 +202,7 @@ class Tracker:
         tr.state, tr.cov = oosm.insert(tr, self.config.accel_noise_mps2, m, t)
         tr.last_update = max(tr.last_update, m.t)      # it proves the target was there then, not that it is there now
         tr.update_times.append(m.t)
-        tr.node_times[m.node] = max(tr.node_times.get(m.node, -math.inf), m.t)
+        self._note_viewpoint(tr, m, m.t)
         if m.kind in RANGE_KINDS:
             tr.range_time = max(tr.range_time, m.t)
 
@@ -201,6 +213,9 @@ class Tracker:
             if m.kind == RANGE_BEARING:
                 x, y, cov = fix_from_range_bearing(m)
                 self._spawn(t, (x, y), cov, [m], "radar")
+            elif m.kind == BEARING and m.range_m is not None and self.config.rssi_starts_tracks:
+                x, y, cov = fix_from_range_bearing(m)
+                self._spawn(t, (x, y), cov, [m], "rssi")
             elif m.kind == BEARING:
                 self._pair_bearing(t, m)
 
@@ -215,9 +230,26 @@ class Tracker:
                 return
         self._pending.append(m)
 
+    def _is_a_friendly(self, xy: tuple, m: Measurement) -> bool:
+        """A radar fix that close to a friendly's track whose radial speed is the friendly's is the friendly (a hostile
+        flying beside it would have another radial speed). Off with `friend_spawn_clearance_m` = 0."""
+        if m.radial_mps is None or self.config.friend_spawn_clearance_m <= 0:
+            return False
+        for tr in self.tracks:
+            if tr.friend_id is None or math.hypot(tr.state[0] - xy[0], tr.state[1] - xy[1]) > self.config.friend_spawn_clearance_m:
+                continue
+            dx, dy = tr.state[0] - m.pose.x, tr.state[1] - m.pose.y
+            r = max(math.hypot(dx, dy), 1.0)
+            expected = ((tr.state[2] - m.pose.vx) * dx + (tr.state[3] - m.pose.vy) * dy) / r
+            if abs(expected - m.radial_mps) <= 3.0 * m.sigma_radial + self.config.friend_radial_slack_mps:
+                return True
+        return False
+
     def _spawn(self, t: float, xy: tuple, fix_cov: Mat, readings: List[Measurement], origin: str) -> None:
         clearance = max(self.config.spawn_clearance_m, 2.0 * math.sqrt(max(fix_cov[0][0], fix_cov[1][1])))   # a vague fix is not new
         if any(math.hypot(tr.state[0] - xy[0], tr.state[1] - xy[1]) < clearance for tr in self.tracks):
+            return
+        if any(self._is_a_friendly(xy, m) for m in readings):
             return
         v2 = self.config.initial_speed_sigma_mps ** 2
         cov = identity_like([0.0, 0.0, v2, v2])
@@ -225,7 +257,8 @@ class Tracker:
             for j in range(2):
                 cov[i][j] = fix_cov[i][j]
         tr = self._add(Track(self._new_id(), [xy[0], xy[1], 0.0, 0.0], cov, t, t, [t] * len(readings), origin=origin))
-        tr.node_times = {m.node: t for m in readings}
+        for m in readings:
+            self._note_viewpoint(tr, m, t)
         if any(m.kind in RANGE_KINDS for m in readings):
             tr.range_time = t
 
@@ -248,11 +281,20 @@ class Tracker:
             if tr.friend_id is None:
                 self._confirm_or_demote(tr, t)
             ttl = self.config.friend_ttl_s if tr.friend_id else self.config.confirmed_ttl_s if tr.confirmed else self.config.tentative_ttl_s
-            if t - tr.last_update <= ttl:
+            if t - tr.last_update <= ttl and not self._left_the_area(tr):
                 keep.append(tr)
             elif tr.friend_id is not None:
                 del self.friends[tr.friend_id]
         self.tracks = keep
+
+    def _left_the_area(self, tr: Track) -> bool:
+        """A target track that has gone `outside_area_margin_m` beyond the defended square is a target that left; its track
+        would only drift on, kept alive by other objects' bearings. Off without `area_m` or with a margin of 0."""
+        cfg = self.config
+        if tr.friend_id is not None or cfg.area_m is None or cfg.outside_area_margin_m <= 0:
+            return False
+        low, high = -cfg.outside_area_margin_m, cfg.area_m + cfg.outside_area_margin_m
+        return not (low <= tr.state[0] <= high and low <= tr.state[1] <= high)
 
     def _drop_duplicates(self) -> None:
         """Keep the older of two non-friend tracks that sit on one target: close together and moving alike.
