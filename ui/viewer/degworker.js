@@ -2,7 +2,7 @@
 // page keeps responding while the ten loss levels are computed. app.js posts {run, loss, params, scenario} and
 // gets {run, row} back; the files below are the ones sim.js needs (not the page's own UI scripts).
 self.window = self;
-importScripts('catalog.js', 'coverage.js', 'missions.js', 'messages.js', 'weather.js', 'jamming.js', 'linkcap.js',
+importScripts('catalog.js', 'coverage.js', 'missions.js', 'messages.js', 'weather.js', 'jamming.js', 'navigation.js', 'linkcap.js',
   'storefwd.js', 'latedata.js', 'drones.js', 'encounters.js', 'behavior.js', 'traffic.js', 'friend-foe.js',
   'investigations.js', 'metrics.js', 'assessment.js', 'intent.js', 'sim.js');
 
