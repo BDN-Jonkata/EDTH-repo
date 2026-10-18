@@ -107,3 +107,9 @@ node ui/viewer/missions.test.js
 ```
 
 Not implemented from the design: the measure-distance tool, true line-of-sight terrain occlusion, separate raw bearing rays for acoustic, topology comparison.
+
+## Degradation tab and message gaps
+
+The **Degradation vs message loss** tab runs the same scenario at loss 0 to 90 % (ten full simulations, 20 to 60 s of work). It runs in a worker (`ui/viewer/degworker.js`), so the page keeps responding and the chart fills in level by level with a "computing" note; without a worker (the page opened from `file://`) it runs one level per timer tick. It uses the same options as the run on screen (`simOptions` in `app.js`).
+
+Under the chart, **Message gaps by node** shows one row per node and one cell per second over the whole run, from each frame's `links` (the smoothed share of the node's recent messages that got through): amber = 15 % or more not delivered, red = half or more, with a tooltip per cell. A cut link shows up as a red block (F2 in `outage` and `mixed-faults` from 20 to 65 s); a click jumps the playhead to that time. The strip is drawn in every run, with or without store-and-forward. It shows messages not delivered at all; messages that arrive late (a delay burst) are in the Late data panel and on the timeline.
