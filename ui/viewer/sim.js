@@ -236,7 +236,10 @@ const Intent = typeof window !== 'undefined' ? window.Intent : require('./intent
     symmetrize(P);
   }
   // which scalars gate a record, and how strict the gate is
-  const GATE_PARTS = { bearing: ['b'], range: ['r'], rangeaz: ['r', 'b'] };
+  // the radar's radial speed gates its record too: two objects that cross at close range differ in speed along the line of sight
+  const GATE_3DOF = 11.34; // chi-square, 3 dof, 99 %
+  const GATE_CHI2 = { 1: G_BEARING, 2: GATE, 3: GATE_3DOF };
+  const GATE_PARTS = { bearing: ['b'], range: ['r'], rangeaz: ['r', 'b', 'rr'] };
   function gateRecord(tr, rec) {
     const parts = GATE_PARTS[rec.m];
     let d2 = 0, logS = 0;
@@ -244,13 +247,12 @@ const Intent = typeof window !== 'undefined' ? window.Intent : require('./intent
       const mdl = scalarModel(tr, rec, w), S = scalarS(tr, mdl.H, mdl.R);
       d2 += (mdl.res * mdl.res) / S; logS += Math.log(S);
     });
-    if (d2 > (parts.length === 1 ? G_BEARING : GATE)) return null;
+    if (d2 > GATE_CHI2[parts.length]) return null;
     return d2 + logS; // likelihood-style score: a wide track must not beat a precise one
   }
   function applyRecord(tr, rec) {
     noteSize(tr, rec);
     GATE_PARTS[rec.m].forEach((w) => scalarUpdate(tr, scalarModel(tr, rec, w)));
-    if (rec.m === 'rangeaz') scalarUpdate(tr, scalarModel(tr, rec, 'rr'));
   }
   // The size of a track in dB, from the radar returns it was given: the return with the loss of range added back, against the
   // return of a nominal drone at 100 m. Only the radar is used: a microphone array was tried as a second source and it read
@@ -820,14 +822,21 @@ const Intent = typeof window !== 'undefined' ? window.Intent : require('./intent
     const rf = recs.filter((r) => r.k === 'RF' && r.m === 'bearing');
     rf.forEach((r) => c.rfRecent.forEach((o) => {
       if (o.node === r.node || Math.abs(o.t - r.t) > EMIT.pair) return;
+      const friendly = inFriendBand(o);
+      if (friendly !== inFriendBand(r)) return;   // two different bands are not one transmitter
       const fix = triangulate(o, r);
       if (!fix) return;
       const near = c.tracks.map((tr) => ({ tr, d2: innov(tr, fix).d2 })).filter((q) => q.d2 <= EMIT.gate).sort((a, b) => a.d2 - b.d2);
       // a fix that two tracks explain about equally well belongs to neither
-      if (near.length && near[0].tr.kind !== 'frd' && (near.length === 1 || near[1].d2 > EMIT.ambiguity * near[0].d2)) (near[0].tr.emitFixes = near[0].tr.emitFixes || []).push(t);
+      if (!near.length || near[0].tr.kind === 'frd' || (near.length > 1 && near[1].d2 <= EMIT.ambiguity * near[0].d2)) return;
+      const key = friendly ? 'friendFixes' : 'emitFixes';
+      (near[0].tr[key] = near[0].tr[key] || []).push(t);
     }));
     c.rfRecent = c.rfRecent.concat(rf).filter((r) => t - r.t <= EMIT.keep);
-    c.tracks.forEach((tr) => { if (tr.emitFixes) tr.emitFixes = tr.emitFixes.filter((u) => t - u <= EMIT.window); });
+    c.tracks.forEach((tr) => {
+      if (tr.emitFixes) tr.emitFixes = tr.emitFixes.filter((u) => t - u <= EMIT.window);
+      if (tr.friendFixes) tr.friendFixes = tr.friendFixes.filter((u) => t - u <= EMIT.window);
+    });
     noteListening(c, t);
   }
   // Seconds a confirmed track has been inside the reach of two working receivers (a crossed pair could fix it) without being
@@ -842,6 +851,12 @@ const Intent = typeof window !== 'undefined' ? window.Intent : require('./intent
   }
   const isQuiet = (tr) => tr.kind !== 'frd' && (tr.listenedS || 0) >= QUIET_S;
   const isEmitter = (tr) => tr.kind !== 'frd' && (tr.emitFixes || []).length >= EMIT.fixes;
+  // The friendly fleet's data link is on its own band (an assumption: 5745 MHz in the mock, a setting of the fleet): a transmitter
+  // heard there is a friendly even when its beacon is lost, and it is never a hostile.
+  const FRIEND_BAND_MHZ = 5745, BAND_TOLERANCE_MHZ = 150;
+  const inFriendBand = (rec) => Math.abs(((rec.fields || {}).center_freq_mhz || 0) - FRIEND_BAND_MHZ) <= BAND_TOLERANCE_MHZ;
+  const isFriendTransmitter = (tr) => tr.kind !== 'frd' && (tr.friendFixes || []).length >= EMIT.fixes;
+  const byFriendBand = (c, tr, v) => (c.P.emitterHostile && isFriendTransmitter(tr) && v.cls !== 'friendly' ? { ...v, cls: 'friendly', class_prob: 0.9, p_hostile: 0.02, p_friendly: 0.9 } : v);
   // Only a track that was confirmed (an unconfirmed one is often a false alarm next to a real transmitter), and never over a
   // verdict the behaviour already reached for a friendly or a peaceful object: a transmitter alone does not make intent.
   const emitterMayBeHostile = (tr, v) => (tr.confirmedOnce || tr.status === 'confirmed') && v.cls !== 'friendly' && v.cls !== 'peaceful';
@@ -1026,7 +1041,7 @@ const Intent = typeof window !== 'undefined' ? window.Intent : require('./intent
   // an object with no class yet takes the one its course supports (intent.js learns it as the run goes on)
   function fromIntent(c, tr, v, intents, cleared) {
     if (cleared && cleared.has(tr.id) && v.cls !== 'friendly') return { ...v, cls: 'peaceful', class_prob: 0.95, p_hostile: 0.05, p_friendly: 0, plan: cleared.get(tr.id) };
-    const cls = intents && v.cls === 'unknown' && tr.kind !== 'frd' && tr.confirmedOnce ? c.intent.verdict(intents.get(tr.id)) : null;
+    const cls = intents && v.cls === 'unknown' && tr.kind !== 'frd' && tr.confirmedOnce && !besideFriend(c, tr) ? c.intent.verdict(intents.get(tr.id)) : null;
     if (!cls || (cls === 'hostile' && (isQuiet(tr) || sizeHint(tr) || unheardAndFar(tr, intents.get(tr.id))))) return v; // what the receivers never hear is not called hostile on its course alone
     const p = intents.get(tr.id).p;
     return { ...v, cls, class_prob: cls === 'hostile' ? p : 1 - p, p_hostile: p, p_friendly: 0 };
@@ -1041,6 +1056,10 @@ const Intent = typeof window !== 'undefined' ? window.Intent : require('./intent
     tr.held = null;
     return { ...v, cls: 'unknown', class_prob: 0.5, p_hostile: 0.5 };
   }
+  // A track on top of a friendly the base still knows (beacon or the friend track that outlives a lost beacon) may be that friendly,
+  // and a friendly transmits and flies its patrol: neither the radio nor the course makes it a hostile.
+  const FRIEND_NEAR_M = 60;
+  const besideFriend = (c, tr) => c.tracks.some((q) => q.kind === 'frd' && Math.hypot(q.s[0] - tr.s[0], q.s[1] - tr.s[1]) < FRIEND_NEAR_M);
   // A transmitter far from the zone and not heading for it is not yet a threat: the radio alone does not make it a hostile there.
   const RADIO_NEAR_M = 0;   // inside the zone
   function radioMeansThreat(c, tr, intents) {
@@ -1071,10 +1090,11 @@ const Intent = typeof window !== 'undefined' ? window.Intent : require('./intent
       let v=original;
       const tr = byId.get(v.track_id), prev = tr.cls;
       const reviewed=c.assessment.update(t,tr,v); v=reviewed.decision;
-      const heard = c.P.emitterHostile && emitterMayBeHostile(tr, v) && isEmitter(tr) && radioMeansThreat(c, tr, intents);
+      const heard = c.P.emitterHostile && emitterMayBeHostile(tr, v) && isEmitter(tr) && radioMeansThreat(c, tr, intents) && !besideFriend(c, tr);
       if (heard) v = { ...v, cls: 'hostile', class_prob: Math.max(v.class_prob || 0, 0.9), p_hostile: Math.max(v.p_hostile || 0, 0.9) };
       v = fromIntent(c, tr, v, intents, cleared);
       v = byRadarSize(c, tr, v);
+      v = byFriendBand(c, tr, v);
       v = holdClass(tr, v, heard && v.cls === 'hostile' && !v.plan);
       tr.assessment=reviewed.review;
       tr.classification = v; tr.cls = v.cls; tr.behavior = c.classifier.explain(v.track_id);
