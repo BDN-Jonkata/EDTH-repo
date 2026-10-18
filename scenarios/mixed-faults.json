@@ -1,0 +1,84 @@
+{
+  "name": "mixed-faults",
+  "preset": "mixed-faults",
+  "seed": 8,
+  "seed_set": "tuning",
+  "description": "The `mixed` objects (3 hostiles, 3 benign drones that transmit, 2 birds, 2 vehicles) with the `outage` data-loss story on top: 10 % loss and latency, F2's link cut from 20 to 65 s (isolated), GS2's messages 4 s late from 70 to 85 s, F4 dead at 100 s, store-and-forward on. For checking that the late-data, isolated and trust displays look like something that can really happen. Faults apply in Realistic mode only.",
+  "traffic_behaviors": [
+    {
+      "id": "H1",
+      "ally": "F5",
+      "mode": "follow",
+      "start_s": 10
+    },
+    {
+      "id": "H2",
+      "ally": "F1",
+      "mode": "intercept",
+      "start_s": 25
+    }
+  ],
+  "targets": {
+    "count": 6,
+    "benign_count": 3,
+    "cleared_count": 2,
+    "behavior_demo": true,
+    "motion": "mixed",
+    "enter_t": [
+      2,
+      40
+    ],
+    "speed_mps": [
+      7,
+      13
+    ],
+    "hover_prob": 0.2,
+    "sudden_turn_prob": 0.1,
+    "crossing": {
+      "enabled": true,
+      "t": 55
+    }
+  },
+  "environment": {
+    "weather": "clear",
+    "time_of_day": "day",
+    "clutter": {
+      "false_alarms_per_min": 2,
+      "birds": 2,
+      "vehicles": 2
+    }
+  },
+  "degradations": {
+    "network": {
+      "enabled": true,
+      "loss": 0.1,
+      "latency_ms": [
+        50,
+        200
+      ]
+    },
+    "sensor_faults": [
+      {
+        "node": "F2",
+        "kind": "link_outage",
+        "t_start": 20,
+        "t_end": 65
+      },
+      {
+        "node": "GS2",
+        "kind": "delay_burst",
+        "t_start": 70,
+        "t_end": 85,
+        "extra_ms": 4000
+      },
+      {
+        "node": "F4",
+        "kind": "dropout",
+        "t_start": 100
+      }
+    ],
+    "store_forward": {
+      "enabled": true
+    }
+  }
+}

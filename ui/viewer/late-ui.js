@@ -160,6 +160,48 @@
     return '<table class="tbl mono"><thead><tr><th>Node</th><th>Taken</th><th>At C2</th><th>Readings</th><th></th></tr></thead><tbody>' + rows + '</tbody></table>';
   }
   let lastHtml = '';
+  // ---- message gaps: one row per node, one cell per second, dark where recent messages from that node were not getting through
+  const GAP_X0 = 40, GAP_X1 = 790, GAP_ROW = 12, GAP_MIN = 0.15; // the same time axis as the chart above
+  let gaps = null;
+  function gapCells() {
+    if (gaps) return gaps;
+    const r = ctx.state.res, per = Math.max(1, Math.round(1 / r.DT)), nodes = Object.keys(r.frames[0].links || {});
+    gaps = nodes.map((node) => {
+      const cells = [];
+      for (let k = 0; k < r.frames.length; k += per) {
+        let low = 1;
+        for (let j = k; j < Math.min(k + per, r.frames.length); j++) low = Math.min(low, r.frames[j].links[node]);
+        cells.push(Math.round((1 - low) * 100) / 100);
+      }
+      return { node, cells };
+    });
+    return gaps;
+  }
+  function gapSvg(t) {
+    const r = ctx.state.res, rows = gapCells(), w = (GAP_X1 - GAP_X0) / Math.max(1, rows.length ? rows[0].cells.length : 1);
+    const body = rows.map((row, i) => {
+      const y = 2 + i * GAP_ROW, cells = row.cells.map((g, c) => (g < GAP_MIN ? '' :
+        '<rect x="' + (GAP_X0 + c * w).toFixed(1) + '" y="' + y + '" width="' + (w + 0.4).toFixed(1) + '" height="' + (GAP_ROW - 2) + '" fill="' + (g >= 0.5 ? '#FF5A5F' : '#F5B13D') + '" fill-opacity="' + Math.min(1, 0.3 + g).toFixed(2) +
+        '"><title>' + esc(row.node + ' ' + fmt(c) + ': ' + Math.round(g * 100) + ' % of recent messages not delivered') + '</title></rect>')).join('');
+      return '<rect x="' + GAP_X0 + '" y="' + y + '" width="' + (GAP_X1 - GAP_X0) + '" height="' + (GAP_ROW - 2) + '" fill="#141A22"/>' + cells +
+        '<text x="' + (GAP_X0 - 8) + '" y="' + (y + GAP_ROW - 3) + '" text-anchor="end" class="mono" style="font-size:9px;fill:#8B96A5">' + esc(row.node) + '</text>';
+    }).join('');
+    const x = GAP_X0 + (t / r.T_END) * (GAP_X1 - GAP_X0);
+    return { height: 4 + rows.length * GAP_ROW, svg: body + '<path d="M' + x.toFixed(1) + ' 0V' + (4 + rows.length * GAP_ROW) + '" stroke="#E6EAF0" stroke-dasharray="2 2"/>' };
+  }
+  function renderGaps(f) {
+    const box = ctx && $('gapSvg');
+    if (!box || !f.links) return;
+    const g = gapSvg(f.t);
+    box.setAttribute('viewBox', '0 0 800 ' + g.height);
+    box.innerHTML = g.svg;
+  }
+  function onGapClick(e) {
+    const box = $('gapSvg'), rect = box.getBoundingClientRect(), r = ctx.state.res;
+    const vx = ((e.clientX - rect.left) / Math.max(1, rect.width)) * 800;
+    ctx.jump(Math.max(0, Math.min(r.T_END, ((vx - GAP_X0) / (GAP_X1 - GAP_X0)) * r.T_END)));
+  }
+
   function render(f) {
     const box = ctx && $('lateBody');
     if (!box || !f.health) return;
@@ -179,12 +221,13 @@
     $('lateToggle').checked = true;
     $('lateToggle').addEventListener('change', (e) => { ctx.state.revised = e.target.checked; shown = new Map(); ctx.redraw(); });
     $('lateBody').addEventListener('click', onClick);
+    $('gapSvg').addEventListener('click', onGapClick);
     $('health').addEventListener('click', (e) => {
       const row = e.target.closest('tr[data-node]');
       if (row) { ctx.state.localNode = ctx.state.localNode === row.dataset.node ? null : row.dataset.node; ctx.redraw(); }
     });
   }
-  const reset = () => { cache = null; shown = new Map(); lastHtml = ''; if (ctx) ctx.state.localNode = null; };
+  const reset = () => { cache = null; gaps = null; shown = new Map(); lastHtml = ''; if (ctx) ctx.state.localNode = null; };
 
-  global.LateUI = { init, render, mapSvg, timelineSvg, frameAt, reset, bursts: () => bursts().list };
+  global.LateUI = { init, render, renderGaps, gapSvg, mapSvg, timelineSvg, frameAt, reset, bursts: () => bursts().list };
 })(typeof window !== 'undefined' ? window : globalThis);

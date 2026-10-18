@@ -8,7 +8,7 @@ const SCENARIOS = require('./scenarios.js');
 global.StoreFwd = StoreFwd;
 global.LateData = LateData;
 const els = {};
-const el = (id) => els[id] || (els[id] = { id, innerHTML: '', checked: false, listeners: {}, addEventListener(type, fn) { this.listeners[type] = fn; } });
+const el = (id) => els[id] || (els[id] = { id, innerHTML: '', checked: false, listeners: {}, attrs: {}, addEventListener(type, fn) { this.listeners[type] = fn; }, setAttribute(k, v) { this.attrs[k] = v; }, getBoundingClientRect() { return { left: 0, width: 800 }; } });
 global.document = { getElementById: el };
 require('./late-ui.js');
 
@@ -152,6 +152,22 @@ test('the timeline gets one bar per burst', () => {
   const svg = LateUI.timelineSvg((t) => t * 8);
   assert.strictEqual(svg.split('<rect').length - 1, LateUI.bursts().length);
   assert.ok(svg.includes('F2: '));
+});
+
+test('the message-gaps strip has a row per node and shows where F2 stopped getting through', () => {
+  const { res } = startPanel();
+  const g = LateUI.gapSvg(40);
+  assert.strictEqual(g.svg.split('class="mono"').length - 1, Object.keys(res.frames[0].links).length, 'one label per node');
+  assert.ok(/F2 40\.0 s: \d+ % of recent messages not delivered/.test(g.svg), 'F2 has a gap cell at 40 s');
+  assert.ok(!/F1 40\.0 s/.test(g.svg), 'F1, on a link that only loses 10 %, has none');
+  assert.ok(g.svg.includes('#FF5A5F'), 'a long outage is red');
+  LateUI.renderGaps(res.frames[400]);
+  assert.ok(els.gapSvg.innerHTML.includes('M') && els.gapSvg.attrs.viewBox.startsWith('0 0 800 '));
+});
+test('clicking the strip moves the playhead to that time', () => {
+  const { ctx } = startPanel();
+  els.gapSvg.listeners.click({ clientX: 40 + 375 });           // the middle of the 40..790 axis
+  assert.ok(Math.abs(ctx.jumped - 60) < 0.5, 'jumped to ' + ctx.jumped);
 });
 
 let failed = 0;

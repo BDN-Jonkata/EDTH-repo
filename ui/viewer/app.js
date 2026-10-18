@@ -99,8 +99,8 @@
   function runSim(p) {
     S.applied = clone(p);
     S.wx = Weather.providerFor(S.scenario.environment, p.weather, p.sky !== undefined ? p.sky : S.scenario.environment.sky).provider; // as in Sim.run
-    S.res = Sim.run({ emitterHostile: true, learnIntent: true, objectClass: true, repeatObs: 'auto', seed: p.seed, mode: p.mode, weather: p.weather, sky: p.sky, loss: p.loss, delayMs: p.delayMs, driftMs: p.driftMs, bandwidthKbps: p.bandwidthKbps, assign: p.assign, scenario: S.scenario });
-    S.deg = null; S.idx = 0; S.acc = 0; S.last = 0; S.playing = true; S.sel = null; S.userSel = false;
+    S.res = Sim.run(Object.assign(simOptions(p, p.mode, p.loss), { scenario: S.scenario }));
+    S.deg = null; S.degRun = (S.degRun || 0) + 1; S.degBusy = false; S.idx = 0; S.acc = 0; S.last = 0; S.playing = true; S.sel = null; S.userSel = false;
     $('runTitle').textContent = scen().id + ' · ' + p.name + ' · seed ' + p.seed;
     $('tTotal').textContent = fmtT(S.res.T_END);
     $('scrub').max = S.res.NF;
@@ -110,15 +110,46 @@
     buildTimeline();
     render();
   }
+  // The same options for the run on screen and for the loss sweep, so the sweep describes the run you are looking at.
+  function simOptions(p, mode, loss) {
+    return { emitterHostile: true, learnIntent: true, objectClass: true, repeatObs: 'auto', seed: p.seed, mode, weather: p.weather, sky: p.sky, loss, delayMs: p.delayMs, driftMs: p.driftMs, bandwidthKbps: p.bandwidthKbps, assign: p.assign };
+  }
+  const DEG_LEVELS = [0, 10, 20, 30, 40, 50, 60, 70, 80, 90];
+  const degRow = (loss, s) => ({ loss, rmse: s.rmse, count: s.countErr, swaps: s.swaps, ffa: s.ffa, coverage: s.trackedFraction });
+  // Ten full simulations take 20 to 60 s, so they never run on the page's own thread: a worker does them (levels arrive
+  // one by one and the chart fills in); without a worker (file://) they run one per timer tick.
   function degradation() {
-    if (S.deg) return S.deg;
-    const p = S.applied, out = [];
-    for (let l = 0; l <= 90; l += 10) {
-      const r = Sim.run({ seed: p.seed, mode: 'realistic', weather: p.weather, sky: p.sky, loss: l, delayMs: p.delayMs, driftMs: p.driftMs, bandwidthKbps: p.bandwidthKbps, assign: p.assign, scenario: S.scenario }, { lite: true });
-      out.push({ loss: l, rmse: r.summary.rmse, count: r.summary.countErr, swaps: r.summary.swaps, ffa: r.summary.ffa, coverage: r.summary.trackedFraction });
-    }
-    S.deg = out;
-    return out;
+    if (!S.deg && !S.degBusy) startDegradation();
+    return S.deg || [];
+  }
+  function degWorker() {
+    if (S.degWorker) S.degWorker.terminate(); // a run that was replaced must not keep the worker busy
+    try { S.degWorker = location.protocol === 'file:' || typeof Worker === 'undefined' ? null : new Worker('degworker.js'); } catch (e) { S.degWorker = null; }
+    return S.degWorker;
+  }
+  function startDegradation() {
+    const run = S.degRun, p = S.applied, scenario = S.scenario, out = [];
+    S.degBusy = true;
+    const accept = (row) => {
+      if (S.degRun !== run) return;
+      out.push(row);
+      S.deg = out.slice();
+      S.degBusy = out.length < DEG_LEVELS.length;
+      if (S.tab === 'deg') renderChart(frame());
+    };
+    S.deg = [];
+    const worker = degWorker();
+    try {
+      if (!worker) throw new Error('no worker');
+      worker.onerror = () => { S.degWorker = null; if (S.degRun === run && out.length < DEG_LEVELS.length) degradeInline(run, p, scenario, out, accept); };
+      worker.onmessage = (e) => { if (e.data.run === run) accept(e.data.row); };
+      DEG_LEVELS.forEach((loss) => worker.postMessage({ run, loss, params: simOptions(p, 'realistic', loss), scenario }));
+    } catch (e) { degradeInline(run, p, scenario, out, accept); }
+  }
+  function degradeInline(run, p, scenario, out, accept) {
+    DEG_LEVELS.slice(out.length).reduce((chain, loss) => chain.then(() => new Promise((r) => setTimeout(r, 0))).then(() => {
+      if (S.degRun === run) accept(degRow(loss, Sim.run(Object.assign(simOptions(p, 'realistic', loss), { scenario }), { lite: true }).summary));
+    }), Promise.resolve());
   }
 
   // --------------------------------------------------------------- left panel
@@ -656,11 +687,11 @@
       const ys = (v) => 100 - Math.min(20, v) * 4;
       const line = (key) => { const points = d.filter((p) => p[key] !== null); return points.length ? 'M' + points.map((p) => xs(p.loss).toFixed(1) + ' ' + ys(key === 'count' ? p[key] * 5 : p[key]).toFixed(1)).join('L') : ''; };
       $('chartLegend').innerHTML = '<span style="color:#3FC1D9">━</span> RMSE (m) &nbsp; <span style="color:#F5B13D">┅</span> mean |count err| ×5 &nbsp; <span style="color:#FF5A5F">╌</span> ID swaps + friendly FAs';
-      $('chartNote').textContent = 'JS simulation, same seed/weather, loss 0-90 %, t = ' + S.res.EVAL[0] + '-' + S.res.EVAL[1] + ' s; swaps/FAs over the whole run. RMSE scores matched targets; count scores hostile labels. Coverage by loss: ' + d.map((p) => p.loss + '%→' + (p.coverage === null ? 'n/a' : Math.round(p.coverage * 100) + '%')).join(', ') + '.';
+      $('chartNote').textContent = (S.degBusy ? 'Computing the loss levels in the background: ' + d.length + ' of ' + DEG_LEVELS.length + ' done (the page keeps working). ' : '') + 'JS simulation, same seed/weather, loss 0-90 %, t = ' + S.res.EVAL[0] + '-' + S.res.EVAL[1] + ' s; swaps/FAs over the whole run. RMSE scores matched targets; count scores hostile labels. Coverage by loss: ' + d.map((p) => p.loss + '%→' + (p.coverage === null ? 'n/a' : Math.round(p.coverage * 100) + '%')).join(', ') + '.';
       svg.innerHTML = '<path d="M40 20H800M40 60H800M40 100H800" stroke="#1B222C"/>' +
         [['20', 24], ['10', 64], ['0', 104]].map((l) => '<text x="32" y="' + l[1] + '" text-anchor="end" class="mono" style="font-size:10px;fill:#8B96A5">' + l[0] + '</text>').join('') +
         '<path d="' + line('rmse') + '" fill="none" stroke="#3FC1D9" stroke-width="1.8"/><path d="' + line('count') + '" fill="none" stroke="#F5B13D" stroke-width="1.8" stroke-dasharray="4 3"/>' +
-        '<path d="M' + d.map((p) => xs(p.loss).toFixed(1) + ' ' + ys((p.swaps + p.ffa) * 2).toFixed(1)).join('L') + '" fill="none" stroke="#FF5A5F" stroke-width="1.6" stroke-dasharray="1.5 3"/>' +
+        (d.length ? '<path d="M' + d.map((p) => xs(p.loss).toFixed(1) + ' ' + ys((p.swaps + p.ffa) * 2).toFixed(1)).join('L') + '" fill="none" stroke="#FF5A5F" stroke-width="1.6" stroke-dasharray="1.5 3"/>' : '') +
         d.map((p) => '<text x="' + xs(p.loss) + '" y="124" text-anchor="middle" class="mono" style="font-size:10px;fill:#8B96A5">' + p.loss + '%</text>').join('');
     }
     $('tabTime').setAttribute('aria-selected', S.tab === 'time');
@@ -683,6 +714,7 @@
     buildLimits(f);
     buildHealth(f);
     LateUI.render(f);
+    LateUI.renderGaps(f);
     Legend.render(f);
     applyView();
   }
