@@ -394,6 +394,28 @@ class TestRadarFixBesideAFriendly(unittest.TestCase):
         self.assertEqual(len(self.friend_and_fix(10.0, TrackerConfig(friend_spawn_clearance_m=30.0))), 1)
 
 
+class TestTrackThatLeftTheArea(unittest.TestCase):
+    """A target track beyond the margin outside the defended square is dropped; a friendly's, one inside the margin, and everything with the rule off stay."""
+
+    def survivors(self, x, config, friend=None):
+        tracker = Tracker(config)
+        tracker.tracks = [Track("T1", [x, 500.0, 0.0, 0.0], identity_like([100.0, 100.0, 4.0, 4.0]), 0.0, 0.0, confirmed=True, friend_id=friend)]
+        tracker.step(0.1, [])
+        return [tr.track_id for tr in tracker.tracks]
+
+    def test_a_track_beyond_the_margin_is_dropped(self):
+        self.assertEqual(self.survivors(1030.0, TrackerConfig(area_m=1000.0, outside_area_margin_m=20.0)), [])
+
+    def test_a_track_inside_the_margin_or_the_square_stays(self):
+        config = TrackerConfig(area_m=1000.0, outside_area_margin_m=20.0)
+        self.assertEqual(self.survivors(1010.0, config), ["T1"])
+        self.assertEqual(self.survivors(500.0, config), ["T1"])
+
+    def test_the_rule_is_off_by_default_and_never_applies_to_a_friendly(self):
+        self.assertEqual(self.survivors(1030.0, TrackerConfig(area_m=1000.0)), ["T1"])
+        self.assertEqual(self.survivors(1030.0, TrackerConfig(area_m=1000.0, outside_area_margin_m=20.0), friend="F1"), ["T1"])
+
+
 if __name__ == "__main__":
     unittest.main()
 

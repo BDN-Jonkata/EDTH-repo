@@ -87,6 +87,9 @@ class Pipeline:
         if self.use_oosm:
             central = replace(tracker_config or TrackerConfig(), oosm=True,
                               **({} if oosm_age_s is None else {"oosm_min_age_s": oosm_age_s}))
+        central = central or TrackerConfig()
+        if central.area_m is None:
+            central = replace(central, area_m=scenario["area"]["size_m"])      # the defended square is known to every module
         self.poses, self.tracker = PoseBook(scenario), Tracker(central)
         self.investigator = Investigator(scenario, self.fleet, sequencers, cueing=Cueing() if cue else None) if commanded else None
         self.nodes = NodeTrackers(tracker_config, sequencers) if distributed else None

@@ -41,6 +41,8 @@ class TrackerConfig:
     confirm_max_sigma_m: float = 30.0      # not confirmed while the position is this uncertain
     support_window_s: float = 5.0          # was 3: with the radial speed in the gate a wider window holds real tracks at high loss (10 tuning seeds, 0 to 90 % loss)
     min_nodes: int = 2                     # viewpoints that stand in for a range reading (3 was worse on the tuning seeds)
+    area_m: Optional[float] = None         # side of the defended square, set from the scenario by the pipeline
+    outside_area_margin_m: float = 0.0     # drop a target track this far outside the square (0 = off)
     rf_is_viewpoint: bool = True           # an RF receiver's bearing (12 degrees of noise) counts as a viewpoint for `min_nodes`
     rssi_starts_tracks: bool = False       # an RF reading that carries a signal-strength range may start a track (needs `from_observation(..., rssi=)`)
     unsupported_ttl_s: float = 6.0        # a confirmed track without support this long goes back to tentative
@@ -279,11 +281,20 @@ class Tracker:
             if tr.friend_id is None:
                 self._confirm_or_demote(tr, t)
             ttl = self.config.friend_ttl_s if tr.friend_id else self.config.confirmed_ttl_s if tr.confirmed else self.config.tentative_ttl_s
-            if t - tr.last_update <= ttl:
+            if t - tr.last_update <= ttl and not self._left_the_area(tr):
                 keep.append(tr)
             elif tr.friend_id is not None:
                 del self.friends[tr.friend_id]
         self.tracks = keep
+
+    def _left_the_area(self, tr: Track) -> bool:
+        """A target track that has gone `outside_area_margin_m` beyond the defended square is a target that left; its track
+        would only drift on, kept alive by other objects' bearings. Off without `area_m` or with a margin of 0."""
+        cfg = self.config
+        if tr.friend_id is not None or cfg.area_m is None or cfg.outside_area_margin_m <= 0:
+            return False
+        low, high = -cfg.outside_area_margin_m, cfg.area_m + cfg.outside_area_margin_m
+        return not (low <= tr.state[0] <= high and low <= tr.state[1] <= high)
 
     def _drop_duplicates(self) -> None:
         """Keep the older of two non-friend tracks that sit on one target: close together and moving alike.
