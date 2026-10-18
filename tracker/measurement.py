@@ -9,7 +9,7 @@ import math
 from dataclasses import dataclass
 from typing import Optional
 
-from sensors.native import math_rad
+from sensors.native import in_friend_band, math_rad
 
 BEARING, RANGE, RANGE_BEARING = "bearing", "range", "range_bearing"
 
@@ -63,17 +63,37 @@ def _with_pose_error(sigma_angle: float, pose: Pose2D, max_range_m: float) -> fl
     return math.hypot(sigma_angle, pose.sigma / (0.5 * max_range_m)) if pose.sigma > 0 else sigma_angle
 
 
-def from_observation(obs: dict, pose: Pose2D, module: dict) -> Optional[Measurement]:
+@dataclass(frozen=True)
+class RssiRange:
+    """How to turn an RF reading's signal strength into a range: `rssi = reference_dbm - 20 log10(range)`.
+    ASSUMED: nobody knows a hostile's transmit power, so the reference carries `reference_sigma_db` of its own
+    uncertainty on top of the receiver's noise."""
+    reference_dbm: float
+    reference_sigma_db: float = 6.0
+
+
+def _range_from_rssi(obs: dict, rssi: RssiRange):
+    """(range, sigma) from the signal strength of an RF reading; log-normal error, so sigma grows with the range."""
+    range_m = 10.0 ** ((rssi.reference_dbm - obs["value"]["rssi_dbm"]) / 20.0)
+    sigma_db = math.hypot(_sigma(obs, "rssi_dbm"), rssi.reference_sigma_db)
+    return range_m, range_m * math.log(10.0) / 20.0 * sigma_db
+
+
+def from_observation(obs: dict, pose: Pose2D, module: dict, rssi: Optional[RssiRange] = None) -> Optional[Measurement]:
     """The measurement an observation message gives, or None for a kind the tracker cannot use. The noise
-    includes the uncertainty of where the sensor was (`pose.sigma`)."""
+    includes the uncertainty of where the sensor was (`pose.sigma`). With `rssi`, an RF reading on a hostile's
+    link (not the friendlies' band, whose drones are tracked by beacons) also carries a range."""
     value, kind = obs["value"], obs["kind"]
     reach = module["sim"]["range_m"]
     base = dict(t=obs["t_obs"], node=obs["header"]["source_id"], sensor_id=obs["sensor_id"], pose=pose, max_range_m=reach,
                 sensor_kind=module.get("kind", ""))
     if kind == "bearing":
         sigma = _with_pose_error(math.radians(_sigma(obs, "bearing_deg")), pose, reach)
+        ranged = {}
+        if rssi is not None and "rssi_dbm" in value and not in_friend_band(value.get("center_freq_mhz", 0.0)):
+            ranged["range_m"], ranged["sigma_range"] = _range_from_rssi(obs, rssi)
         return Measurement(BEARING, bearing=math_rad(value["bearing_deg"]), sigma_bearing=sigma,
-                           freq_mhz=value.get("center_freq_mhz"), **base)
+                           freq_mhz=value.get("center_freq_mhz"), **ranged, **base)
     if kind == "range_bearing":
         sigma = _with_pose_error(math.radians(_sigma(obs, "azimuth_deg")), pose, reach)
         return Measurement(RANGE_BEARING, bearing=math_rad(value["azimuth_deg"]), sigma_bearing=sigma,

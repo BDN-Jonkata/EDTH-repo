@@ -150,3 +150,30 @@ So about three quarters of the gap is physical: nothing sees the hostile, or onl
 ## Tuning and honesty
 
 `min_nodes=2` was chosen over 3 on the 5 tuning seeds: hostiles detected 47 % to 56 % and count error 1.16 to 1.02, at the price of a worse position error (12.1 to 15.2 m) and more false tracks (0.85 to 1.18). A larger `accel_noise`, a shorter time to live and a looser sigma limit were tried and did not help, so they stayed at their first values. The numbers above are from the test seeds, used once. Everything in `TrackerConfig` is a guess. Simplifications of the default central baseline: readings are used at arrival time rather than `t_obs` unless `oosm` is enabled; the beacon's `t_sent` is the drone's own clock, so a clock offset becomes a pose error; no altitude (the tracker is 2D); peer-link topology and merger failover are not modeled. Optional distributed tracking is described in [fusion.md](../fusion/fusion.md).
+
+## Where hostile time and false tracks go (coverage diagnosis, `challenge`, tuning seeds, 0 % loss)
+
+Measured with truth on the evaluation side only (6 seeds, about 11,400 hostile-steps after a 10 s warmup; a reading counts when it fits the hostile within 3 sigma in the last 2 s). The scripts are not in the repository; the numbers can be reproduced with `pipeline.sweep` and `scoring.challenge`.
+
+| Hostile time | Share |
+|---|---|
+| Tracked by a confirmed track | 72 % |
+| Heard by an RF receiver only (a bearing with 12 degrees of noise, no range) | 16 % |
+| One node's camera or microphone bearing only | about 9 % |
+| A second node's bearing or a radar reading, but no confirmed track | about 1 % |
+| No consistent reading at all | about 1 % |
+
+Tracked share by phase: 41 % before the crossing, 99 % in the crossing window, 92 % after. So the missing time is mostly RF-only time before the crossing, and the crossing itself is not a coverage problem. The README's "sensors do not reach it about 20 % of the time" is mostly time an RF receiver does hear it.
+
+**False tracks (cue off): 0.34 per step.** About half of it is real hostiles outside the scored area: `truth.json` lists a hostile only while it is inside the 1000 m square (it leaves at 99 s or 111 s on seed 1), but the simulation keeps flying it, the radar keeps tracking it, and the scorer counts those tracks as false. That inflates false tracks and count error in every result in this file; fixing it belongs to the truth (seeder) or to the scorer, not to the tracker. The other half is short ghosts (3 to 12 s) born from a radar fix and kept alive by RF bearings from two nodes, which meet the `min_nodes` rule.
+
+**Cueing's extra 0.13 false tracks per step** (cue on, 6 tuning seeds) are almost all radar-started duplicates 50 to 100 m from a friendly (+0.08) or a hostile (+0.05) that already has a good track, plus a small bearing-started ghost (+0.02). Stale poses (a cued drone falling back to its scripted patrol) explain 0.005. The cue logic does not start the targets; the extra drones in the area do.
+
+### Tried on that diagnosis, none adopted (10 tuning seeds, paired, mean difference ± standard error)
+
+- **RF bearings do not count as a viewpoint for `min_nodes`** (`TrackerConfig.rf_is_viewpoint=False`): false tracks -0.18 ± 0.06 and position error -3.8 m, but hostiles tracked -13 points (0.71 to 0.58) and count error +0.10 at 0 % loss; at 50 % loss -11 points. RF supports the ghosts and the real hostiles alike. Off (the default keeps it a viewpoint).
+- **A range from the RF signal strength** (`tracker/measurement.RssiRange`, `Pipeline(rssi=...)`, `TrackerConfig.rssi_starts_tracks`): the reading carries `range_m` from `rssi = reference - 20 log10(range)`, and may start a track. ASSUMED reference level: the simulator uses -40 dBm for every emitter, which a real tracker would not know; the test adds 6 dB of uncertainty. With the right reference: hostiles tracked +0.01 (0 % loss) and +0.04 ± 0.02 (50 %), count error +0.07 and -0.05, false tracks +0.13 ± 0.07 and +0.01, ID swaps +1.0 ± 0.65 and +0.1 when it starts tracks; used only for updating tracks it changes nothing beyond noise. With the reference 6 dB too low (-46): hostiles tracked -10 points, false tracks +0.47 and OSPA +17 m; 6 dB too high: false tracks +0.12. A range with this much error does not help and a wrong reference hurts, so it stays off.
+
+### Adopted: no radar track beside a friendly with the friendly's radial speed (`friend_spawn_clearance_m` = 100 m)
+
+A radar fix within 100 m of a friendly's track, whose radial speed is the friendly's (3 sigma plus 2 m/s, ASSUMED), starts no track. It removes most of cueing's extra false tracks: with cueing on, false tracks -0.24 ± 0.08 (0 % loss) and -0.12 ± 0.08 (30 %) on 10 tuning seeds, and -0.30 ± 0.08 (0 %) and -0.13 ± 0.05 (50 %) on fresh test seeds 1040 to 1059; hostiles tracked and the identification gain unchanged. Details in [pipeline.md](../pipeline/pipeline.md#cueing-hand-what-a-node-sees-to-the-drone-best-placed-to-identify-it). A wider duplicate merge (60 or 100 m) did not help.
