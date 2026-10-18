@@ -1098,10 +1098,20 @@ const Intent = typeof window !== 'undefined' ? window.Intent : require('./intent
   }
   // A hostile that rests on the radio alone is let go when two receivers in reach hear nothing of it for QUIET_S (it was a
   // bird or a vehicle next to a real transmitter); it goes back to what the behaviour says, never straight to unknown.
-  function holdClass(tr, v, viaRadio) {
+  // With `holdHostile`, a held hostile also survives a step down to "suspicious": the radio is heard through 12 degrees of noise by
+  // two receivers, so a hostile that was heard a moment ago flickers between hostile and suspicious as the hearing comes and goes.
+  // It is released only by the same quiet rule as above or by evidence for another class.
+  function holdClass(c, tr, v, viaRadio) {
     if (tr.held && tr.held.viaRadio && isQuiet(tr)) tr.held = null;
     if (HELD.includes(v.cls)) { tr.held = viaRadio ? { ...v, viaRadio: true } : v; return v; }
+    if (c.P.holdHostile && v.cls === 'suspicious' && tr.held && tr.held.cls === 'hostile') return { ...tr.held };
     return v.cls !== 'unknown' ? v : tr.held ? { ...tr.held } : v;
+  }
+  // A track that is only tentative (a fresh restart after a lost target, or a ghost) is not yet counted as a target: it shows as unknown,
+  // and the class it held comes back when the track is confirmed again.
+  function tentativeIsNotHostile(c, tr, v) {
+    if (!c.P.tentativeNotHostile || tr.status !== 'tentative' || v.cls !== 'hostile') return v;
+    return { ...v, cls: 'unknown', class_prob: 0.5 };
   }
   function classifyFrame(c, t) {
     // Only tracker estimates and received beacons cross this boundary. The viewer
@@ -1124,7 +1134,8 @@ const Intent = typeof window !== 'undefined' ? window.Intent : require('./intent
       v = fromIntent(c, tr, v, intents, cleared);
       v = byRadarSize(c, tr, v);
       v = byFriendBand(c, tr, v);
-      v = holdClass(tr, v, heard && v.cls === 'hostile' && !v.plan);
+      v = holdClass(c, tr, v, heard && v.cls === 'hostile' && !v.plan);
+      v = tentativeIsNotHostile(c, tr, v);
       tr.assessment=reviewed.review;
       tr.classification = v; tr.cls = v.cls; tr.behavior = c.classifier.explain(v.track_id);
       if(reviewed.reasons.length)tr.behavior={...tr.behavior,reasons:[...(tr.behavior.reasons||[]),...reviewed.reasons]};

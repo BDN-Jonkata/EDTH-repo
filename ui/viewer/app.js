@@ -57,6 +57,8 @@
     layers: {}, view: { x: 0, y: 0, w: 1000, h: 1000 },
   };
   LAYERS.forEach((l) => { S.layers[l[0]] = l[2]; });
+  // ?stable=1 keeps a hostile from flickering to suspicious and keeps tentative tracks from being called hostile (sim.js holdHostile, tentativeNotHostile)
+  const STABLE = new URLSearchParams(location.search).get('stable') === '1';
   S.scenario = SCENARIOS[new URLSearchParams(location.search).get('preset')] || SCENARIOS.challenge;
   S.world = Sim.prepare(S.scenario);
   S.staged = defaultsFor(S.scenario);
@@ -121,7 +123,7 @@
   }
   // The same options for the run on screen and for the loss sweep, so the sweep describes the run you are looking at.
   function simOptions(p, mode, loss) {
-    return { emitterHostile: true, learnIntent: true, objectClass: true, repeatObs: 'auto', seed: p.seed, mode, weather: p.weather, sky: p.sky, loss, delayMs: p.delayMs, driftMs: p.driftMs, bandwidthKbps: p.bandwidthKbps, assign: p.assign };
+    return { emitterHostile: true, learnIntent: true, objectClass: true, repeatObs: 'auto', holdHostile: STABLE, tentativeNotHostile: STABLE, seed: p.seed, mode, weather: p.weather, sky: p.sky, loss, delayMs: p.delayMs, driftMs: p.driftMs, bandwidthKbps: p.bandwidthKbps, assign: p.assign };
   }
   const DEG_LEVELS = [0, 10, 20, 30, 40, 50, 60, 70, 80, 90];
   const degRow = (loss, s) => ({ loss, rmse: s.rmse, count: s.countErr, swaps: s.swaps, ffa: s.ffa, coverage: s.trackedFraction });
