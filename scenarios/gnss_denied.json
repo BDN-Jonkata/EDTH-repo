@@ -1,0 +1,11 @@
+{
+  "name": "gnss_denied",
+  "preset": "gnss_denied",
+  "seed": 7,
+  "seed_set": "tuning",
+  "description": "The challenge scenario with GNSS denied and unsynchronised clocks: every node is off by up to 25 m and 6 degrees of heading, and clocks are up to 1 s apart. The numbers are assumptions chosen to show the effect.",
+  "degradations": {
+    "clock": {"enabled": true, "offset_ms": [0, 1000], "drift_ppm": 200},
+    "pose": {"enabled": true, "position_err_m": 25, "heading_err_deg": 6}
+  }
+}
