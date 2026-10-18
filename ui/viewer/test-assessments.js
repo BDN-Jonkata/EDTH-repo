@@ -26,12 +26,14 @@ test('compact patrols retain distinct safe, suspicious and unidentified traffic 
   // Compact patrols need not generate the repeated ally maneuvers required for
   // pursuit evidence. The positive hostile case is exercised explicitly below.
   assert.ok(demo.frames[0].tracks.every((tr) => tr.cls === 'friendly'));
-  const peacefulByObject = {};
+  const peacefulByObject = {}, wasPeaceful = new Set();
   demo.frames.forEach((f) => f.tracks.forEach((tr) => {
     if (tr.cls !== 'peaceful') return;
     const o = associated(f, tr);
     if (o?.kind === 'benign') peacefulByObject[o.id] = (peacefulByObject[o.id] || 0) + 1;
-    assert.ok(tr.behavior.observed_s >= 15, 'peaceful requires usable observed history');
+    // the class is held after it was reached, so the history is checked when it is first reached
+    if (!wasPeaceful.has(tr.id)) assert.ok(tr.behavior.observed_s >= 15, 'peaceful requires usable observed history');
+    wasPeaceful.add(tr.id);
   }));
   assert.ok(Object.values(peacefulByObject).reduce((a, b) => a+b, 0) >= 100,
     'safe traffic needs sustained peaceful observations');
@@ -122,7 +124,7 @@ test('a hostile entry needs responsive pursuit and intercept risk, including noi
   }));
 });
 
-test('a friendly dropout coasts and fades to unknown without suspicion or dispatch', () => {
+test('a friendly dropout coasts and stays friendly without suspicion or dispatch', () => {
   const scenario = require('./scenarios.js').hard;
   const r = Sim.run({ scenario, seed: scenario.seed, mode: 'realistic', weather: 'fog', loss: 40, delayMs: 225, driftMs: 200 });
   const before = r.frames[590].tracks.find((tr) => tr.id === 'F3');
@@ -134,7 +136,7 @@ test('a friendly dropout coasts and fades to unknown without suspicion or dispat
     assert.ok(['friendly', 'unknown', 'peaceful'].includes(tr.cls), 'silence alone must not accuse F3');
     assert.equal(tr.behavior.increment, 0, 'prediction cannot add observed behavior evidence');
   });
-  assert.equal(after.at(-1).cls, 'unknown');
+  assert.equal(after.at(-1).cls, 'friendly', 'a class reached on evidence is held until evidence for another class');
   assert.ok(after.at(-1).age > 50);
   assert.ok(!r.investigations.requests.some((q) => q.track_id === 'F3'));
 });

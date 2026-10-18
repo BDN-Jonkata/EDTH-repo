@@ -27,6 +27,39 @@ Run the chain end to end with [pipeline/](../pipeline/pipeline.md).
 - **Starting a track.** From one radar reading (a fix), or from two bearings from different nodes that cross at 15 degrees or more. A bearing alone never starts one. No new track within 25 m of a living one.
 - **Confirmation and support.** A track is confirmed after 5 readings within 4 s, only while its position is pinned down (1-sigma under 30 m) **and supported**: a range reading (radar, microphone level) within 3 s, or readings from at least 2 different nodes. A confirmed track that loses support for 4 s goes back to tentative; one unseen for 10 s (2 s if tentative) is dropped by default. Without the support rule, bearings of other objects along the same line kept wandering ghost tracks alive.
 
+## Radial speed in the association (the crossing fix)
+
+At the planned crossing the two hostiles pass within about 10 m of each other, so the range and the bearing of a radar return fit both tracks. Which return belongs to which track was settled by the position alone, the two tracks then took each other's readings, their velocities got mixed up, the duplicate merge dropped one of them as a clone and the other one followed the wrong hostile: all but one of the swaps on the `challenge` preset happened within 4 s of the crossing, in pairs (a restart or pickup on one hostile and a crossing swap on the other). The gate now also counts a radar reading's radial speed (Doppler), the one thing that differs between two targets going in different directions at the same place (`tracker/models.py`, `GATE_PARTS`, a 3-degree gate; the radial update is no longer applied twice).
+
+Measured on the same 10 tuning seeds before and after (central tracker, clear weather):
+
+| Preset, loss | ID swaps before | after | False tracks before | after | Hostile tracked before | after | Position RMSE before | after |
+|--------------|-----------------|-------|---------------------|-------|------------------------|-------|----------------------|-------|
+| `challenge`, 0 % | 1.80±0.47 | **0.30±0.15** | 0.39 | 0.23 | 0.65 | 0.66 | 9.96 m | 9.55 m |
+| `challenge`, 30 % | 1.30±0.47 | **0.50±0.31** | 0.15 | 0.11 | 0.64 | 0.65 | 10.13 m | 9.82 m |
+| `challenge`, 70 % | 2.00±0.47 | **0.30±0.15** | 0.07 | 0.03 | 0.59 | 0.60 | 11.88 m | 10.70 m |
+| `medium`, 0 % | 2.60±0.40 | **1.10±0.38** | 0.45 | 0.35 | 0.61 | 0.61 | 12.37 m | 11.99 m |
+| `medium`, 70 % | 2.50±0.65 | **1.00±0.26** | 0.10 | 0.08 | 0.51 | 0.52 | 14.43 m | 13.19 m |
+
+The swap log on `challenge` (10 seeds, 0 % loss) went from 13 swaps (4 crossing, 3 pickup, 2 ghost, 4 restart) to 3 (all restarts). What is left: a restart, the track of a hostile that was lost and started again. The count error is about the same (0.65 to 0.61 at 0 %); the sensors still do not see the hostiles 35 % of the time.
+
+## Support window 5 s and 6 s (was 3 s and 4 s)
+
+With the radial speed in the gate (above) a wider support window holds real tracks through gaps without keeping wandering ones: `support_window_s` 3 to 5 and `unsupported_ttl_s` 4 to 6. Before the radial gate the same change did nothing. On the `challenge` preset, 10 tuning seeds, on minus off: hostile tracked +0.05 at 0 % loss, +0.04 at 30, 50 and 70 %, +0.10 at 90 %; false tracks +0.11 at 0 %, +0.08 at 30 %, +0.04 at 70 %; count error 0.02±0.03 at 0 % and -0.07±0.02 at 70 % and -0.22±0.04 at 90 %; OSPA -1.1 m at 0 % and -8.7 m at 90 %. The cost is about 0.1 more false tracks at low loss.
+
+**The pipeline today** (`challenge` preset, 10 tuning seeds, clear weather, central tracker, 10 s warmup, with every change above; the test seeds are not used):
+
+| Loss | Hostile tracked | Count error (abs.) | Position RMSE | ID swaps | False tracks | Friendlies flagged (of 5) |
+|------|-----------------|--------------------|---------------|----------|--------------|---------------------------|
+| 0 % | 0.71 | 0.63 | 11.3 m | 0.30 | 0.35 | 0 |
+| 30 % | 0.69 | 0.58 | 10.8 m | 0.50 | 0.19 | 0 |
+| 50 % | 0.67 | 0.54 | 12.3 m | 0.50 | 0.18 | 0 |
+| 70 % | 0.64 | 0.60 | 11.7 m | 0.30 | 0.07 | 0 |
+| 90 % | 0.30 | 1.11 | 14.9 m | 1.10 | 0.06 | 0.30 |
+| 95 % | 0.07 | 1.56 | 20.2 m | 0.20 | 0.01 | 0.20 |
+
+Before this work the same preset gave a hostile tracked 0.68 / 0.67 / 0.62 / 0.21 / 0.05 and 1.3 to 2.1 ID swaps at 0, 30, 70, 90, 95 % loss, and 4 to 5 of 5 friendlies flagged at 90 to 95 %. What still limits the count: the sensors do not reach a hostile about 20 % of the time and see it with one bearing-only camera another 21 %.
+
 ## A friendly's track lives longer, and stays friendly (`friend_ttl_s`, `--no-friend-tracks`)
 
 A friendly drone's beacon track used to be dropped after 10 s without a beacon or a reading, like any confirmed track. At 90 % loss beacons come about every 5 s, so the track was dropped regularly and the sensors then started a second, non-friend track on the same drone, which counted as a threat. Now a beacon track lives `friend_ttl_s` = 60 s, and the pipeline calls a track the tracker started from a beacon friendly for as long as the tracker keeps it, instead of waiting for the estimator to match a fresh beacon to it again. Measured on the `challenge` preset, 6 tuning seeds, on minus off: friendlies flagged at 90 % loss 4.0 to 0.2 of 5 (-3.83±0.31) and at 95 % 5.0 to 0.2 (-4.83±0.17), the time a friendly is flagged 0.12 to about 0.01 and 0.44 to about 0.01; hostile tracked unchanged (0.00±0.00); false tracks -0.19±0.05 at 95 %. At 0, 30 and 50 % loss on `medium` (8 seeds) nothing changes (0.00±0.00 in every column); on `outage` friendlies flagged -1.83±0.17 at 0 % loss and false tracks -0.13±0.03. The count error rises at very high loss (+0.33±0.06 at 90 %) because the flagged friendlies used to hide missing hostiles in the count. `--no-friend-tracks` gives the old behaviour.

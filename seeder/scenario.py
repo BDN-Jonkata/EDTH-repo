@@ -20,6 +20,7 @@ from sensors.weather import weather_from_scenario  # noqa: E402  (the one place 
 
 SCHEMA = "edth.scenario/1"
 AREA = 1000.0
+DEFAULT_ZONE_RADIUS_M = 250.0   # an assumption: the defended village, a circle around C2, until the organisers give the real one
 SEED_SETS = {"tuning": (1, 99), "test": (1000, 1099)}  # never tune on the test seeds
 MOTIONS = ("straight", "waypoints", "loiter", "hover", "mixed")
 FRIENDLY_ANCHORS = [(250, 700), (760, 780), (780, 250), (380, 200), (520, 520)]
@@ -160,6 +161,9 @@ def _check_target_rules(cfg, t):
     valid_benign = isinstance(benign, int) and not isinstance(benign, bool) and 0 <= benign <= t["count"]
     if not valid_benign:
         errors.append("targets.benign_count must be a whole number from 0 to targets.count")
+    cleared = t.get("cleared_count", 0)
+    if not (isinstance(cleared, int) and not isinstance(cleared, bool) and 0 <= cleared <= (benign if valid_benign else 0)):
+        errors.append("targets.cleared_count must be a whole number from 0 to targets.benign_count")
     if not isinstance(t.get("behavior_demo", False), bool):
         errors.append("targets.behavior_demo must be true or false")
     for key in ("speed_mps", "altitude_m", "enter_t"):
@@ -438,8 +442,28 @@ def _make_friendlies(cfg, rng):
         loop = {"cx": round(cx, 1), "cy": round(cy, 1), "R": radius,
                 "v": round(rng.uniform(*f["speed_mps"]), 1), "dir": rng.choice((-1, 1)),
                 "th0": round(rng.uniform(0, 2 * math.pi), 3)}
+        loop["th0"] = _separated_start(loop, [o["loop"] for o in out], rng)
         out.append({"id": "F%d" % (i + 1), "role": "friendly", "platform": pid, "altitude_m": f["altitude_m"], "loop": loop})
     return out
+
+
+MIN_START_SEPARATION_M = 110.0   # the mission controller refuses friendly starts closer than 100 m
+
+
+def _start_point(loop):
+    return loop["cx"] + loop["R"] * math.cos(loop["th0"]), loop["cy"] + loop["R"] * math.sin(loop["th0"])
+
+
+def _separated_start(loop, others, rng):
+    """The loop's start angle, drawn again until the drone starts at least MIN_START_SEPARATION_M from the others.
+    Nothing is drawn when the first angle already fits, so seeds that never clashed keep their scenario."""
+    th0 = loop["th0"]
+    for _ in range(200):
+        x, y = _start_point(dict(loop, th0=th0))
+        if all(math.hypot(x - ox, y - oy) >= MIN_START_SEPARATION_M for ox, oy in map(_start_point, others)):
+            return th0
+        th0 = round(rng.uniform(0, 2 * math.pi), 3)
+    return th0
 
 
 def _make_ground(cfg):
@@ -605,6 +629,14 @@ def _make_targets(cfg, rng, benign_rng):
     return out
 
 
+def _cleared_routes(cfg, targets):
+    """The flight plans of the first `cleared_count` benign drones, as the base would have them: [t, x, y] waypoints with no id of the
+    object that flies them. A track that keeps to one is expected traffic; the estimator gets the plan, never the role."""
+    count = cfg["targets"].get("cleared_count", 0) if isinstance(cfg["targets"], dict) else 0
+    benign = [tg for tg in targets if tg["role"] == "benign"][:count]
+    return [{"id": "R%d" % (i + 1), "waypoints": tg["waypoints"]} for i, tg in enumerate(benign)]
+
+
 def _demonstration_threat(cfg, rng, index):
     """Observable protected-area loiter/hover, rather than assigning an inferred flag."""
     spec, (cx, cy) = cfg["targets"], cfg["c2"]
@@ -712,6 +744,11 @@ def generate(config, catalog=None, truth_dt=0.1):
         "environment": cfg["environment"], "degradations": cfg["degradations"],
         "config": cfg,
     }
+    zone = cfg.get("zone") or {}
+    scenario["zone"] = {"x": zone.get("x", cfg["c2"][0]), "y": zone.get("y", cfg["c2"][1]), "radius_m": zone.get("radius_m", DEFAULT_ZONE_RADIUS_M)}
+    routes = _cleared_routes(cfg, targets)
+    if routes:
+        scenario["cleared_routes"] = routes
     truth = build_truth(scenario, truth_dt)
     if cfg["commands"]:
         truth["scripted_baseline_only"] = True  # commanded motion is simulated in the run, not here: take its truth from the run

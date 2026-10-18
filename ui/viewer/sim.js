@@ -31,6 +31,7 @@
   const Investigations = typeof window !== 'undefined' ? window.Investigations : require('./investigations.js');
   const Metrics = typeof window !== 'undefined' ? window.Metrics : require('./metrics.js');
   const Assessment = typeof window !== 'undefined' ? window.Assessment : require('./assessment.js');
+const Intent = typeof window !== 'undefined' ? window.Intent : require('./intent.js');
   const CAT = typeof CATALOG !== 'undefined' ? CATALOG : require('./catalog.js'); // eslint-disable-line no-undef
   const DT = 0.1;
   const T_END = 120;
@@ -60,6 +61,8 @@
         x: f.loop.cx + f.loop.R * Math.cos(f.loop.th0), y: f.loop.cy + f.loop.R * Math.sin(f.loop.th0),
       })),
       targets, hostiles: targets.filter((t) => t.role !== 'benign'), benigns: targets.filter((t) => t.role === 'benign'),
+      zone: sc.zone || { x: sc.c2[0], y: sc.c2[1], radius_m: 250 },
+      cleared: sc.cleared_routes || [], // flight plans the base knows: expected traffic, with no id of whoever flies them
       clutter: (sc.clutter || []).map((o) => Object.assign(pathObject(o), { type: o.type })), // birds, vehicles: seen, not threats
       commands: sc.commands || [], beacon: sc.beacon, env: sc.environment, deg: sc.degradations, sensorKinds: sc.sensor_set.enabled_kinds, assign: {},
     };
@@ -245,8 +248,32 @@
     return d2 + logS; // likelihood-style score: a wide track must not beat a precise one
   }
   function applyRecord(tr, rec) {
+    noteSize(tr, rec);
     GATE_PARTS[rec.m].forEach((w) => scalarUpdate(tr, scalarModel(tr, rec, w)));
     if (rec.m === 'rangeaz') scalarUpdate(tr, scalarModel(tr, rec, 'rr'));
+  }
+  // The size of a track in dB, from the radar returns it was given: the return with the loss of range added back, against the
+  // return of a nominal drone at 100 m. Only the radar is used: a microphone array was tried as a second source and it read
+  // too many drones as small or big (13.9 % of frames against 1.8 %).
+  const NOMINAL_RETURN_DB = 20;
+  function sizeReading(tr, rec) {
+    if (rec.k === 'RAD' && rec.fields && rec.fields.snr_db !== undefined) return rec.fields.snr_db + 20 * Math.log10(Math.max(rec.r, 1) / 100) - NOMINAL_RETURN_DB;
+    return null;
+  }
+  function noteSize(tr, rec) {
+    const db = sizeReading(tr, rec);
+    if (db === null) return;
+    tr.sizeN = (tr.sizeN || 0) + 1;
+    tr.sizeDb = tr.sizeN === 1 ? db : tr.sizeDb + 0.1 * (db - tr.sizeDb);
+  }
+  // A bird is clearly smaller than a drone, a vehicle clearly bigger. A hint only: a small drone is small too.
+  const SIZE = { min_returns: 5, small_db: -6, large_db: 3 };
+  // Once flagged it takes 3 dB back toward drone size to clear, so a track near a limit does not flicker.
+  function sizeHint(tr) {
+    if (tr.kind === 'frd' || (tr.sizeN || 0) < SIZE.min_returns) return null;
+    const slack = tr.sizeFlag ? 3 : 0;
+    tr.sizeFlag = tr.sizeDb <= SIZE.small_db + slack && (tr.sizeFlag !== 'large') ? 'small' : tr.sizeDb >= SIZE.large_db - slack && (tr.sizeFlag !== 'small') ? 'large' : null;
+    return tr.sizeFlag;
   }
   // position fix from a record that has range and bearing (radar)
   function fixFromRangeAz(rec) {
@@ -313,7 +340,7 @@
       pathById: {}, dropT: {}, driftScale: {}, linkQ: {}, queue: [],
       drones: {}, seqs: {}, cmd: { script: scriptedCommands(P, world), open: {}, records: {}, seen: {}, count: 0 },
       beaconEvery: Math.max(1, Math.round(10 / (world.beacon.rate_hz || 2))), beaconSigma: world.beacon.pos_sigma_m || 3,
-      tracks: [], pending: [], friends: {}, alerts: [], frames: [], timeline: [], lastMatch: {}, sqHist: [], crossAlerted: {},
+      tracks: [], pending: [], rfRecent: [], friends: {}, alerts: [], frames: [], timeline: [], lastMatch: {}, sqHist: [], crossAlerted: {},
       beacons: {},
       groundWatch: world.ground.map((g)=>({...g,goalHeading:g.heading,updated:0})),
       n: { hostile: 0, unk: 0, swaps: 0, ffa: 0, cfa: 0, bfa: 0, evalSq: 0, evalN: 0, evalVelocitySq: 0,
@@ -348,6 +375,9 @@
     }, { requireInvestigation: true, geometry: (tr, d, t) => c.investigations.geometry(tr, d, t),
       coverage:{base:world.c2,ground:c.groundWatch,sensorAt:(s,sp,tg,t)=>sensorAt(c,s,t,sp,tg),isAlive:(id,t)=>alive(c,id,t)} });
     c.assessment = new Assessment.Model(world.c2);
+    c.intent = c.P.learnIntent ? new Intent.Learner() : null;
+    c.plans = c.P.learnIntent ? new Intent.Plans(world.cleared) : null;
+    c.declared = {};
     const policy = c.P.behavior || (c.P.scenario?.config?.drone_behavior) || {};
     c.traffic = new Traffic(c.P.traffic || c.P.scenario?.config?.traffic_behaviors, world.targets, world.friendlies, DT);
     c.classifier = new FriendFoe.AutomaticEstimator(Behavior.configFor([world.c2.x, world.c2.y], policy),
@@ -398,6 +428,7 @@
     c.investigations.sync(t, c.missions.drones);
     const { snap, hostileTracks } = snapshot(c, t);
     const score = scoreFrame(c, t, truth, hostileTracks, snap);
+    noteDeclared(c, t, truth, snap);
     const cross = findCrossing(hostileTracks);
     if (cross) announceCrossing(c, t, cross);
     if (!c.lite) c.frames.push(frameRecord(c, { t, k, truth, snap, frameMeas, cross, score, hostileTracks }));
@@ -414,6 +445,7 @@
       countErr: n.evalCntN ? n.evalCnt / n.evalCntN : 0, swaps: n.swaps, ffa: n.ffa };
     if (c.world.clutter.length) summary.cfa = n.cfa; // clutter objects tracked as hostile; only scenarios with clutter report it
     if (c.world.benigns.length) summary.bfa = n.bfa;
+    summary.declare = declaredSummary(c);
     // entry markers from scenario script
     c.world.targets.forEach((h) => c.timeline.push({ t: h.wps[0][0], label: h.id + ' in', color: h.role === 'benign' ? 'amber' : 'red' }));
     const commands = Object.keys(c.cmd.records).map((id) => c.cmd.records[id]);
@@ -541,7 +573,7 @@
       const az = Math.atan2(dy, dx);
       if (heading !== null && Math.abs(wrapPi(az - heading)) > s.fov / 2) return;
       if (c.rn() > detectionProb(sq, h, r)) return;
-      seen.push({ x: tg.x, y: tg.y, vx: tg.vx, vy: tg.vy, r, az, n: 1, sq, o: Object.assign({}, o, { alt: h ? h.alt : undefined }) });
+      seen.push({ x: tg.x, y: tg.y, vx: tg.vx, vy: tg.vy, r, az, n: 1, sq, o: Object.assign({}, o, { alt: h ? h.alt : undefined, radarSig: h ? h.sig.radar : undefined }) });
     });
     return seen;
   }
@@ -613,8 +645,29 @@
     payload.arr = t + dly + (latency || 0) + (c.faults.length ? extraDelay(c, node, t) : 0);
     c.queue.push(payload);
   }
+  // a repeated observation is the same message sent again (same node, same sequence number): the first copy to arrive counts
+  function firstCopies(c, arrived) {
+    c.copies = c.copies || new Set();
+    return arrived.filter((m) => {
+      if (m.type !== 'observation') return true;
+      const key = m.header.source_id + ':' + m.header.seq;
+      if (c.copies.has(key)) return false;
+      c.copies.add(key); return true;
+    });
+  }
+  // How many copies of each reading a node sends. `repeatObs: 'auto'` follows the node's own link quality (MOCK: read from the
+  // channel; a real node would learn it from C2's acknowledgements): one copy on a good link, up to three on a bad one.
+  function copiesFor(c, node) {
+    if (!c.P.repeatObs) return 1;
+    if (c.P.repeatObs !== 'auto') return c.P.repeatObs;
+    const q = c.linkQ[node];
+    return q > 0.7 ? 1 : q > 0.35 ? 2 : 3;
+  }
   function sendAll(c, k, t, raw) {
-    raw.forEach((z) => sendMessage(c, z.node, observation(c, z, t), t, z.latency));
+    raw.forEach((z) => {
+      const msg = observation(c, z, t);
+      for (let i = 0, n = copiesFor(c, z.node); i < n; i++) sendMessage(c, z.node, i ? { ...msg, header: { ...msg.header } } : msg, t, z.latency);
+    });
     if (k % c.beaconEvery === 0) sendBeacons(c, t);
   }
   // Fields as in docs/data-formats.md. MOCK: `z` is the internal record the baseline tracker reads; it is not
@@ -687,6 +740,7 @@
   }
   // C2: count what arrived, drop duplicates, keep late (resent) messages out of the live picture
   function noteArrivals(c, t, arrived) {
+    if (c.P.repeatObs && !c.sf) return firstCopies(c, arrived);
     if (!c.sf) return arrived;
     return arrived.filter((m) => {
       const src = m.header.source_id, rx = c.sf.rx[src];
@@ -752,8 +806,45 @@
       associate(c, m.z, t);
     });
     c.pending = c.pending.filter((p) => t - p.t <= 1.0);
+    noteEmitters(c, t, frameMeas);
     return frameMeas;
   }
+  // An RF receiver only hears a transmitter, and the birds and vehicles do not transmit. One receiver gives a bearing and
+  // any track on that line could take it, so the bearings of two receivers are crossed into a fix and the fix goes to the
+  // one track it agrees with best, unless that is a friendly. Three fixes in 6 s make the track a hostile emitter.
+  // The same rule as pipeline/identify.py. It is a run parameter (`emitterHostile`, set by the viewer, off for the tests):
+  // sensor evidence that an object transmits is not evidence of hostile intent, which the behaviour module alone decides.
+  const EMIT = { fixes: 3, window: 6, pair: 0.3, keep: 1.0, gate: 9.21, ambiguity: 8 };
+  const QUIET_S = 12, LISTEN_RANGE = 0.8;   // a track is "in reach" of a receiver within 80 % of its range
+  function noteEmitters(c, t, recs) {
+    const rf = recs.filter((r) => r.k === 'RF' && r.m === 'bearing');
+    rf.forEach((r) => c.rfRecent.forEach((o) => {
+      if (o.node === r.node || Math.abs(o.t - r.t) > EMIT.pair) return;
+      const fix = triangulate(o, r);
+      if (!fix) return;
+      const near = c.tracks.map((tr) => ({ tr, d2: innov(tr, fix).d2 })).filter((q) => q.d2 <= EMIT.gate).sort((a, b) => a.d2 - b.d2);
+      // a fix that two tracks explain about equally well belongs to neither
+      if (near.length && near[0].tr.kind !== 'frd' && (near.length === 1 || near[1].d2 > EMIT.ambiguity * near[0].d2)) (near[0].tr.emitFixes = near[0].tr.emitFixes || []).push(t);
+    }));
+    c.rfRecent = c.rfRecent.concat(rf).filter((r) => t - r.t <= EMIT.keep);
+    c.tracks.forEach((tr) => { if (tr.emitFixes) tr.emitFixes = tr.emitFixes.filter((u) => t - u <= EMIT.window); });
+    noteListening(c, t);
+  }
+  // Seconds a confirmed track has been inside the reach of two working receivers (a crossed pair could fix it) without being
+  // heard: a bird or a vehicle looks like this, and so does nothing that is merely out of reach. A fix starts the count again.
+  function noteListening(c, t) {
+    const receivers = c.sensors.filter((s) => s.kind === 'RF' && alive(c, s.node, t)).map((s) => ({ ...nodePos(c, s.node, t), range: s.range * LISTEN_RANGE }));
+    c.tracks.forEach((tr) => {
+      if ((tr.emitFixes || []).length) { tr.heard = t; tr.listenedS = 0; return; }
+      const near = receivers.filter((r) => Math.hypot(tr.s[0] - r.x, tr.s[1] - r.y) <= r.range).length;
+      if (near >= 2 && tr.confirmedOnce) tr.listenedS = (tr.listenedS || 0) + DT;
+    });
+  }
+  const isQuiet = (tr) => tr.kind !== 'frd' && (tr.listenedS || 0) >= QUIET_S;
+  const isEmitter = (tr) => tr.kind !== 'frd' && (tr.emitFixes || []).length >= EMIT.fixes;
+  // Only a track that was confirmed (an unconfirmed one is often a false alarm next to a real transmitter), and never over a
+  // verdict the behaviour already reached for a friendly or a peaceful object: a transmitter alone does not make intent.
+  const emitterMayBeHostile = (tr, v) => (tr.confirmedOnce || tr.status === 'confirmed') && v.cls !== 'friendly' && v.cls !== 'peaceful';
   function applyBeacon(c, m, t) {
     const id = m.friend_id, z = { x: m.position[0], y: m.position[1], R: [9, 0, 9], t, node: id };
     let tr = c.friends[id];
@@ -869,11 +960,13 @@
     });
     for (let dup = findDuplicate(c.tracks); dup; dup = findDuplicate(c.tracks)) {
       const keep = dup.replacement;
+      if (!keep.held) keep.held = dup.held;
       Object.entries(dup.srcs).forEach(([key, time]) => { keep.srcs[key] = Math.max(keep.srcs[key] ?? -Infinity, time); });
       keep.observations=(keep.observations||[]).concat(dup.observations||[]).filter((r)=>t-r.t<=6);
       if (!keep.firstSources) keep.firstSources = {};
       Object.entries(dup.firstSources || {}).forEach(([key, time]) => { keep.firstSources[key] = Math.min(keep.firstSources[key] ?? Infinity, time); });
       keep.observedT = Math.max(keep.observedT ?? -Infinity, dup.observedT ?? -Infinity);
+      keep.emitFixes = (keep.emitFixes || []).concat(dup.emitFixes || []);
       c.tracks.splice(c.tracks.indexOf(dup), 1);
     }
   }
@@ -915,6 +1008,53 @@
   }
 
   // --------------------------------------------------------------------- snapshot
+  // A class reached on evidence stays until evidence for another class comes: a hostile that flies out of the drones' reach
+  // is still a hostile, not an unknown. "Suspicious" is not held: it asks for a drone to be sent, so it must keep tracking
+  // the evidence. Only "unknown" is no evidence, so only it gives way to the held class.
+  // what is defended: C2, the ground sensors and the friendly drones where their beacons put them
+  // a drone is a small target: a course that comes within FRIEND_PASS_M of it counts (set lower, fewer harmless drones are flagged but fewer hostiles too: 40 m gave benign 26 % / hostile 78 % against 28 % / 82 %)
+  const FRIEND_PASS_M = 100;
+  function defendedPoints(c) {
+    const friends = c.tracks.filter((tr) => tr.kind === 'frd').map((tr) => ({ x: tr.s[0], y: tr.s[1], pass: FRIEND_PASS_M }));
+    const zone = c.world.zone;
+    return [{ x: zone.x, y: zone.y, r: zone.radius_m }].concat(c.world.ground.map((g) => ({ x: g.x, y: g.y })), c.P.friendsDefended === false ? [] : friends);
+  }
+  // A course for the defended area is only trusted early when the object has also been heard on the radio: a bird flies the same
+  // course. One never heard waits until it is UNHEARD_REACH_S from the defended area.
+  const UNHEARD_REACH_S = 15;
+  const unheardAndFar = (tr, intent) => !tr.heard && intent.reach > UNHEARD_REACH_S;
+  // an object with no class yet takes the one its course supports (intent.js learns it as the run goes on)
+  function fromIntent(c, tr, v, intents, cleared) {
+    if (cleared && cleared.has(tr.id) && v.cls !== 'friendly') return { ...v, cls: 'peaceful', class_prob: 0.95, p_hostile: 0.05, p_friendly: 0, plan: cleared.get(tr.id) };
+    const cls = intents && v.cls === 'unknown' && tr.kind !== 'frd' && tr.confirmedOnce ? c.intent.verdict(intents.get(tr.id)) : null;
+    if (!cls || (cls === 'hostile' && (isQuiet(tr) || sizeHint(tr) || unheardAndFar(tr, intents.get(tr.id))))) return v; // what the receivers never hear is not called hostile on its course alone
+    const p = intents.get(tr.id).p;
+    return { ...v, cls, class_prob: cls === 'hostile' ? p : 1 - p, p_hostile: p, p_friendly: 0 };
+  }
+  const HELD = ['hostile', 'peaceful', 'friendly', 'object'];
+  // Much smaller or much bigger than any drone the radar has seen: not a drone. With `objectClass` it is an object (a bird or
+  // a vehicle, nothing to do with drones or the military); otherwise it only stops being a hostile and stays unknown.
+  function byRadarSize(c, tr, v) {
+    if (!sizeHint(tr) || v.cls === 'friendly' || v.cls === 'peaceful') return v;
+    if (c.P.objectClass) return { ...v, cls: 'object', class_prob: 0.85, p_hostile: 0.02, p_friendly: 0 };
+    if (v.cls !== 'hostile' && !(v.cls === 'unknown' && tr.held && tr.held.cls === 'hostile')) return v;
+    tr.held = null;
+    return { ...v, cls: 'unknown', class_prob: 0.5, p_hostile: 0.5 };
+  }
+  // A transmitter far from the zone and not heading for it is not yet a threat: the radio alone does not make it a hostile there.
+  const RADIO_NEAR_M = 0;   // inside the zone
+  function radioMeansThreat(c, tr, intents) {
+    if (!intents) return true;
+    const z = c.world.zone;
+    return intents.get(tr.id).reach < Infinity || Math.hypot(tr.s[0] - z.x, tr.s[1] - z.y) - z.radius_m < RADIO_NEAR_M;
+  }
+  // A hostile that rests on the radio alone is let go when two receivers in reach hear nothing of it for QUIET_S (it was a
+  // bird or a vehicle next to a real transmitter); it goes back to what the behaviour says, never straight to unknown.
+  function holdClass(tr, v, viaRadio) {
+    if (tr.held && tr.held.viaRadio && isQuiet(tr)) tr.held = null;
+    if (HELD.includes(v.cls)) { tr.held = viaRadio ? { ...v, viaRadio: true } : v; return v; }
+    return v.cls !== 'unknown' ? v : tr.held ? { ...tr.held } : v;
+  }
   function classifyFrame(c, t) {
     // Only tracker estimates and received beacons cross this boundary. The viewer
     // tracker is 2D, so project BOTH tracks and beacons to the same plane.
@@ -924,11 +1064,18 @@
       existence_prob: tr.status === 'tentative' ? 0.5 : 0.95 }));
     const beacons = Object.values(c.beacons).filter((b) => t - b.t <= 2);
     const found = c.classifier.update(t, inputs, beacons);
+    const intents = c.intent ? c.intent.update(t, DT, c.tracks, defendedPoints(c)) : null;
+    const cleared = c.plans ? c.plans.update(t, DT, c.tracks) : null;
     const byId = new Map(c.tracks.map((tr) => [tr.id, tr]));
     found.forEach((original) => {
       let v=original;
       const tr = byId.get(v.track_id), prev = tr.cls;
       const reviewed=c.assessment.update(t,tr,v); v=reviewed.decision;
+      const heard = c.P.emitterHostile && emitterMayBeHostile(tr, v) && isEmitter(tr) && radioMeansThreat(c, tr, intents);
+      if (heard) v = { ...v, cls: 'hostile', class_prob: Math.max(v.class_prob || 0, 0.9), p_hostile: Math.max(v.p_hostile || 0, 0.9) };
+      v = fromIntent(c, tr, v, intents, cleared);
+      v = byRadarSize(c, tr, v);
+      v = holdClass(tr, v, heard && v.cls === 'hostile' && !v.plan);
       tr.assessment=reviewed.review;
       tr.classification = v; tr.cls = v.cls; tr.behavior = c.classifier.explain(v.track_id);
       if(reviewed.reasons.length)tr.behavior={...tr.behavior,reasons:[...(tr.behavior.reasons||[]),...reviewed.reasons]};
@@ -946,7 +1093,7 @@
     const v = tr.classification || { cls: 'unknown', class_prob: 0.5, p_hostile: 0.5, p_friendly: 0.5 };
     const cls = v.cls, pH = v.p_hostile, pF = v.p_friendly;
     return {
-      id: tr.id, cls, st: tr.status, once: !!tr.confirmedOnce, x: tr.s[0], y: tr.s[1], vx: tr.s[2], vy: tr.s[3],
+      id: tr.id, cls, st: tr.status, once: !!tr.confirmedOnce, quiet: isQuiet(tr), size: sizeHint(tr), x: tr.s[0], y: tr.s[1], vx: tr.s[2], vy: tr.s[3],
       pxx: tr.P[0], pyy: tr.P[5], pxy: tr.P[1], pvv: tr.P[10] + tr.P[15],
       conf: v.class_prob, behavior: tr.behavior || {},
       assessment:tr.assessment?{...tr.assessment,source_nodes:tr.assessment.source_nodes.slice()}:null,
@@ -959,6 +1106,20 @@
   }
 
   // ---------------------------------------------------------- scoring against truth
+  // How far outside the zone a real hostile was when it was first called hostile (negative: already inside). The truth is used for scoring only.
+  function noteDeclared(c, t, truth, snap) {
+    const z = c.world.zone;
+    truth.filter((o) => o.kind === 'hostile' && !c.declared[o.id]).forEach((o) => {
+      const called = snap.some((tr) => tr.cls === 'hostile' && !tr.id.startsWith('F') && Math.hypot(tr.x - o.x, tr.y - o.y) < 40);
+      if (called) c.declared[o.id] = { t, range: Math.hypot(o.x - z.x, o.y - z.y) - z.radius_m };
+    });
+  }
+  function declaredSummary(c) {
+    const ids = c.world.hostiles.map((h) => h.id), got = ids.filter((id) => c.declared[id]);
+    const ranges = got.map((id) => c.declared[id].range);
+    return { declared: got.length, hostiles: ids.length, rangeM: ranges.length ? ranges.reduce((a, b) => a + b, 0) / ranges.length : null,
+      ranges: Object.fromEntries(got.map((id) => [id, Math.round(c.declared[id].range)])) };
+  }
   function scoreFrame(c, t, truth, hostileTracks, tracks) {
     const trueHost = truth.filter((o) => o.kind === 'hostile');
     // First associate all confirmed/coasting tracks with ALL real objects.
@@ -1002,7 +1163,7 @@
     const prev = c.lastMatch[trueId];
     if (!prev || prev === trackId) return;
     c.n.swaps++;
-    c.alerts.push({ t, sev: 'crit', text: 'Identity swap on ' + trueId + ': ' + prev + ' → ' + trackId });
+    c.alerts.push({ t, sev: 'crit', text: 'Identity swap on ' + trueId + ': ' + prev + ' â†’ ' + trackId });
     c.timeline.push({ t, label: 'swap', color: 'red' });
   }
   // A hostile label on an object of this kind; each track is reported once.
@@ -1061,7 +1222,7 @@
     const key = cross.a + cross.b;
     if (c.crossAlerted[key] && t - c.crossAlerted[key] <= 25) return;
     c.crossAlerted[key] = t;
-    c.alerts.push({ t, sev: 'warn', text: 'Crossing predicted ' + cross.a + ' × ' + cross.b + ' in ' + cross.tca.toFixed(1) + ' s: identity risk' });
+    c.alerts.push({ t, sev: 'warn', text: 'Crossing predicted ' + cross.a + ' Ã— ' + cross.b + ' in ' + cross.tca.toFixed(1) + ' s: identity risk' });
     c.timeline.push({ t: t + cross.tca, label: 'crossing?', color: 'amber', dashed: true });
   }
 
@@ -1250,7 +1411,9 @@
     rec.sigR = sigR; rec.sigB = sigB; rec.sigRR = sigRR;
     const ux = Math.cos(d.az), uy = Math.sin(d.az);
     rec.rr = (d.vx - (sp.vx || 0)) * ux + (d.vy - (sp.vy || 0)) * uy + gauss(rand) * sigRR;
-    rec.fields = { range_m: rec.r, azimuth_deg: compass(rec.b), radial_mps: rec.rr, snr_db: 20 - 20 * Math.log10(Math.max(x.r, 1) / 100) + gauss(rand) };
+    // the return is weaker with distance and stronger for a bigger object: the object's radar signature (an assumed number) is its size
+    const sizeDb = 20 * Math.log10(Math.max(d.o.radarSig || 1, 0.01));
+    rec.fields = { range_m: rec.r, azimuth_deg: compass(rec.b), radial_mps: rec.rr, snr_db: 20 - 20 * Math.log10(Math.max(x.r, 1) / 100) + sizeDb + gauss(rand) };
     rec.sd = { range_m: sigR, azimuth_deg: sigB * RAD2DEG, radial_mps: sigRR };
   }
   const RECORD_BUILDERS = {

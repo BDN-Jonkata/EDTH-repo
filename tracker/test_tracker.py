@@ -36,6 +36,18 @@ class TestFilter(unittest.TestCase):
         self.assertGreater(cov[0][0], 1.0)
 
 
+class TestRadialSpeedInAssociation(unittest.TestCase):
+    def test_two_targets_a_few_metres_apart_are_told_apart_by_their_radial_speed(self):
+        """At the crossing the ranges and bearings of the two targets are nearly the same; how fast each moves along
+        the line of sight is not, so a return of one target must cost the other track more."""
+        cov = identity_like([4.0, 4.0, 1.0, 1.0])
+        toward, away = [200.0, 100.0, -8.0, -4.0], [205.0, 104.0, 8.0, 4.0]       # 6 m apart, opposite velocities
+        reading = radar(0.0, 200.0, 100.0, vx=-8.0, vy=-4.0)                       # the first one's return
+        own, other = gate_cost(toward, cov, reading), gate_cost(away, cov, reading)
+        self.assertIsNotNone(own)
+        self.assertTrue(other is None or other > own + 10.0)
+
+
 class TestModels(unittest.TestCase):
     def test_a_radar_reading_gives_a_fix_where_the_object_is(self):
         x, y, cov = fix_from_range_bearing(radar(0.0, 200.0, 100.0))

@@ -13,9 +13,11 @@ from tracker.measurement import BEARING, RANGE, RANGE_BEARING, Measurement
 
 GATE_1DOF = 6.63            # chi-square, 99 %
 GATE_2DOF = 9.21
+GATE_3DOF = 11.34
+GATE_CHI2 = {1: GATE_1DOF, 2: GATE_2DOF, 3: GATE_3DOF}
 MIN_TRIANGULATION_ANGLE = math.radians(15.0)   # rays closer to parallel give a useless fix
 MAX_RAY_FACTOR = 1.2        # the crossing must lie within this times each sensor's range
-GATE_PARTS = {BEARING: ("bearing",), RANGE: ("range",), RANGE_BEARING: ("range", "bearing")}
+GATE_PARTS = {BEARING: ("bearing",), RANGE: ("range",), RANGE_BEARING: ("range", "bearing", "radial")}
 
 Fix = Tuple[float, float, Mat]   # x, y and the 2x2 covariance as [[a, b], [b, c]]
 
@@ -37,7 +39,9 @@ def scalar_model(state: Vec, m: Measurement, which: str) -> Tuple[float, Vec, fl
 
 def gate_cost(state: Vec, cov: Mat, m: Measurement) -> Optional[float]:
     """Lower is a better fit; None when the reading is outside the gate. The log term stops a wide
-    track from beating a precise one."""
+    track from beating a precise one. A radar reading counts its radial speed too: two targets that pass at
+    a few metres are told apart by how fast each is moving along the line of sight, which is the one thing
+    their ranges and bearings cannot show."""
     parts = GATE_PARTS[m.kind]
     d2 = log_s = 0.0
     for which in parts:
@@ -45,15 +49,12 @@ def gate_cost(state: Vec, cov: Mat, m: Measurement) -> Optional[float]:
         s = innovation_variance(cov, h, variance)
         d2 += residual * residual / s
         log_s += math.log(s)
-    return d2 + log_s if d2 <= (GATE_1DOF if len(parts) == 1 else GATE_2DOF) else None
+    return d2 + log_s if d2 <= GATE_CHI2[len(parts)] else None
 
 
 def apply_measurement(state: Vec, cov: Mat, m: Measurement):
     for which in GATE_PARTS[m.kind]:
         residual, h, variance = scalar_model(state, m, which)
-        state, cov = scalar_update(state, cov, residual, h, variance)
-    if m.kind == RANGE_BEARING:
-        residual, h, variance = scalar_model(state, m, "radial")
         state, cov = scalar_update(state, cov, residual, h, variance)
     return state, cov
 

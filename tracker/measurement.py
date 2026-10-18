@@ -37,6 +37,7 @@ class Measurement:
     sigma_range: float = 0.0
     radial_mps: Optional[float] = None
     sigma_radial: float = 0.0
+    sensor_kind: str = ""                  # the module's kind (eo_camera, rf_receiver, ...): what sort of evidence a reading is
 
     @property
     def scan(self) -> tuple:
@@ -66,7 +67,8 @@ def from_observation(obs: dict, pose: Pose2D, module: dict) -> Optional[Measurem
     includes the uncertainty of where the sensor was (`pose.sigma`)."""
     value, kind = obs["value"], obs["kind"]
     reach = module["sim"]["range_m"]
-    base = dict(t=obs["t_obs"], node=obs["header"]["source_id"], sensor_id=obs["sensor_id"], pose=pose, max_range_m=reach)
+    base = dict(t=obs["t_obs"], node=obs["header"]["source_id"], sensor_id=obs["sensor_id"], pose=pose, max_range_m=reach,
+                sensor_kind=module.get("kind", ""))
     if kind == "bearing":
         sigma = _with_pose_error(math.radians(_sigma(obs, "bearing_deg")), pose, reach)
         return Measurement(BEARING, bearing=math_rad(value["bearing_deg"]), sigma_bearing=sigma, **base)

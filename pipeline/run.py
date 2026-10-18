@@ -24,6 +24,7 @@ from fusion.hub import BearingHub
 from fusion.merger import Merger
 from pipeline.cueing import Cueing
 from pipeline.fleet import Fleet
+from pipeline.identify import Emitters, IdentifyConfig
 from pipeline.nodes import NodeTrackers
 from pipeline.storefwd import StoreForward, store_forward_on
 from predictor.identity import IdentityConfig, IdentityKeeper
@@ -188,13 +189,24 @@ def _beacon(m: dict) -> Beacon:
                   math.sqrt(var))
 
 
+def _class_of(tr: Track, t: float, classes: Dict[str, str], friend_tracks: bool, emitters: Optional[Emitters]) -> Optional[str]:
+    """A beacon track is friendly (with `friend_tracks`); else what the sensors say it is (`identify`: an emitter is
+    hostile); else the estimator's class. A friendly from the estimator is never overridden."""
+    if friend_tracks and tr.friend_id:
+        return "friendly"
+    estimated = classes.get(tr.track_id)
+    if emitters is not None and estimated != "friendly":
+        return emitters.label(tr.track_id, t) or estimated
+    return estimated
+
+
 def scored_frames(scenario: dict, seed: int = 0, tracker_config: Optional[TrackerConfig] = None,
                   estimator: Optional[FriendFoeEstimator] = None, investigate: bool = False,
                   stats: Optional[dict] = None, recorded: Optional[dict] = None,
                   keep_identity: bool = False, distributed: bool = False, cue: bool = False,
                   trust: bool = False, oosm: bool = False, clocks: bool = False, timesync: bool = False,
                   oosm_age_s: Optional[float] = None, storefwd: bool = False,
-                  friend_tracks: bool = True) -> Iterator[tuple]:
+                  friend_tracks: bool = True, identify: bool = True) -> Iterator[tuple]:
     """(t, [Estimate]) for the scoring module: the tracker's confirmed tracks with the estimator's class.
 
     With `investigate`, suspicious tracks send drones out; when the run ends `stats` (if given) is filled with
@@ -213,6 +225,7 @@ def scored_frames(scenario: dict, seed: int = 0, tracker_config: Optional[Tracke
     keeper = IdentityKeeper(IdentityConfig(model=MotionModel.load() if keep_identity == "learned" else None)) if keep_identity else None
     pending: List[Beacon] = []
     classes: Dict[str, str] = {}
+    emitters = Emitters(identify if isinstance(identify, IdentifyConfig) else None) if identify else None
     for k in range(int(scenario["duration_s"] / STEP_S) + 1):
         frame = pipeline.step(round(k * STEP_S, 6))
         if keeper is not None:
@@ -221,6 +234,8 @@ def scored_frames(scenario: dict, seed: int = 0, tracker_config: Optional[Tracke
             for d in pipeline.fleet.drones.values():
                 recorded.setdefault(d.id, []).append([frame.t, d.x, d.y, d.vx, d.vy])
         pending += [_beacon(b) for b in frame.beacons]
+        if emitters is not None:
+            emitters.step(frame.t, frame.readings, frame.tracks)
         if k % CLASSIFY_EVERY == 0:
             states = [_track_state(tr, frame.t) for tr in frame.tracks]
             found = estimator.update(frame.t, states, pending)
@@ -231,7 +246,6 @@ def scored_frames(scenario: dict, seed: int = 0, tracker_config: Optional[Tracke
             pipeline.investigator.on_readings(frame.t, frame.readings, frame.tracks)
             pipeline.investigator.step(frame.t, {tr.track_id: (tr.state[0], tr.state[1]) for tr in frame.tracks})
         yield frame.t, [Estimate(tr.track_id, frame.t, tr.state[0], tr.state[1], tr.state[2], tr.state[3],
-                                 "friendly" if friend_tracks and tr.friend_id else classes.get(tr.track_id))
-                        for tr in frame.tracks]
+                                 _class_of(tr, frame.t, classes, friend_tracks, emitters)) for tr in frame.tracks]
     if stats is not None and pipeline.investigator:
         stats.update(pipeline.investigator.stats, log=pipeline.investigator.dispatcher.log)

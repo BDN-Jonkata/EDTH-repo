@@ -1,0 +1,35 @@
+{
+  "name": "mixed",
+  "preset": "mixed",
+  "seed": 8,
+  "seed_set": "tuning",
+  "description": "One of every kind of object: 3 hostile drones (one crossing close, one hovering), 3 benign drones that transmit (two on a flight plan the base knows, one not), 2 birds and 2 vehicles, with the five friendly drones and two ground sensors.",
+  "traffic_behaviors": [
+    {"id": "H1", "ally": "F5", "mode": "follow", "start_s": 10},
+    {"id": "H2", "ally": "F1", "mode": "intercept", "start_s": 25}
+  ],
+  "targets": {
+    "count": 6,
+    "benign_count": 3,
+    "cleared_count": 2,
+    "behavior_demo": true,
+    "motion": "mixed",
+    "enter_t": [2, 40],
+    "speed_mps": [7, 13],
+    "hover_prob": 0.2,
+    "sudden_turn_prob": 0.1,
+    "crossing": {
+      "enabled": true,
+      "t": 55
+    }
+  },
+  "environment": {
+    "weather": "clear",
+    "time_of_day": "day",
+    "clutter": {
+      "false_alarms_per_min": 2,
+      "birds": 2,
+      "vehicles": 2
+    }
+  }
+}

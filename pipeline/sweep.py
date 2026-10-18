@@ -31,7 +31,7 @@ from scoring.sweep import COLUMNS, average_with_error, fmt_error, paired_differe
 from scoring.truth import with_recorded_samples
 
 WARMUP_S = 10.0
-OPTIONS = {"investigate": "investigate", "identity": "keep_identity", "distributed": "distributed", "cueing": "cue", "trust": "trust", "oosm": "oosm", "clocks": "clocks", "timesync": "timesync", "storefwd": "storefwd", "friend-tracks": "friend_tracks"}   # --paired name -> option
+OPTIONS = {"investigate": "investigate", "identity": "keep_identity", "distributed": "distributed", "cueing": "cue", "trust": "trust", "oosm": "oosm", "clocks": "clocks", "timesync": "timesync", "storefwd": "storefwd", "friend-tracks": "friend_tracks", "identify": "identify"}   # --paired name -> option
 
 
 def run_once(setup: Setup, index: int, weather: str, loss: float, behaviour: str = "", **options) -> RunScore:
@@ -109,6 +109,7 @@ def main() -> None:
     ap.add_argument("--clocks", action="store_true", help="stamp every reading with its node's own clock, offset and drift included")
     ap.add_argument("--timesync", action="store_true", help="estimate each node's clock and put the stamps on the C2 clock (tracker/timesync.py; implies --clocks)")
     ap.add_argument("--storefwd", action="store_true", help="nodes keep what they sent and resend what C2 is missing, when the scenario turns store_forward on (pipeline/storefwd.py)")
+    ap.add_argument("--no-identify", action="store_true", help="do not call a non-friend track that two RF receivers keep hearing hostile (the default does; pipeline/identify.py)")
     ap.add_argument("--no-friend-tracks", action="store_true", help="do not call a track started from a friendly's beacon friendly while the tracker keeps it (the default does)")
     ap.add_argument("--distributed", action="store_true", help="a tracker per node and a merger (pipeline/nodes.py)")
     ap.add_argument("--paired", choices=sorted(OPTIONS), help="compare with and without this on the same seeds")
@@ -123,7 +124,7 @@ def main() -> None:
     base = {"investigate": args.investigate, "keep_identity": args.keep_identity, "distributed": args.distributed,
             "cue": args.cue, "trust": args.trust, "oosm": args.oosm, "oosm_age_s": args.oosm_age,
             "clocks": args.clocks or args.timesync or args.paired == "timesync", "timesync": args.timesync, "storefwd": args.storefwd,
-            "friend_tracks": not args.no_friend_tracks}
+            "friend_tracks": not args.no_friend_tracks, "identify": not args.no_identify}
     if args.swaps:
         for loss in losses:
             print(f"loss {loss}: {swap_causes(setup, args.weather, loss, args.behaviour, **base)}")

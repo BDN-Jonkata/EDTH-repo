@@ -38,9 +38,9 @@ class TrackerConfig:
     confirm_updates: int = 5               # readings within `confirm_window_s` that confirm a track
     confirm_window_s: float = 4.0
     confirm_max_sigma_m: float = 30.0      # not confirmed while the position is this uncertain
-    support_window_s: float = 3.0
+    support_window_s: float = 5.0          # was 3: with the radial speed in the gate a wider window holds real tracks at high loss (10 tuning seeds, 0 to 90 % loss)
     min_nodes: int = 2                     # viewpoints that stand in for a range reading (3 was worse on the tuning seeds)
-    unsupported_ttl_s: float = 4.0         # a confirmed track without support this long goes back to tentative
+    unsupported_ttl_s: float = 6.0        # a confirmed track without support this long goes back to tentative
     tentative_ttl_s: float = 2.0           # a tentative track unseen this long is dropped
     confirmed_ttl_s: float = 10.0          # longer bridges more gaps (6 s was worse on the tuning seeds)
     pair_window_s: float = 0.6             # two bearings this close in time may be crossed into a fix

@@ -5,7 +5,7 @@
   const NS = 'http://www.w3.org/2000/svg';
   const scen = () => (S.res && S.res.scen) || S.world; // the scenario of the current run
   const COL = { h: '#FF5A5F', f: '#5B9BFF', u: '#F5B13D', line: '#C9D1DB', cyan: '#3FC1D9' };
-  const CLASS_NAME = { friendly: 'Friendly', hostile: 'Hostile', suspicious: 'Suspicious', peaceful: 'Peaceful', unknown: 'Unknown' };
+  const CLASS_NAME = { friendly: 'Friendly', hostile: 'Hostile', suspicious: 'Suspicious', peaceful: 'Peaceful', unknown: 'Unknown', object: 'Object' };
   // Images follow the assessed class, never the scenario's scoring role.
   const iconClass = (cls) => Object.hasOwn(CLASS_NAME, cls) ? cls : 'unknown';
   const iconPath = (cls) => 'assets/track-icons/' + iconClass(cls) + '.svg';
@@ -20,7 +20,7 @@
     recent_encounter_evidence: 'Earlier encounter evidence is decaying',
     corroborated_inbound_course: 'Independent sensors corroborate a sustained course toward C2',
     recent_corroborated_approach: 'Recent corroborated approach; assessment is decaying' };
-  const classColor = (cls) => ({ friendly: COL.f, hostile: COL.h, suspicious: COL.u, peaceful: '#5FD0C0', unknown: '#A9B3BF' }[cls] || COL.u);
+  const classColor = (cls) => ({ friendly: COL.f, hostile: COL.h, suspicious: COL.u, peaceful: '#5FD0C0', unknown: '#A9B3BF', object: '#8B96A5' }[cls] || COL.u);
   const percent = (value) => (Math.max(0, Math.min(1, value)) * 100).toFixed(1) + '%';
   const Y = (n) => 1000 - n; // world North -> svg y
 
@@ -99,7 +99,7 @@
   function runSim(p) {
     S.applied = clone(p);
     S.wx = Weather.providerFor(S.scenario.environment, p.weather, p.sky !== undefined ? p.sky : S.scenario.environment.sky).provider; // as in Sim.run
-    S.res = Sim.run({ seed: p.seed, mode: p.mode, weather: p.weather, sky: p.sky, loss: p.loss, delayMs: p.delayMs, driftMs: p.driftMs, bandwidthKbps: p.bandwidthKbps, assign: p.assign, scenario: S.scenario });
+    S.res = Sim.run({ emitterHostile: true, learnIntent: true, objectClass: true, repeatObs: 'auto', seed: p.seed, mode: p.mode, weather: p.weather, sky: p.sky, loss: p.loss, delayMs: p.delayMs, driftMs: p.driftMs, bandwidthKbps: p.bandwidthKbps, assign: p.assign, scenario: S.scenario });
     S.deg = null; S.idx = 0; S.acc = 0; S.last = 0; S.playing = true; S.sel = null; S.userSel = false;
     $('runTitle').textContent = scen().id + ' · ' + p.name + ' · seed ' + p.seed;
     $('tTotal').textContent = fmtT(S.res.T_END);
@@ -332,7 +332,7 @@
     return out;
   }
   function headingSvg(t, sp, col) {
-    const x = t.x, y = Y(t.y), mk = { hostile: 'm-r', friendly: 'm-b', suspicious: 'm-a', peaceful: 'm-p', unknown: 'm-n' }[t.cls];
+    const x = t.x, y = Y(t.y), mk = { hostile: 'm-r', friendly: 'm-b', suspicious: 'm-a', peaceful: 'm-p', unknown: 'm-n', object: 'm-n' }[t.cls];
     const L = t.cls === 'friendly' ? 38 : 26 + Math.min(26, sp * 2.4), ux = t.vx / sp, uy = t.vy / sp;
     return '<path d="M' + (x + ux * 22) + ' ' + (y - uy * 22) + 'L' + (x + ux * L) + ' ' + (y - uy * L) + '" stroke="' + col + '" stroke-width="2" marker-end="url(#' + mk + ')"/>';
   }
@@ -347,7 +347,12 @@
       return '<rect x="' + (x - 13) + '" y="' + (y - 44) + '" width="26" height="16" rx="2" fill="' + col + '"' + (sel ? ' stroke="#E6EAF0" stroke-width="1.5"' : '') + '/><text class="tb" x="' + x + '" y="' + (y - 32) + '" text-anchor="middle" fill="#14080A">' + t.id + '</text>' +
         '<text class="t" x="' + (x + 17) + '" y="' + (y - 32) + '">' + sp.toFixed(0) + ' m/s</text>';
     }
-    return '<rect x="' + (x - 13) + '" y="' + (y - 43) + '" width="26" height="16" rx="2" fill="#0D1318" stroke="' + col + '" stroke-dasharray="3 2"/><text class="tb" x="' + x + '" y="' + (y - 31) + '" text-anchor="middle" fill="' + col + '">' + t.id + '</text><text class="t" x="' + (x + 17) + '" y="' + (y - 31) + '" style="fill:' + col + '">' + t.cls.toUpperCase() + '</text>';
+    return '<rect x="' + (x - 13) + '" y="' + (y - 43) + '" width="26" height="16" rx="2" fill="#0D1318" stroke="' + col + '" stroke-dasharray="3 2"/><text class="tb" x="' + x + '" y="' + (y - 31) + '" text-anchor="middle" fill="' + col + '">' + t.id + '</text><text class="t" x="' + (x + 17) + '" y="' + (y - 31) + '" style="fill:' + col + '">' + t.cls.toUpperCase() + '</text>' + quietSvg(t, x, y);
+  }
+  // never heard on the radio by receivers that were working: what a bird or a vehicle looks like (a silent drone looks the same)
+  function quietSvg(t, x, y) {
+    const what = t.size === 'small' ? 'SMALL · BIRD?' : t.size === 'large' ? 'LARGE · VEHICLE?' : t.quiet ? 'NO RADIO · BIRD/VEHICLE?' : '';
+    return what ? '<text class="t" x="' + (x + 17) + '" y="' + (y - 20) + '" style="fill:#8B96A5">' + what + '</text>' : '';
   }
 
   function renderMap(f) {
@@ -399,7 +404,8 @@
   }
   function fixedSvg() {
     const c2 = scen().c2;
-    const fx = ['<g data-node-id="C2" transform="translate(' + c2.x + ' ' + Y(c2.y) + ')"><title>C2 command center</title>' + C2_MARK + '</g><text class="t tb" x="' + c2.x + '" y="' + (Y(c2.y) + 38) + '" text-anchor="middle" style="fill:#C8AFF8">C2</text>'];
+    const z = S.world.zone || (S.res && S.res.scen.zone);
+    const fx = [z ? '<circle cx="' + z.x + '" cy="' + Y(z.y) + '" r="' + z.radius_m + '" fill="none" stroke="#C8AFF8" stroke-opacity="0.45" stroke-width="1.2" stroke-dasharray="8 6"/><text class="t" x="' + z.x + '" y="' + (Y(z.y) - z.radius_m - 6) + '" text-anchor="middle" style="fill:#C8AFF8">DEFENDED ZONE ' + z.radius_m + ' m</text>' : '', '<g data-node-id="C2" transform="translate(' + c2.x + ' ' + Y(c2.y) + ')"><title>C2 command center</title>' + C2_MARK + '</g><text class="t tb" x="' + c2.x + '" y="' + (Y(c2.y) + 38) + '" text-anchor="middle" style="fill:#C8AFF8">C2</text>'];
     scen().ground.forEach((g) => {
       const kinds = S.res.sensors.filter((q) => q.node === g.id).map((q) => q.kind).join('·');
       fx.push('<g data-node-id="' + g.id + '" transform="translate(' + g.x + ' ' + Y(g.y) + ')"><title>' + g.id + ' ground sensor · ' + kinds + '</title>' + GROUND_MARK + '</g><text class="t" x="' + g.x + '" y="' + (Y(g.y) + 38) + '" text-anchor="middle" style="fill:#B2DDE5">' + g.id + ' ' + kinds + '</text>');
@@ -435,7 +441,7 @@
   // a bird or vehicle: grey dashed ring with its id, so a track on it reads as a false alarm
   function clutterSvg(o) {
     return '<circle cx="' + o.x + '" cy="' + Y(o.y) + '" r="4" fill="none" stroke="#8B96A5" stroke-width="1.2" stroke-dasharray="2 2"/>' +
-      '<text class="t" x="' + (o.x + 7) + '" y="' + (Y(o.y) + 3) + '" style="fill:#8B96A5">' + o.id + '</text>';
+      '<text class="t" x="' + (o.x + 7) + '" y="' + (Y(o.y) + 3) + '" style="fill:#8B96A5">' + o.id + ' ' + (o.type || '') + '</text>';
   }
   // jamming zones in force at this moment (a comms degradation, so only in Realistic mode)
   function jammingSvg(f) {
@@ -448,7 +454,7 @@
     return '<circle class="pulse" cx="' + cross.x + '" cy="' + Y(cross.y) + '" r="48" fill="#F5B13D" fill-opacity="0.07" stroke="#F5B13D" stroke-width="1.6" stroke-dasharray="6 4"/><text class="t" x="' + cross.x + '" y="' + (Y(cross.y) + 66) + '" text-anchor="middle" style="fill:#F5B13D">PRED. CROSSING T−' + cross.tca.toFixed(1) + ' s</text>';
   }
   function tracksSvg(f) {
-    const order = { friendly: 0, peaceful: 1, unknown: 2, suspicious: 3, hostile: 4 };
+    const order = { object: -1, friendly: 0, peaceful: 1, unknown: 2, suspicious: 3, hostile: 4 };
     // a track that was never confirmed is often a radar false alarm that is gone a second later: hidden unless asked for
     // (one that was confirmed once and lost its support is a real object and stays)
     const shown = f.tracks.filter((t) => t.st !== 'tentative' || t.once || S.layers.tentative || t.id === S.sel);
@@ -463,20 +469,20 @@
     chip.className = 'chip ' + (ok ? 'cyan' : 'amber');
     chip.textContent = ok ? '✓ MATCH' : '▲ MISMATCH ' + (f.m.countErr > 0 ? '+' : '') + f.m.countErr;
 
-    const order = { hostile: 0, suspicious: 1, unknown: 2, peaceful: 3, friendly: 4 };
+    const order = { hostile: 0, suspicious: 1, unknown: 2, peaceful: 3, friendly: 4, object: 5 };
     const list = f.tracks.slice().sort((a, b) => order[a.cls] - order[b.cls] || a.id.localeCompare(b.id, undefined, { numeric: true }));
     const cur = list.find((t) => t.id === S.sel);
     const firstHostile = list.find((t) => t.cls === 'hostile');
     // keep the user's pick; otherwise follow the first hostile once there is one
     if (!cur || (!S.userSel && firstHostile && cur.cls !== 'hostile')) S.sel = (list.find((t) => t.cls === 'hostile') || list[0] || {}).id || null;
     $('trkCount').textContent = list.length + ' active';
-    $('assessmentCounts').innerHTML = ['friendly', 'peaceful', 'unknown', 'suspicious', 'hostile'].map((cls) =>
+    $('assessmentCounts').innerHTML = ['friendly', 'peaceful', 'object', 'unknown', 'suspicious', 'hostile'].map((cls) =>
       '<span data-class="' + cls + '" style="padding:3px 5px;border:1px solid #2C3644;border-radius:3px;color:' + classColor(cls) + '">' +
       CLASS_NAME[cls] + ' ' + list.filter((t) => t.cls === cls).length + '</span>').join('');
     $('trkBody').innerHTML = list.map((t) => {
-      const cls = { hostile: 'HOS', friendly: 'FRD', peaceful: 'PCF', suspicious: 'SUS', unknown: 'UNK' }[t.cls] || 'UNK';
+      const cls = { hostile: 'HOS', friendly: 'FRD', peaceful: 'PCF', suspicious: 'SUS', unknown: 'UNK', object: 'OBJ' }[t.cls] || 'UNK';
       const ccol = classColor(t.cls);
-      const b = { hostile: 'h', suspicious: 'u', unknown: 'n', peaceful: 'p', friendly: 'f' }[t.cls];
+      const b = { hostile: 'h', suspicious: 'u', unknown: 'n', peaceful: 'p', friendly: 'f', object: 'n' }[t.cls];
       return '<tr data-id="' + t.id + '"' + (t.id === S.sel ? ' class="sel"' : '') + '><td><button class="idb ' + b + '" aria-label="Select ' + t.id + '">' + t.id + '</button></td><td style="color:' + ccol + '"><span class="track-class">' + iconImg(t.cls, 'track-icon-small') + '<span>' + cls + (t.cls === 'unknown' ? '' : ' ' + percent(t.conf)) + '</span></span></td><td data-score="identity">' + percent(t.pF) + '</td><td data-score="risk">' + percent(t.pH) + '</td><td>' + pad4(t.x) + ' ' + pad4(t.y) + '</td><td>' + spd(t.vx, t.vy).toFixed(1) + '</td><td>' + String(Math.round(hdg(t.vx, t.vy))).padStart(3, '0') + '</td><td>' + t.age.toFixed(1) + 's</td><td>' + (t.cls === 'friendly' ? 'self' : t.nodes.map((n) => n.split(' ')[0]).filter((v, i, a) => a.indexOf(v) === i).join(' ')) + '</td></tr>';
     }).join('');
 
