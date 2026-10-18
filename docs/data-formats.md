@@ -250,8 +250,6 @@ result["frames"][600]["tracks"][0]["x"]
 
 This run comes from the mock simulation in the viewer. Treat its tracks as an example of the shape, not as a reference tracker.
 
-The Python pipeline writes the same shape with `python -m pipeline.export_run` ([pipeline/export_run.py](../pipeline/export_run.py)), plus a top-level `"engine": "python-pipeline"` (a run without `engine` is the JavaScript mock). `params` = `{preset, seed_set, index, seed, loss, weather, options}`; `result` = `{frames, summary, T_END, DT}`. A frame is `{k, t, tracks, truth, m}`: `tracks` = confirmed tracks `{id, x, y, vx, vy, st: "confirmed", cls}` (the class is `unknown` when the estimator gave none), `truth` = every object in the area `{id, kind, x, y, vx, vy}` (a commanded drone at its recorded position), `m` = `{est, presumed, tru}` = tracks labelled `hostile`, tracks that are neither `friendly` nor `peaceful`, and true hostiles. `summary` is the `scoring.challenge.diagnose` result (`whole_run` and `crossing`, a metric that could not be computed is `null`). The Python run has no `sensors`, `meas`, `links`, `missions`, `coverage`, `health` or `alerts`: the pipeline does not produce them. [ui/viewer/cop.html](../ui/viewer/cop.html) reads either engine's file; `scoring.viewer_run` reads both.
-
 ## Track and investigation messages (draft, JSON Lines)
 
 Drafts for the tracker, friend/foe and drone-behaviour modules. Not yet confirmed by the tracker and drone-behaviour owners; change them here and in the code together. Messages are one JSON object per line. Encode and decode with `encode` / `decode` in [common/codec.py](../common/codec.py), which today is JSON and can later become a compact binary format without changing the messages.
