@@ -4,7 +4,7 @@ Distributed multi-sensor fusion into a single Common Operational Picture (COP) u
 
 Combine partial, noisy observations from low-cost UAS and ground sensors, fused across distributed nodes with imperfect clocks, uncertain positions and lossy communication, into one picture that gives the **number of hostile targets** with a **stable identity, position and velocity** for each, and never flags friendlies as threats.
 
-> Status: **working simulation and tested components; challenge success remains unproven.** The JavaScript viewer and Python pipeline both run sensing, tracking, classification and scoring. Python also has optional per-node tracking and covariance-intersection fusion, link-health weighting and late-reading replay. These are distinct implementations: the simulation viewer does not run the Python pipeline, but its COP replay page (`ui/viewer/cop.html`) displays a saved run of either engine (`python -m pipeline.export_run` writes the Python one). See the [03-Rai challenge audit](docs/challenge-audit.md) for current requirement evidence, failures and priorities.
+> Status: **working simulation and tested components; challenge success remains unproven.** The JavaScript viewer and Python pipeline both run sensing, tracking, classification and scoring. Python also has optional per-node tracking and covariance-intersection fusion, link-health weighting and late-reading replay. These are distinct implementations: the viewer does not display the Python pipeline's COP. See the [03-Rai challenge audit](docs/challenge-audit.md) for current requirement evidence, failures and priorities.
 
 Run the tests (Python 3.11+): `python -m pip install pytest`, then `python -m pytest` from the repo root.
 
@@ -126,7 +126,7 @@ Phased, starting from the optimistic case. Status legend: ⬜ not started · �
 |--------|------|
 | 🟨 | Run full scenario sweeps and collect metrics: the seeder generates every seed of a set (`python seeder/generate.py scenarios/hard.json --sweep tuning`); collecting metrics over them is the next step |
 | ⬜ | Compare centralized / decentralized / hybrid if time allows |
-| 🟨 | Operator view / COP visualisation: the JavaScript simulation has a map, track list, uncertainty, headings, assessments and playback. Python can read and score exported viewer JSON (`scoring/viewer_run.py`); the Python pipeline's COP can be exported (`python -m pipeline.export_run`) and replayed on `ui/viewer/cop.html` (map, tracks, counts, playback; the exported run has no sensors, missions or node health), but it is a replay of a finished run, not a live feed, and the main simulation viewer still runs only the JavaScript engine |
+| 🟨 | Operator view / COP visualisation: the JavaScript simulation has a map, track list, uncertainty, headings, assessments and playback. Python can read and score exported viewer JSON (`scoring/viewer_run.py`); that reader does not connect the viewer to the Python tracker/fusion COP |
 | ⬜ | Demo, write-up, final presentation |
 
 ---

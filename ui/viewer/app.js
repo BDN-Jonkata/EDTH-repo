@@ -96,10 +96,19 @@
 <text class="tb" x="0" y="-8" fill="#C9D1DB" style="font-size:10px;font-weight:400">0</text><text class="tb" x="100" y="-8" text-anchor="middle" fill="#C9D1DB" style="font-size:10px;font-weight:400">100</text><text class="tb" x="200" y="-8" text-anchor="middle" fill="#C9D1DB" style="font-size:10px;font-weight:400">200 m</text></g>`;
 
   // ------------------------------------------------------------- run / apply
+  // The simulation runs in a worker and finished runs are cached (runcache.js); the page waits behind a "Simulating…" veil
+  // and keeps showing the previous run until the new one arrives.
   function runSim(p) {
-    S.applied = clone(p);
+    const id = S.runId = (S.runId || 0) + 1, t0 = performance.now();
+    busy('Simulating…');
+    return RunCache.run(Object.assign(simOptions(p, p.mode, p.loss), { scenario: S.scenario }))
+      .then((res) => { if (S.runId === id) { applyRun(p, res); busy(null); document.documentElement.dataset.runMs = Math.round(performance.now() - t0); } })
+      .catch((e) => { if (S.runId === id) busy(e.message === 'replaced' ? null : 'Simulation failed: ' + e.message); });
+  }
+  function busy(text) { const el = $('busy'); el.hidden = !text; el.textContent = text || ''; }
+  function applyRun(p, res) {
+    S.applied = clone(p); S.res = res;
     S.wx = Weather.providerFor(S.scenario.environment, p.weather, p.sky !== undefined ? p.sky : S.scenario.environment.sky).provider; // as in Sim.run
-    S.res = Sim.run(Object.assign(simOptions(p, p.mode, p.loss), { scenario: S.scenario }));
     S.deg = null; S.degRun = (S.degRun || 0) + 1; S.degBusy = false; S.idx = 0; S.acc = 0; S.last = 0; S.playing = true; S.sel = null; S.userSel = false;
     $('runTitle').textContent = scen().id + ' · ' + p.name + ' · seed ' + p.seed;
     $('tTotal').textContent = fmtT(S.res.T_END);
@@ -820,8 +829,10 @@
   if (q.get('seed')) S.staged.seed = parseInt(q.get('seed'), 10) || S.staged.seed;
   fillInputs(); syncStaged(); renderLoadout();
   $('presetNote').textContent = S.scenario.description;
-  runSim(S.staged); // ?t=45 opens paused at 45 s; ?tab=deg opens the degradation chart
-  if (q.has('t')) { S.playing = false; setIdx(Math.round(parseFloat(q.get('t')) * 10) || 0); }
-  if (q.get('tab') === 'deg') { S.tab = 'deg'; renderChart(frame()); }
+  runSim(S.staged).then(() => { // ?t=45 opens paused at 45 s; ?tab=deg opens the degradation chart
+    if (!S.res) return;
+    if (q.has('t')) { S.playing = false; setIdx(Math.round(parseFloat(q.get('t')) * 10) || 0); }
+    if (q.get('tab') === 'deg') { S.tab = 'deg'; renderChart(frame()); }
+  });
   window.__dds = S; // handy for debugging in the console
 })();
